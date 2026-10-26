@@ -48,6 +48,13 @@ Git kuralları (ayrıntı `docs/PLAN.md` §1–2):
 - Yeni migration'ı olan faz `make db-roundtrip` hedefini eklemek zorunda; pre-push bunu çağırır.
 - Her Docker build context'i (ör. `web/`) kökteki `.dockerignore`'un sır kurallarını kendi `.dockerignore`'unda tekrarlamalı; Docker yalnızca context kökündeki dosyayı okur.
 
+## Test yazarı
+
+Testleri yalnızca `test-writer` ajanı yazar (`.claude/agents/test-writer.md`, kuralları `.claude/skills/writing-tests/SKILL.md`). Kaynakları: case dokümanı, `docs/requirements.md`, `docs/contracts/**` — implementasyon asla.
+- Çalıştırma: `scripts/test-writer-worktree.sh origin/slice/p<N>-<x> test/p<N>-<y>` (implementasyon dizinleri olmadan sparse worktree açar), sonra o dizinde `claude --agent test-writer`.
+- `scripts/claude/test-writer-guard.sh` ajana özel PreToolUse hook'u: `cmd/`, `internal/`, `migrations/`, `web/src/` okunamaz; yalnızca test dosyaları yazılabilir; Bash yalnızca güvenli git/ls komutları.
+- Sözleşme eksikse test yazarı imza uydurmaz, soruyu sahibe döner.
+
 ## Çoklu ajan orkestrasyonu
 
 Bir işte birden fazla subagent kullanılacaksa orkestratör **Opus 5.5** (`claude-opus-5-5`) modelidir: işi böler, rolleri (mimar, test yazarı, kodu yazan, reviewer, doğrulayıcı) atar ve sonuçları birleştirir. Rol ayrımı kuralları `docs/PLAN.md` §3'te; test yazarı ayrı session'da çalışır ve implementasyona bakmaz.
