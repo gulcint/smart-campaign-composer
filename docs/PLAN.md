@@ -2,7 +2,7 @@
 
 > **Kaynak:** `Smart Campaign Composer Case.html` (repoda değil, `.gitignore`'da). Tek doğruluk kaynağı odur; repodaki karşılığı `docs/requirements.md`'dir.
 > **İşaretler:** **[DOK]** dokümandan gelen ister/kısıt · **[SEN]** proje sahibinin kararı · **VARSAYIM** dokümanda olmayan, önerilen karar — her biri `DECISIONS.md`'ye gerekçesiyle yazılır.
-> **Sürüm:** v3 · 2026-10-26 · GitLab geçişi, doküman karşılaştırmasındaki 13 düzeltme (#1–#13) ve bağımsız review bulguları (R1–R14) işlendi.
+> **Sürüm:** v4 · 2026-10-26 · Doküman karşılaştırmasındaki 13 düzeltme (#1–#13), bağımsız review bulguları (R1–R14) ve GitLab'dan GitHub'a (public) geçiş işlendi.
 
 ---
 
@@ -17,7 +17,7 @@
 | LLM | Claude API [DOK] · Anthropic Go SDK, `LLMClient` arayüzü arkasında | [DOK] / VARSAYIM |
 | Veritabanı | PostgreSQL | [SEN] |
 | Kuyruk | PostgreSQL — `deliveries` tablosu kuyruğun kendisi | [SEN], gerekçe 0.3 |
-| Repo | GitLab Free, **private**, adı `smart-campaign-composer` | [SEN] (doküman: GitHub veya GitLab) |
+| Repo | GitHub, **public**, adı `smart-campaign-composer` | [SEN] (doküman: GitHub veya GitLab; GitLab hesap doğrulaması yapılamadığı için GitHub'a geçildi, 1.6) |
 | Commit dili | İngilizce | [SEN] |
 | Case HTML | `.gitignore`'da, repoya girmez | [SEN] |
 | Canlı akış | İçerik ekrana stream edilir ve gönderim durumu canlı gösterilir [DOK] · taşıma teknolojisi SSE | [DOK] / VARSAYIM (yalnızca SSE seçimi) |
@@ -87,7 +87,7 @@ Doküman "her şeyi yapmak yerine çekirdek akışı sağlam yap" diyor; fronten
 
 | Gün | Faz | İçerik | Kapı |
 |---|---|---|---|
-| 1 | **P0 Kurulum** | **İlk iş: bu planlama session'ının export'u.** `git init`, `.gitignore`, `.gitattributes`, `.dockerignore`, hook'lar, `.gitlab-ci.yml` iskeleti, `Makefile` iskeleti, `.env.example`, `CLAUDE.md`, `ai-sessions/INDEX.md` | **GitLab private repo sahibin onayıyla oluşturulur**, protected branch ayarları yapılır |
+| 1 | **P0 Kurulum** | **İlk iş: bu planlama session'ının export'u.** `git init`, `.gitignore`, `.gitattributes`, `.dockerignore`, hook'lar, `.github/workflows/ci.yml` iskeleti, `Makefile` iskeleti, `.env.example`, `CLAUDE.md`, `ai-sessions/INDEX.md` | **GitHub public repo sahibin onayıyla oluşturulur**, `main` ruleset'i kurulur |
 | 1 | **P1 Sözleşmeler** | `docs/requirements.md` (REQ ID'leri), OpenAPI, LLM JSON şemaları, stream protokolü (0.5), izinli şablon değişkenleri listesi, segment DSL, `docs/contracts/go-interfaces.md`, **UI sözleşmesi** (`docs/contracts/ui.md`: ekranlar, bileşen adları, props, `data-testid`'ler), DB şema taslağı | Sahip onayı → `contracts-v1` etiketi |
 | 2 | **P2 Seed + altyapı** (`slice/p2-foundation`) | Seed üreticisi + manifest, compose, migration'lar, health, `LLMClient` fabrikası (auto/real/mock), mock LLM iskeleti, `make test` konteyner altyapısı | REQ-DLV-01, REQ-DLV-02, REQ-AI-02, REQ-AI-03 testleri yeşil |
 | 3 | **P3 Kitle dilimi** | Segment kuralı üretimi, doğrulama, parametreli sorgu, kanal bazında kişi sayısı + ekran | REQ-AUD, REQ-AI-01 (segment) testleri yeşil |
@@ -105,15 +105,15 @@ Trunk-based; `main` her zaman yeşil. Testler implementasyondan önce yazıldı�
 ```
 main
  └─ slice/p3-audience                 (dilim entegrasyon branch'i)
-     ├─ test/p3-audience-rules   ──MR──▶ slice   (test yazarı; kırmızı testler serbest)
-     └─ feat/p3-segment-validator ─MR──▶ slice   (kodu yazan; testleri yeşile çevirir)
- slice/p3-audience  ──MR──▶ main      (tam pipeline yeşil olmadan merge yok)
+     ├─ test/p3-audience-rules   ──PR──▶ slice   (test yazarı; kırmızı testler serbest)
+     └─ feat/p3-segment-validator ─PR──▶ slice   (kodu yazan; testleri yeşile çevirir)
+ slice/p3-audience  ──PR──▶ main      (tam pipeline yeşil olmadan merge yok)
 ```
 
 - P2'den itibaren her faz bu akışı izler (P2 dahil: `slice/p2-foundation`). P0 ve P1'de test yoktur, kod da yoktur.
 - Test yazarının worktree'si **sparse checkout** ile açılır: yalnızca `docs/`, `testdata/`, `test/` ve test dosyası desenleri (`**/*_test.go`, `web/tests/**`). Önceki fazlardan `main`'e girmiş implementasyon (`cmd/`, `internal/`, `migrations/`, `web/src/`) worktree'de **bulunmaz** (R1).
 - `*_test.go` dosyaları Go gereği paketlerin yanında durur. Sparse checkout bu dosyaları getirir ama yanlarındaki `.go` implementasyon dosyalarını getirmez. Test yazarı testleri derleyip çalıştırmaz; çalıştırma kodu yazanın ve CI'ın işidir.
-- `slice/*` hedefli MR'larda hafif pipeline (lint, derleme, rol kontrolü); `main` hedefli MR'da tam pipeline.
+- Her PR'da aynı pipeline çalışır (Actions public repoda sınırsız); `main`'e yalnızca `ci-ok` yeşilken merge edilir.
 - `main`'e squash merge; `slice/*` içinde merge commit serbest.
 
 ### 1.3 Branch isimlendirme
@@ -144,7 +144,7 @@ Phase: P5
 
 - Kapsamlar: `audience`, `content`, `approval`, `delivery`, `tracking`, `llm`, `seed`, `db`, `ui`, `infra`, `ci`, `docs`.
 - `Refs:` `feat`, `fix`, `test` türlerinde zorunlu.
-- `main`'deki squash commit mesajı **MR başlığından** gelir → MR başlığı da bu biçime uymak zorunda (CI job'ı).
+- `main`'deki squash commit mesajı **PR başlığından** gelir → PR başlığı da bu biçime uymak zorunda (CI job'ı).
 
 ### 1.5 `.gitignore` kuralları
 
@@ -163,31 +163,27 @@ Dört kaynağa göre belirlendi: (a) yığının ürettiği artifact'ler, (b) s�
 
 `.dockerignore` aynı sır kurallarını içerir. `.gitattributes`: `* text=auto eol=lf`.
 
-### 1.6 GitLab repo, erişim ve sunucu tarafı zorlama
+### 1.6 GitHub repo ve sunucu tarafı zorlama
 
-**Oluşturma (yalnızca sahibin onayıyla):** `glab repo create smart-campaign-composer --private`, ardından ilk push.
+**Geçiş notu:** Plan önce GitLab Free private repo öngörüyordu. GitLab.com paylaşımlı runner'ları hesap kimlik doğrulaması (telefon/kart) istedi ve doğrulama yapılamadı; ilk pipeline hiç job çalıştırmadan düştü. GitLab projesi kalıcı olarak silindi. Repo GitHub'da **public** [SEN]; hassas veri repoda ve remote'ta tutulmuyor.
 
-**`main` ayarları (Free planda mevcut):**
-- Protected branch: push = *No one*, merge = *Maintainers*, force push kapalı.
-- Merge checks: *Pipelines must succeed*, *All threads must be resolved*.
-- Merge yöntemi: squash = *Require*, fast-forward.
-- Squash commit şablonu: `%{title}` + boş satır + `%{all_commits}` → commit'lerdeki `Refs:` satırları `main`'e taşınır. CI, `feat`/`fix`/`test` başlıklı MR'da en az bir commit'te `Refs:` olmasını şart koşar.
+**Oluşturma (sahibin onayıyla):** `gh repo create smart-campaign-composer --public --source . --remote origin` (push yapmaz). İlk push sırası: **önce `main`** — sahip, bir kerelik `--no-verify` ile (pre-push hook'u ve Claude guard'ı `main`'e push'u bilerek reddeder) — sonra branch'ler. GitLab'da ters sıra, ilk push edilen branch'in varsayılan ve korumalı olmasına yol açmıştı.
 
-**Free'de olmayanlar ve yerine konanlar:**
+**`main` ruleset (public repoda ücretsiz):**
+- PR zorunlu; required approvals 0 (tek kişi kendi PR'ını onaylayamaz, reviewer raporu PR'a eklenir); conversation resolution zorunlu.
+- Required status check: `ci-ok` (tüm job'ları toplayan kapı job'ı); branch güncel olmalı.
+- Force push ve silme yasak; doğrusal geçmiş.
+- Bypass listesi boş: kurallar repo sahibine de uygulanır.
 
-| Ücretli özellik | Yerine |
-|---|---|
-| Zorunlu MR onayı | Reviewer raporu MR yorumu olarak; açık thread merge'ü engeller |
-| Push rules (commit regex, sır engelleme) | `commit-msg` hook + CI'da commit/MR başlığı kontrolü; gitleaks |
-| Secret push protection | gitleaks job'ı |
-| Dependency scanning | `govulncheck`, `npm audit` |
+**Merge ayarları:** yalnızca squash; squash başlığı = PR başlığı, gövde = commit mesajları → commit'lerdeki `Refs:` satırları `main`'e taşınır. CI, `feat`/`fix`/`test` başlıklı PR'da en az bir commit'te `Refs:` olmasını şart koşar. Merge sonrası branch silinir.
 
-**Değerlendirici erişimi (düzeltme #1):**
-- P6'da Insider'ın verdiği GitLab kullanıcı adları projeye **Reporter** rolüyle eklenir (kod, MR, pipeline görür; push yapamaz). Free private namespace sınırı 5 kullanıcı.
-- Kullanıcı adı alınamazsa alternatif: sınırlı süreli, `read_repository` kapsamlı Project Access Token (VARSAYIM — Insider'a sorulur).
-- Doğrulama: `glab api projects/:id/members` listesi; gizli pencerede projenin herkese açık olmadığı kontrolü.
+**Güvenlik özellikleri (public repoda ücretsiz):** secret scanning + push protection, Dependabot alerts ve security updates. CodeQL (Go, TypeScript) P2'de kod gelince eklenir.
 
-**Kontrol edilecek riskler:** GitLab.com Free CI kotası (~400 dk/ay) — yoğun job'lar yalnızca `main` hedefli MR ve `main` pipeline'ında, cache açık; gerekirse kendi makinede ücretsiz runner. Yeni hesapta paylaşımlı runner için kimlik doğrulaması istenebilir. Plan sınırları P0'da GitLab'ın güncel sayfasından doğrulanır.
+**Public repo olmasının sonuçları:**
+- Değerlendiricilere ayrıca erişim vermek gerekmez.
+- Commit yazar e-postası GitHub noreply adresidir (`<id>+gulcint@users.noreply.github.com`, repoya özel git ayarı); geçmiş ilk push'tan önce bu adresle yeniden yazıldı.
+- `ai-sessions/` ve tüm dokümanlar herkese açık: temizleme + gitleaks + elle kontrol adımları zorunlu.
+- Actions dakikaları public repoda sınırsız.
 
 ---
 
@@ -230,7 +226,7 @@ Araç: `lefthook` (VARSAYIM), `make hooks` ile kurulur.
 ### 2.3 Hook'lar atlanabilir — asıl zorlayıcı CI + protected branch
 
 - `--no-verify` ile atlanabilir veya hiç kurulmamış olabilir. Hook'lar hızlı geri bildirimdir, güvenlik sınırı değildir.
-- **Asıl zorlayıcı:** GitLab CI tüm kontrolleri yeniden çalıştırır (+ `make test`, compose duman testi, tüm geçmişte gitleaks, frontend testleri, `npm audit`); GitLab protected branch + *Pipelines must succeed* kırmızı pipeline ile merge'ü sunucu tarafında engeller.
+- **Asıl zorlayıcı:** GitHub Actions tüm kontrolleri yeniden çalıştırır (+ `make test`, compose duman testi, tüm geçmişte gitleaks, frontend testleri, `npm audit`); `main` ruleset'i `ci-ok` kırmızıyken merge'ü sunucu tarafında engeller. Secret scanning push protection, sır içeren push'u GitHub tarafında reddeder.
 - Ek katman: Claude Code `PreToolUse` hook'ları ajanların `main`'e push yapmasını engeller.
 - CI dokümanda **bonus** olarak geçiyor (düzeltme #12) — README'de bonus olarak belirtilir.
 
@@ -242,11 +238,11 @@ Kodu yazan, review eden ve testi yazan ayrı bağlamlardır; hiçbiri kendi işi
 
 | Rol | Kim | Okuyabildikleri | Yazabildikleri | Sorumluluk |
 |---|---|---|---|---|
-| **Sahip** | Proje sahibi (insan) | Her şey | Karar | Sözleşme onayı, repo oluşturma, VARSAYIM kabulü, merge; **her MR'ı okuyup açıklayabilmek** |
+| **Sahip** | Proje sahibi (insan) | Her şey | Karar | Sözleşme onayı, repo oluşturma, VARSAYIM kabulü, merge; **her PR'ı okuyup açıklayabilmek** |
 | **Mimar** | `architect` / `planner` | Doküman, kod | `docs/` | REQ kataloğu, OpenAPI, şemalar, DSL, Go arayüz imzaları, `DECISIONS.md` — koddan önce |
 | **Test yazarı** | `test-engineer`, **ayrı Claude Code session'ı + sparse checkout'lu ayrı worktree** | Yalnızca case dokümanı (mutlak yol), `docs/requirements.md`, `docs/contracts/**` | `**/*_test.go`, `test/**`, `testdata/**`, `web/tests/**` (frontend testleri `web/src` dışında) | Dokümandaki ister ve kısıtlardan test; implementasyona asla bakmaz |
 | **Kodu yazan** | `executor` | Doküman, sözleşmeler, testler | `cmd/`, `internal/`, `migrations/`, `web/src/` | Testleri yeşile çevirir; test dosyalarını değiştiremez |
-| **Reviewer** | `code-reviewer` (+ güvenlikte `security-reviewer`) | Her şey | MR yorumu/raporu | Kodu sözleşmeye, testleri dokümana, ikisini güvenlik listesine göre inceler |
+| **Reviewer** | `code-reviewer` (+ güvenlikte `security-reviewer`) | Her şey | PR yorumu/raporu | Kodu sözleşmeye, testleri dokümana, ikisini güvenlik listesine göre inceler |
 | **Doğrulayıcı** | `verifier` | Her şey | Rapor | Faz kapısında kanıtla son onay |
 
 ### 3.1 "Test yazarı koda bakmaz" kuralının uygulanışı
@@ -261,10 +257,10 @@ Kodu yazan, review eden ve testi yazan ayrı bağlamlardır; hiçbiri kendi işi
 ### 3.2 Faz kapısı kontrol listesi
 
 - [ ] Fazın REQ ID'lerinin hepsi en az bir testle eşli
-- [ ] `slice/*` → `main` MR'ında tam pipeline yeşil, tüm thread'ler çözülmüş
-- [ ] Reviewer raporu MR'da
-- [ ] Doğrulayıcı kanıtı (komut + çıktı) MR'da
-- [ ] **Sahip MR'ı okudu ve açıklayabilir** (düzeltme #11)
+- [ ] `slice/*` → `main` PR'ında tam pipeline yeşil, tüm conversation'lar çözülmüş
+- [ ] Reviewer raporu PR'da
+- [ ] Doğrulayıcı kanıtı (komut + çıktı) PR'da
+- [ ] **Sahip PR'ı okudu ve açıklayabilir** (düzeltme #11)
 - [ ] `DECISIONS.md` bu fazın kararlarıyla güncel
 - [ ] Bu fazın **tüm session'ları** export edildi, temizlendi, `ai-sessions/INDEX.md`'ye eklendi
 
@@ -319,7 +315,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 - Kapsadığı katmanlar: Go unit + entegrasyon + API E2E + Vitest.
 - Yardımcı hedefler: `make test-unit` (host'ta Go, DB yok), `make test-integration`, `make test-e2e`, `make test-web`.
 - Tek test: `go test ./internal/delivery -run 'TestRetryPolicy_NextDelay/429_honors_Retry-After' -count=1`.
-- CI aynı test imajını kullanır; GitLab'da Postgres `services:` ile gelir.
+- CI, `make test` hedefini GitHub runner'ında (Docker + make) çalıştırır; yerelde ve CI'da aynı compose dosyası kullanılır.
 - **Doğrulama:** CI'da yalnızca Docker bulunan bir job `make test` çalıştırır; `ANTHROPIC_API_KEY` tanımsızken geçtiği ayrıca kontrol edilir.
 
 ### 4.4 Test katmanları
@@ -365,7 +361,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 - **Deterministik:** `cmd/seed --seed=42 --users=5000 --ref-time=<RFC3339>`; aynı parametre → aynı veri. 5000 VARSAYIM ([DOK] "birkaç bin").
 - **Referans zaman:** compose'da `ref-time=now` (demo'da "son 30 gün" anlamlı), testlerde sabit.
 - **Idempotent:** tekrar çalıştırmak çoğaltmaz.
-- **Manifest:** `testdata/seed/manifest.json` beklenen sayıları tutar (örn. "İstanbul ∧ son 30 günde sepete ekleme ∧ satın alma yok ∧ SMS izni = N"); değişiklik MR'da diff olarak görünür.
+- **Manifest:** `testdata/seed/manifest.json` beklenen sayıları tutar (örn. "İstanbul ∧ son 30 günde sepete ekleme ∧ satın alma yok ∧ SMS izni = N"); değişiklik PR'da diff olarak görünür.
 - **Gerçek olmayan veri:** email yalnızca RFC 2606 alan adları (`example.com`, `example.test`); telefon açıkça kurgusal blok `+90 500 000 xx xx` (VARSAYIM — resmî kurgusal TR aralığı bilinmiyor, mock provider dışarı göndermediği için risk düşük); isimler küratörlü listeden.
 
 ### 5.2 Alanlar
@@ -410,7 +406,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 | 3 | Key loglanmaz: config `String()`/`LogValue()` maskeler; slog redaction; provider seçimi loglanır, değer loglanmaz | Unit test: config logu `sk-ant` içermez; E2E log çıktısında `sk-ant` sayısı 0 |
 | 4 | Key frontend'e ulaşmaz; yalnızca backend Claude'u çağırır; Vite'a yalnızca `VITE_` | CI: build sonrası `web/dist` içinde `sk-ant`/`ANTHROPIC` yok |
 | 5 | Key image'a girmez: runtime `env_file`, build `ARG` değil; `.dockerignore` `.env`'i dışlar | CI: `docker history --no-trunc` ve image dosya sisteminde arama |
-| 6 | CI key'siz çalışır; GitLab CI/CD değişkeni tanımlanmaz | CI grep: pipeline dosyasında `ANTHROPIC_API_KEY` referansı yok; test guard |
+| 6 | CI key'siz çalışır; GitHub Actions secret'ı tanımlanmaz | CI grep: pipeline dosyasında `ANTHROPIC_API_KEY` referansı yok; test guard |
 | 7 | `ai-sessions/` temizliği [DOK] (bkz. 7. bölüm) | `make sanitize-sessions` + gitleaks + özel regex (hook ve CI) + commit öncesi elle göz atma |
 | 8 | LLM çıktısı asla SQL değil [DOK]: DSL allowlist (alan, operatör, tip, derinlik, eleman sayısı) → parametreli sorgu (pgx/sqlc) | Injection payload unit testleri; gosec G201/G202; reviewer listesi |
 | 9 | En az yetkili DB rolü: uygulama DDL çalıştıramaz, migration ayrı rol | Entegrasyon testi: uygulama rolüyle `DROP TABLE` yetki hatası |
@@ -421,10 +417,10 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 | 14 | Loglarda PII yok: müşteri ID'si, telefon/email değil | Teslimat log testi: `@example.com`, `+90` deseni yok |
 | 15 | Ağ izolasyonu: Postgres ve mock provider yalnızca iç ağda | CI: `docker compose config` çıktısında db için `ports:` yok |
 | 16 | Bağımlılıklar: `govulncheck`, `npm audit --audit-level=high`; Go sürümü `go.mod`'da, imajlar digest ile sabit | CI; kritik bulgu pipeline'ı kırar |
-| 17 | SAST: golangci-lint içinde gosec; GitLab SAST şablonu Free'de job olarak eklenebilir (VARSAYIM) | CI lint/SAST job'ı |
+| 17 | SAST: golangci-lint içinde gosec; CodeQL (public repoda ücretsiz) P2'de eklenir | CI lint ve CodeQL job'ları |
 | 18 | Auth yok (VARSAYIM, yerel demo); `/metrics` yalnızca iç ağ | README + `DECISIONS.md`; compose port incelemesi |
-| 19 | Repo private, değerlendiriciler yalnızca Reporter | 1.6 doğrulaması |
-| 20 | Reviewer güvenlik listesi: her MR'da 1–19 (16–19 CI ve repo ayarlarıyla doğrulandığı için reviewer yalnızca CI sonucunu ve ayarları teyit eder) | MR'daki raporda işaretli liste (R9) |
+| 19 | Repo public: her commit herkese açık, bu yüzden 1–7 istisnasız uygulanır; commit e-postası noreply | GitHub secret scanning + push protection açık; `git log --format=%ae` yalnızca noreply adresi |
+| 20 | Reviewer güvenlik listesi: her PR'da 1–19 (16–19 CI ve repo ayarlarıyla doğrulandığı için reviewer yalnızca CI sonucunu ve ayarları teyit eder) | PR'daki raporda işaretli liste (R9) |
 
 ---
 
@@ -442,8 +438,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 
 ## 8. Teslim kontrol listesi
 
-- [ ] GitLab private repo
-- [ ] Değerlendiriciler Reporter olarak eklendi, erişim doğrulandı
+- [ ] GitHub public repo; README'deki kurulum adımları temiz bir klondan doğrulandı
 - [ ] `docker compose up` tek komut, **key'siz** çalışır (web arayüzü + api + worker + seed + mock provider + mock LLM) (R12)
 - [ ] `make test` yalnızca Docker + make ile, key'siz
 - [ ] `README.md`: kurulum, mimari özeti, bonus olarak CI, yetiştirilemeyenler (yapılmayan bonuslar dahil: A/B, dile göre içerik, zamanlanmış gönderim)

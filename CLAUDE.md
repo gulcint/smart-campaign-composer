@@ -29,12 +29,12 @@ Gerçek kimseye mesaj gitmez: alıcılar seed edilmiş sahte kullanıcılar, gö
 - **LLM:** Claude API (Anthropic Go SDK). Key `.env` içindeki `ANTHROPIC_API_KEY`'den okunur; repoda `.env.example` bulunur.
 - **Veritabanı:** PostgreSQL.
 - **Kuyruk:** PostgreSQL — `deliveries` tablosu kuyruk + durum + tekillik (`UNIQUE(campaign_id, channel, customer_id)`), `FOR UPDATE SKIP LOCKED`; kanal başına tek dispatcher (advisory lock) ile ≤100 msg/sn.
-- **Repo:** GitLab Free, private, `smart-campaign-composer`. Commit'ler İngilizce, Conventional Commits. Case HTML `.gitignore`'da.
+- **Repo:** GitHub, public, `gulcint/smart-campaign-composer` (GitLab hesap doğrulaması yapılamadığı için geçildi). Commit e-postası repoya özel GitHub noreply adresi. Commit'ler İngilizce, Conventional Commits. Case HTML `.gitignore`'da.
 - **LLM sağlayıcı seçimi:** `LLM_PROVIDER=auto|real|mock` — key yoksa mock; `docker compose up` ve `make test` key'siz çalışır.
 
 ## Komutlar
 
-Araçlar (Homebrew): `go`, `lefthook`, `gitleaks`, `golangci-lint`, `sqlfluff`, `glab`; `go install` ile `goimports`, `govulncheck`.
+Araçlar (Homebrew): `go`, `lefthook`, `gitleaks`, `golangci-lint`, `sqlfluff`, `actionlint`, `gh`; `go install` ile `goimports`, `govulncheck`.
 
 - `make hooks` — git hook'larını (lefthook) ve commit şablonunu kurar. Klonladıktan sonra ilk iş.
 - `make test` — tüm testler konteynerde, key'siz (`compose.test.yml` P2'de gelir; o zamana kadar bilerek hata verir).
@@ -43,8 +43,8 @@ Araçlar (Homebrew): `go`, `lefthook`, `gitleaks`, `golangci-lint`, `sqlfluff`, 
 
 Git kuralları (ayrıntı `docs/PLAN.md` §1–2):
 - Branch: `<tür>/p<faz>-<kebab>` (`slice|test|feat|fix|refactor|docs|chore|ci|sec`). Commit: Conventional Commits, `feat`/`fix`/`test` için `Refs: REQ-XXX-NN` zorunlu.
-- `main`'e doğrudan push yok; MR'ları sahip GitLab arayüzünden merge eder. `scripts/claude/guard-git.sh` (PreToolUse hook) ajanlar için `main`'e push, `--force`, `--no-verify` ve `glab mr merge`'ü engeller.
-- `test/*` branch'leri implementasyona (`cmd/`, `internal/`, `migrations/`, `web/src/`), `feat|fix|refactor/*` branch'leri test dosyalarına dokunamaz (CI `role-paths` job'ı).
+- `main`'e doğrudan push yok; PR'ları sahip GitHub arayüzünden merge eder; `main` ruleset'i `ci-ok` check'ini ve PR'ı zorunlu tutar. `scripts/claude/guard-git.sh` (PreToolUse hook) ajanlar için `main`'e push, `--force`, `--no-verify` ve `gh pr merge`'ü engeller.
+- `test/*` branch'leri implementasyona (`cmd/`, `internal/`, `migrations/`, `web/src/`), `feat|fix|refactor/*` branch'leri test dosyalarına dokunamaz (CI `pr-policy` job'ı).
 - Yeni migration'ı olan faz `make db-roundtrip` hedefini eklemek zorunda; pre-push bunu çağırır.
 - Her Docker build context'i (ör. `web/`) kökteki `.dockerignore`'un sır kurallarını kendi `.dockerignore`'unda tekrarlamalı; Docker yalnızca context kökündeki dosyayı okur.
 
