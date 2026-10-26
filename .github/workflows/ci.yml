@@ -117,6 +117,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: golangci-lint run ./...
+      # The embedded LLM tool schemas must stay byte-identical to the contract copies.
+      - name: tool schemas match the contract
+        run: |
+          for f in segment-rule content; do
+            cmp docs/contracts/schemas/llm/"$f".tool.json internal/llm/schemas/"$f".tool.json
+          done
 
   sql-lint:
     needs: detect
@@ -128,6 +134,31 @@ jobs:
           docker run --rm -v "$PWD:/src" -w /src
           sqlfluff/sqlfluff:4.4.0@sha256:6a9083e55b1f4ea437636bc8ca7b55aaa0766a3e43a6d3e5b37614cf97e4e6ac
           lint migrations/
+
+  # up -> down -> up on a throwaway Postgres must leave an identical schema (docs/PLAN.md §2.2).
+  db-roundtrip:
+    needs: detect
+    if: needs.detect.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make db-roundtrip
+
+  # REQ-DLV-01: Postgres and the mock provider must not publish host ports.
+  compose-ports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: only the API publishes a port
+        run: |
+          for svc in db mockprovider; do
+            if docker compose -f compose.yml config --format json | jq -e --arg s "$svc" '.services[$s].ports // [] | length > 0' >/dev/null; then
+              echo "service $svc must not publish ports"; exit 1
+            fi
+          done
 
   # ---------- test ----------
 
@@ -183,7 +214,7 @@ jobs:
   # the repo that do not exist yet) pass; failed or cancelled jobs do not.
   ci-ok:
     if: always()
-    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, sql-lint, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
+    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, sql-lint, db-roundtrip, compose-ports, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
     runs-on: ubuntu-latest
     steps:
       - env:
