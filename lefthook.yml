@@ -1,0 +1,88 @@
+# Local git hooks (docs/PLAN.md §2). Install with: make hooks
+# Hooks are fast feedback only and can be skipped with --no-verify;
+# GitLab CI + protected main are the real enforcement.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: forbidden-files
+      run: scripts/hooks/check-forbidden-files.sh
+
+    - name: gitleaks
+      run: gitleaks git --pre-commit --staged --redact --no-banner -c .gitleaks.toml
+
+    - name: gofmt
+      glob: "*.go"
+      run: test -z "$(gofmt -l {staged_files})" || { gofmt -l {staged_files}; echo "run gofmt -w"; exit 1; }
+
+    - name: goimports
+      glob: "*.go"
+      run: test -z "$("$(go env GOPATH)/bin/goimports" -l {staged_files})" || { echo "run goimports -w"; exit 1; }
+
+    - name: go-vet
+      glob: "*.go"
+      run: go vet ./...
+
+    - name: golangci-lint
+      glob: "*.go"
+      run: golangci-lint run --new-from-rev=HEAD ./...
+
+    - name: go-mod-tidy
+      glob: "go.{mod,sum}"
+      run: go mod tidy && git diff --exit-code go.mod go.sum
+
+    - name: sqlfluff
+      glob: "*.sql"
+      run: sqlfluff lint {staged_files}
+
+    - name: migrations
+      glob: "migrations/*"
+      run: scripts/hooks/check-migrations.sh
+
+    - name: ai-sessions
+      glob: "ai-sessions/*"
+      run: scripts/hooks/check-ai-sessions.sh
+
+    - name: web-lint
+      root: "web/"
+      glob: "*.{ts,vue,js}"
+      run: npx eslint {staged_files} && npx prettier --check {staged_files}
+
+commit-msg:
+  jobs:
+    - name: conventional-commit
+      run: scripts/hooks/check-commit-msg.sh {1}
+
+pre-push:
+  jobs:
+    - name: branch-policy
+      run: scripts/hooks/check-branch-name.sh --pre-push
+      use_stdin: true
+
+    - name: role-paths
+      run: scripts/hooks/check-role-paths.sh --warn
+
+    - name: gitleaks-range
+      run: |
+        if git rev-parse --verify --quiet origin/main >/dev/null; then
+          gitleaks git --log-opts="origin/main..HEAD" --redact --no-banner -c .gitleaks.toml
+        else
+          gitleaks git --redact --no-banner -c .gitleaks.toml
+        fi
+
+    - name: go-build
+      run: test ! -f go.mod || go build ./...
+
+    - name: go-unit
+      run: test ! -f go.mod || make test-unit
+
+    - name: golangci-lint-full
+      run: test ! -f go.mod || golangci-lint run ./...
+
+    - name: govulncheck
+      run: test ! -f go.mod || "$(go env GOPATH)/bin/govulncheck" ./...
+
+    # The migration tool is chosen in P2; that phase must add `make db-roundtrip`
+    # (up -> down -> up on a throwaway Postgres). Until then there are no migrations.
+    - name: migration-roundtrip
+      run: test ! -d migrations || make db-roundtrip

@@ -1,0 +1,11 @@
+
+# <type>(<scope>): <imperative summary, <=72 chars>
+#
+# <WHY it changed and which behavior is affected; wrap at 72>
+#
+# Refs: REQ-XXX-NN          (required for feat, fix, test)
+# Phase: P<N>
+#
+# types:  feat fix test docs chore ci refactor sec
+# scopes: audience content approval delivery tracking llm seed db ui
+#         infra ci docs

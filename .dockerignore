@@ -1,0 +1,19 @@
+# Same secret rules as .gitignore: .env never enters a build context.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+.git
+.omc
+.claude
+ai-sessions
+Smart Campaign Composer Case.html
+
+bin
+coverage.*
+**/node_modules
+**/dist
+pgdata
+*.log
