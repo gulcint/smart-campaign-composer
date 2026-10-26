@@ -23,7 +23,7 @@ for db in $databases; do
     -v db="$db" <<'SQL'
 CREATE DATABASE :"db" OWNER scc_migrator;
 REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
-GRANT CONNECT, TEMPORARY ON DATABASE :"db" TO scc_app;
+GRANT CONNECT ON DATABASE :"db" TO scc_app;
 SQL
   # In PostgreSQL 16 the public schema belongs to pg_database_owner, i.e. scc_migrator.
   psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$db" <<'SQL'
