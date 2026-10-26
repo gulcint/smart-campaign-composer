@@ -13,7 +13,7 @@
 - [ ] `ci-ok` green, all conversations resolved
 - [ ] Reviewer report attached below
 - [ ] Verifier evidence (command + output) attached below
-- [ ] Owner read this PR and can explain it
+- [ ] Owner read this PR and can explain it (does not block the merge; done before the phase closes)
 - [ ] `DECISIONS.md` updated with this phase's decisions
 - [ ] All sessions of this phase exported, sanitized and listed in `ai-sessions/INDEX.md`
 

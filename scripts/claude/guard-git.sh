@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code PreToolUse hook for Bash (docs/PLAN.md §2.3).
 # Blocks agents from: pushing to main, force/mirror/all pushes, skipping or
-# disabling git hooks, and merging pull requests (the owner merges, §3).
+# disabling git hooks, and merging a pull request unless its ci-ok check is green.
 # Each shell segment (split on newlines, ; & |) is checked on its own, so text
 # inside heredocs or commit messages does not count as a flag.
 # This is a fast first layer; the GitHub ruleset on main is the backstop.
@@ -15,6 +15,26 @@ cmd=$(jq -r '.tool_input.command // empty')
 block() { echo "blocked by scripts/claude/guard-git.sh: $1" >&2; exit 2; }
 
 branch=$(git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+
+# Agents may merge a pull request only when its `ci-ok` check is green (owner decision,
+# 2026-10-26). Fails closed: unreadable CI status blocks. The ruleset on main enforces
+# the same server-side; this layer refuses before the request is even sent.
+check_pr_merge() {
+  local pr="" squash=0 word out
+  for word in "$@"; do
+    case "$word" in
+      --admin) block "gh pr merge --admin bypasses the main ruleset" ;;
+      --squash|-s) squash=1 ;;
+      -*) ;;
+      *) [[ -z "$pr" ]] && pr="$word" ;;
+    esac
+  done
+  [[ "$pr" =~ ^[0-9]+$ ]] || block "pass the pull request number explicitly: gh pr merge <number> --squash"
+  (( squash )) || block "main accepts squash merges only: add --squash"
+  out=$(cd "${CLAUDE_PROJECT_DIR:-.}" && gh pr checks "$pr" --json name,bucket 2>/dev/null) || true
+  [[ "$(jq -r '[.[]? | select(.name == "ci-ok") | .bucket] | first // ""' <<<"${out:-[]}" 2>/dev/null)" == "pass" ]] \
+    || block "ci-ok is not green on PR #$pr (or its status could not be read); wait for CI"
+}
 
 check_segment() {
   local seg="$1" word
@@ -47,7 +67,7 @@ check_segment() {
       return 0 ;;
     gh)
       if [[ "${words[i+1]:-}" == "pr" && "${words[i+2]:-}" == "merge" ]]; then
-        block "pull requests are merged by the owner in the GitHub UI"
+        check_pr_merge "${words[@]:i+3}"
       fi
       return 0 ;;
     git) i=$((i + 1)) ;;

@@ -226,7 +226,7 @@ Araç: `lefthook` (VARSAYIM), `make hooks` ile kurulur.
 ### 2.3 Hook'lar atlanabilir — asıl zorlayıcı CI + protected branch
 
 - `--no-verify` ile atlanabilir veya hiç kurulmamış olabilir. Hook'lar hızlı geri bildirimdir, güvenlik sınırı değildir.
-- **Asıl zorlayıcı:** GitHub Actions tüm kontrolleri yeniden çalıştırır (+ `make test`, compose duman testi, tüm geçmişte gitleaks, frontend testleri, `npm audit`); `main` ruleset'i `ci-ok` kırmızıyken merge'ü sunucu tarafında engeller. Secret scanning push protection, sır içeren push'u GitHub tarafında reddeder.
+- **Asıl zorlayıcı:** GitHub Actions tüm kontrolleri yeniden çalıştırır (+ `make test`, compose duman testi, tüm geçmişte gitleaks, frontend testleri, `npm audit`); `main` ruleset'i `ci-ok` kırmızıyken merge'ü sunucu tarafında engeller. Ajanın merge yetkisi buna ek bir yerel katmandır: `guard-git.sh`, `gh pr merge`'e yalnızca o PR'da `ci-ok` yeşilken, `--squash` ve açık PR numarasıyla izin verir; `--admin` yasaktır. Secret scanning push protection, sır içeren push'u GitHub tarafında reddeder.
 - Ek katman: Claude Code `PreToolUse` hook'ları ajanların `main`'e push yapmasını engeller.
 - CI dokümanda **bonus** olarak geçiyor (düzeltme #12) — README'de bonus olarak belirtilir.
 
@@ -238,7 +238,7 @@ Kodu yazan, review eden ve testi yazan ayrı bağlamlardır; hiçbiri kendi işi
 
 | Rol | Kim | Okuyabildikleri | Yazabildikleri | Sorumluluk |
 |---|---|---|---|---|
-| **Sahip** | Proje sahibi (insan) | Her şey | Karar | Sözleşme onayı, repo oluşturma, VARSAYIM kabulü, merge; **her PR'ı okuyup açıklayabilmek** |
+| **Sahip** | Proje sahibi (insan) | Her şey | Karar | Sözleşme onayı (`contracts-v1`), repo oluşturma, VARSAYIM kabulü. Merge yetkisini, `ci-ok` yeşilken orkestratöre devretti (2026-10-26); **her PR'ı okuyup açıklayabilmek** (merge'ü beklemeden, faz kapanışına kadar) |
 | **Mimar** | `architect` / `planner` | Doküman, kod | `docs/` | REQ kataloğu, OpenAPI, şemalar, DSL, Go arayüz imzaları, `DECISIONS.md` — koddan önce |
 | **Test yazarı** | `test-engineer`, **ayrı Claude Code session'ı + sparse checkout'lu ayrı worktree** | Yalnızca case dokümanı (mutlak yol), `docs/requirements.md`, `docs/contracts/**` | `**/*_test.go`, `test/**`, `testdata/**`, `web/tests/**` (frontend testleri `web/src` dışında) | Dokümandaki ister ve kısıtlardan test; implementasyona asla bakmaz |
 | **Kodu yazan** | `executor` | Doküman, sözleşmeler, testler | `cmd/`, `internal/`, `migrations/`, `web/src/` | Testleri yeşile çevirir; test dosyalarını değiştiremez |
@@ -260,7 +260,7 @@ Kodu yazan, review eden ve testi yazan ayrı bağlamlardır; hiçbiri kendi işi
 - [ ] `slice/*` → `main` PR'ında tam pipeline yeşil, tüm conversation'lar çözülmüş
 - [ ] Reviewer raporu PR'da
 - [ ] Doğrulayıcı kanıtı (komut + çıktı) PR'da
-- [ ] **Sahip PR'ı okudu ve açıklayabilir** (düzeltme #11)
+- [ ] **Sahip PR'ı okudu ve açıklayabilir** (düzeltme #11). Merge bunu beklemez; `ci-ok` yeşilse orkestratör merge eder, sahibin okuması faz kapanışından önce tamamlanır
 - [ ] `DECISIONS.md` bu fazın kararlarıyla güncel
 - [ ] Bu fazın **tüm session'ları** export edildi, temizlendi, `ai-sessions/INDEX.md`'ye eklendi
 

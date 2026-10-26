@@ -43,10 +43,17 @@ Araçlar (Homebrew): `go`, `lefthook`, `gitleaks`, `golangci-lint`, `sqlfluff`, 
 
 Git kuralları (ayrıntı `docs/PLAN.md` §1–2):
 - Branch: `<tür>/p<faz>-<kebab>` (`slice|test|feat|fix|refactor|docs|chore|ci|sec`). Commit: Conventional Commits, `feat`/`fix`/`test` için `Refs: REQ-XXX-NN` zorunlu.
-- `main`'e doğrudan push yok; PR'ları sahip GitHub arayüzünden merge eder; `main` ruleset'i `ci-ok` check'ini ve PR'ı zorunlu tutar. `scripts/claude/guard-git.sh` (PreToolUse hook) ajanlar için `main`'e push, `--force`, `--no-verify` ve `gh pr merge`'ü engeller.
+- `main`'e doğrudan push yok; `main` ruleset'i PR ve `ci-ok` check'ini zorunlu tutar. Sahibin kararıyla (2026-10-26) ajan, `ci-ok` yeşilse PR'ı beklemeden merge eder: `gh pr merge <no> --squash --delete-branch` (kırmızı/bekleyen CI'da merge yok, onay beklenmez). `scripts/claude/guard-git.sh` (PreToolUse hook) ajanlar için `main`'e push, `--force`, `--no-verify` ve `--admin`'i engeller; `gh pr merge`'e ise yalnızca açık PR numarası + `--squash` ile ve o PR'da `ci-ok` yeşilken izin verir (durum okunamazsa engeller).
 - `test/*` branch'leri implementasyona (`cmd/`, `internal/`, `migrations/`, `web/src/`), `feat|fix|refactor/*` branch'leri test dosyalarına dokunamaz (CI `pr-policy` job'ı).
 - Yeni migration'ı olan faz `make db-roundtrip` hedefini eklemek zorunda; pre-push bunu çağırır.
 - Her Docker build context'i (ör. `web/`) kökteki `.dockerignore`'un sır kurallarını kendi `.dockerignore`'unda tekrarlamalı; Docker yalnızca context kökündeki dosyayı okur.
+
+## Test yazarı
+
+Testleri yalnızca `test-writer` ajanı yazar (`.claude/agents/test-writer.md`, kuralları `.claude/skills/writing-tests/SKILL.md`). Kaynakları: case dokümanı, `docs/requirements.md`, `docs/contracts/**` — implementasyon asla.
+- Çalıştırma: `scripts/test-writer-worktree.sh origin/slice/p<N>-<x> test/p<N>-<y>` (implementasyon dizinleri olmadan sparse worktree açar), sonra o dizinde `claude --agent test-writer`.
+- `scripts/claude/test-writer-guard.sh` ajana özel PreToolUse hook'u: `cmd/`, `internal/`, `migrations/`, `web/src/` okunamaz; yalnızca test dosyaları yazılabilir; Bash yalnızca güvenli git/ls komutları.
+- Sözleşme eksikse test yazarı imza uydurmaz, soruyu sahibe döner.
 
 ## Çoklu ajan orkestrasyonu
 
