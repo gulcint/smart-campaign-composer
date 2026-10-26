@@ -7,23 +7,24 @@ Go: [`go-interfaces.md` §seed](go-interfaces.md#internalseed). Tablolar: [`db-s
 
 ```text
 seed [--seed N] [--users N] [--ref-time T] [--manifest PATH] [--export PATH]
-     [--db-url URL] [--skip-db] [--reset]
+     [--db-url URL] [--skip-db] [--reset | --if-empty]
 ```
 
 | Bayrak | Tip | Varsayılan | Anlam |
 |---|---|---|---|
 | `--seed` | int64 | `42` | Rastgelelik tohumu |
-| `--users` | int | `5000` | Müşteri sayısı (en az `200`, yoksa çıkış kodu 2) |
+| `--users` | int | `5000` | Müşteri sayısı (`200`–`9999`, yoksa çıkış kodu 2; üst sınır: kurgusal telefon bloğunda müşteri başına tekil numara) |
 | `--ref-time` | RFC 3339 veya `now` | `now` | Referans zaman; saniyeye yuvarlanır, UTC. Olaylar bu zamana göre geçmişe yerleştirilir; `ref`'ten sonra olay üretilmez |
 | `--manifest` | yol | `testdata/seed/manifest.json` | Manifestin yazılacağı yer (`-` = stdout). Her çalıştırmada yazılır |
 | `--export` | yol | (yok) | Verilirse veri kümesi JSONL olarak yazılır (§4) |
 | `--db-url` | URL | `$DATABASE_URL` | Hedef veritabanı (`scc_app` rolü yeterli) |
 | `--skip-db` | bool | `false` | DB'ye hiç bağlanmaz; yalnızca manifest/export üretir (unit testler ve determinizm kontrolü için) |
 | `--reset` | bool | `false` | DB'de farklı bir veri kümesi varsa önce siler (`deliveries`, `approvals`, `content_versions`, `campaigns`, `events`, `customers`) |
+| `--if-empty` | bool | `false` | `seed_runs`'ta herhangi bir kayıt varsa DB'ye dokunmadan çıkış kodu `0` ile biter (manifest yine yazılır). `--reset` ile birlikte verilemez (çıkış kodu 2) |
 
-Çıkış kodları: `0` başarı · `1` çalışma hatası (DB, `ErrDatasetMismatch`) · `2` kullanım hatası (geçersiz bayrak/değer, `--users < 200`, `--skip-db` olmadan boş `--db-url`).
+Çıkış kodları: `0` başarı · `1` çalışma hatası (DB, `ErrDatasetMismatch`) · `2` kullanım hatası (geçersiz bayrak/değer, `--users` `200`–`9999` dışında, `--reset` ile `--if-empty` birlikte, `--skip-db` olmadan boş `--db-url`).
 
-Compose: `seed` servisi `migrate` tamamlanınca `--seed=42 --users=5000 --ref-time=now` ile tek seferlik çalışır; `api` ve `worker` `seed` başarıyla bitince başlar. `compose.test.yml`: `--seed=42 --users=5000 --ref-time=2026-01-15T12:00:00Z` ve api'de `SEGMENT_REFERENCE_TIME=2026-01-15T12:00:00Z`.
+Compose: `seed` servisi `migrate` tamamlanınca `--seed=42 --users=5000 --ref-time=now --if-empty` ile tek seferlik çalışır (boş volume'da yükler; sonraki `docker compose up`'larda veriye ve kampanyalara dokunmaz). Bugüne göre yeniden seed bilinçli ve elle yapılır: `docker compose run --rm seed seed --ref-time=now --reset --manifest=/tmp/manifest.json` (kampanyaları ve teslimatları siler); `api` ve `worker` `seed` başarıyla bitince başlar. `compose.test.yml`: `--seed=42 --users=5000 --ref-time=2026-01-15T12:00:00Z` ve api'de `SEGMENT_REFERENCE_TIME=2026-01-15T12:00:00Z`.
 
 ## 2. Determinizm ve idempotentlik (REQ-SEED-01)
 
