@@ -22,7 +22,8 @@ wait_for() { # <description> <command...>
 
 # Integration database: same schema and seed as the API database, owned by this run.
 MIGRATE_DATABASE_URL="$TEST_MIGRATE_DATABASE_URL" wait_for "migrations on the test database" migrate up
-seed --seed=42 --users=5000 --ref-time=2026-01-15T12:00:00Z --db-url="$TEST_DATABASE_URL" --manifest=- >/dev/null
+# The URL goes through the environment, not argv, so it never shows up in process listings.
+DATABASE_URL="$TEST_DATABASE_URL" seed --seed=42 --users=5000 --ref-time=2026-01-15T12:00:00Z --manifest=- >/dev/null
 
 wait_for "the API at $E2E_API_URL" curl -fsS "$E2E_API_URL/healthz"
 wait_for "the mock provider at $E2E_MOCKPROVIDER_URL" curl -fsS "$E2E_MOCKPROVIDER_URL/healthz"

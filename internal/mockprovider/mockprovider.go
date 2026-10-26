@@ -202,11 +202,20 @@ func (s *server) send(w http.ResponseWriter, r *http.Request, channel string) {
 	to, valid := parseBody(r, channel)
 
 	s.mu.Lock()
+	// The request log only feeds /admin/requests; without admin it would grow without bound.
 	logEntry := func(status int, replayed bool) {
+		if !s.cfg.AdminEnabled {
+			return
+		}
 		s.requests = append(s.requests, requestLog{
 			Seq: len(s.requests) + 1, Channel: channel, IdempotencyKey: key, To: to,
 			ReceivedAt: now.Format(time.RFC3339Nano), Status: status, Replayed: replayed,
 		})
+	}
+	// request_count = every request that arrived with this key (mock-provider.md §4), so it is
+	// counted before validation.
+	if key != "" {
+		s.keyCount[key]++
 	}
 	// (1) header and body validation
 	switch {
@@ -226,7 +235,6 @@ func (s *server) send(w http.ResponseWriter, r *http.Request, channel string) {
 		writeError(w, http.StatusBadRequest, "invalid_recipient", "recipient is not in the fictional test range")
 		return
 	}
-	s.keyCount[key]++
 	// (2) replay of an accepted message
 	if m, ok := s.messages[key]; ok {
 		if m.channel != channel || m.to != to {
@@ -248,7 +256,12 @@ func (s *server) send(w http.ResponseWriter, r *http.Request, channel string) {
 	// (6) latency
 	if o.delay > 0 {
 		if err := clock.Sleep(r.Context(), s.clk, o.delay); err != nil {
-			return // client gone
+			// Client gone before the response: nothing is accepted or sent; status 0 like a
+			// lost response, so /admin/requests still shows every evaluated request.
+			s.mu.Lock()
+			logEntry(0, false)
+			s.mu.Unlock()
+			return
 		}
 	}
 

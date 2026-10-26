@@ -20,6 +20,11 @@ import (
 
 const MinUsers = 200
 
+// MaxUsers is the largest dataset with a unique phone per customer: the fictional block
+// +90 500 000 xx xx has 10000 numbers and +905000009999 is reserved for shared_contact.
+// cmd/seed rejects larger --users values.
+const MaxUsers = 9999
+
 type Options struct {
 	Seed    int64
 	Users   int

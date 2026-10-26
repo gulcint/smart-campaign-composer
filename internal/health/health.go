@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"time"
 )
 
@@ -29,12 +30,26 @@ func Readyz(db Pinger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
 		defer cancel()
-		if db == nil || db.Ping(ctx) != nil {
+		if isNil(db) || db.Ping(ctx) != nil {
 			writeJSON(w, http.StatusServiceUnavailable, readiness{Status: "not_ready", Checks: checks{Database: "unavailable"}})
 			return
 		}
 		writeJSON(w, http.StatusOK, readiness{Status: "ready", Checks: checks{Database: "ok"}})
 	})
+}
+
+// isNil also catches a typed nil (e.g. a nil *pgxpool.Pool stored in the interface), which
+// would otherwise panic inside Ping.
+func isNil(p Pinger) bool {
+	if p == nil {
+		return true
+	}
+	v := reflect.ValueOf(p)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return v.IsNil()
+	}
+	return false
 }
 
 type readiness struct {
