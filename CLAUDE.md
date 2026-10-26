@@ -32,6 +32,14 @@ Gerçek kimseye mesaj gitmez: alıcılar seed edilmiş sahte kullanıcılar, gö
 - **Repo:** GitHub, public, `gulcint/smart-campaign-composer` (GitLab hesap doğrulaması yapılamadığı için geçildi). Commit e-postası repoya özel GitHub noreply adresi. Commit'ler İngilizce, Conventional Commits. Case HTML `.gitignore`'da.
 - **LLM sağlayıcı seçimi:** `LLM_PROVIDER=auto|real|mock` — key yoksa mock; `docker compose up` ve `make test` key'siz çalışır.
 
+## Tasarım ve frontend
+
+Görsel sistem ve ekran akışı: `/Users/gulcintas/Desktop/SmartCampaignComposer/DESIGN.md` (renk/tipografi token'ları, component envanteri, ekranlar, erişilebilirlik). Frontend'e dokunmadan önce okunur.
+- Teknoloji: Vue 3 + Vite + TypeScript + Pinia; component'ler **shadcn-vue + Reka UI + Tailwind CSS v4**; ikonlar `@lucide/vue`; font Figtree + JetBrains Mono (self-host).
+- Metin rengi: sahibin kararıyla **turuncu metin vurgu rengidir** (başlıklar, vurgular, anahtar sayılar, linkler); uzun gövde ve LLM metni koyu mürekkep kalır. Turuncuya yalnızca rol token'larıyla erişilir (`--text-accent*`), `--orange-*` doğrudan kullanılmaz.
+- Arayüz dili Türkçe, metinler tek i18n dosyasında. LLM/düzenleme içeriği asla `v-html` ile basılmaz.
+- Component adları ve `data-testid`'ler `docs/contracts/ui.md`'de tanımlanır (DESIGN.md tanımlamaz).
+
 ## Komutlar
 
 Araçlar (Homebrew): `go`, `lefthook`, `gitleaks`, `golangci-lint`, `sqlfluff`, `actionlint`, `gh`; `go install` ile `goimports`, `govulncheck`.
