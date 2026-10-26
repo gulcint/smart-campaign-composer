@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Validates a commit message (or an MR title) against docs/PLAN.md §1.4.
 # Usage: check-commit-msg.sh <message-file>
+#        check-commit-msg.sh --subject-only <file>   # MR titles: no Refs: line expected
 set -euo pipefail
+
+subject_only=0
+if [[ "$1" == "--subject-only" ]]; then subject_only=1; shift; fi
 
 msg_file="$1"
 # Drop comment lines git leaves in the editor buffer.
@@ -25,6 +29,7 @@ fail() {
 
 [[ "$subject" =~ $pattern ]] || fail "subject does not match Conventional Commits with allowed types/scopes"
 (( ${#subject} <= 72 )) || fail "subject is ${#subject} chars, max 72"
+(( subject_only )) && exit 0
 
 type="${subject%%[(:!]*}"
 case "$type" in

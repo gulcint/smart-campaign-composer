@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Rejects files that must never be committed (docs/PLAN.md §1.5, §6 #1).
-# Usage: check-forbidden-files.sh            # staged files (pre-commit)
-#        check-forbidden-files.sh --all      # every tracked file (CI)
+# Usage: check-forbidden-files.sh                 # staged files (pre-commit)
+#        check-forbidden-files.sh --all           # every tracked file (CI)
+#        check-forbidden-files.sh --range <base>  # every file touched by any commit in <base>..HEAD (CI, MRs)
 set -euo pipefail
 
-if [[ "${1:-}" == "--all" ]]; then
-  files=$(git ls-files)
-else
-  files=$(git diff --cached --name-only --diff-filter=ACMR)
-fi
+case "${1:-}" in
+  --all)   files=$(git ls-files) ;;
+  --range) files=$(git log --name-only --format= "$2..HEAD" | sort -u) ;;
+  *)       files=$(git diff --cached --name-only --diff-filter=ACMR) ;;
+esac
 
 bad=()
 while IFS= read -r f; do

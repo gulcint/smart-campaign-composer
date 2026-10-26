@@ -17,7 +17,11 @@ pre-commit:
 
     - name: goimports
       glob: "*.go"
-      run: test -z "$("$(go env GOPATH)/bin/goimports" -l {staged_files})" || { echo "run goimports -w"; exit 1; }
+      run: |
+        bin="$(go env GOPATH)/bin/goimports"
+        test -x "$bin" || { echo "goimports not installed: go install golang.org/x/tools/cmd/goimports@latest"; exit 1; }
+        out=$("$bin" -l {staged_files}) || exit 1
+        test -z "$out" || { echo "$out"; echo "run goimports -w"; exit 1; }
 
     - name: go-vet
       glob: "*.go"

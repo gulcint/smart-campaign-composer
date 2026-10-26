@@ -23,6 +23,11 @@ if [[ -z "$base" ]]; then
 fi
 
 if ! git rev-parse --verify --quiet "$base" >/dev/null; then
+  # An explicit base (CI) must resolve; a guessed one (local push) may not exist yet.
+  if [[ -n "${2:-}" ]]; then
+    echo "role-paths: base '$base' not found" >&2
+    exit 1
+  fi
   echo "role-paths: base '$base' not found, skipping" >&2
   exit 0
 fi
