@@ -28,7 +28,9 @@ fail() {
 }
 
 [[ "$subject" =~ $pattern ]] || fail "subject does not match Conventional Commits with allowed types/scopes"
-(( ${#subject} <= 72 )) || fail "subject is ${#subject} chars, max 72"
+# GitHub appends " (#123)" to squash-merge subjects; the author cannot shorten that suffix.
+measured="${subject% (#[0-9]*)}"
+(( ${#measured} <= 72 )) || fail "subject is ${#measured} chars, max 72"
 (( subject_only )) && exit 0
 
 type="${subject%%[(:!]*}"
