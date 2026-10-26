@@ -6,6 +6,7 @@
 package content
 
 import (
+	"errors"
 	"strings"
 	"unicode/utf8"
 
@@ -66,3 +67,13 @@ func EffectiveFirstName(s string) string {
 	}
 	return FirstNameFallback
 }
+
+// Field errors of the content validator match these sentinels (empty fields match validation.ErrRequired).
+var (
+	ErrSMSTooLong        = errors.New("content: sms too long")        // "sms_too_long", "sms_too_long_worst_case"
+	ErrSubjectTooLong    = errors.New("content: subject too long")    // "subject_too_long", "subject_too_long_worst_case"
+	ErrEmailBodyTooLong  = errors.New("content: email body too long") // "email_body_too_long"
+	ErrUnknownVariable   = errors.New("content: unknown variable")    // "unknown_variable"
+	ErrMalformedVariable = errors.New("content: malformed variable")  // "malformed_variable"
+	ErrWorstCaseTooLong  = errors.New("content: worst case too long") // additionally matched by *_worst_case codes
+)
