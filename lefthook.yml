@@ -37,7 +37,10 @@ pre-commit:
 
     - name: sqlfluff
       glob: "*.sql"
-      run: sqlfluff lint {staged_files}
+      # sqlfluff reads config from every directory between $HOME and the repo; HOME=$PWD keeps
+      # it inside the repo (.sqlfluff), which also works when a parent folder is not listable
+      # (e.g. macOS-protected ~/Desktop).
+      run: HOME="$PWD" sqlfluff lint {staged_files}
 
     - name: migrations
       glob: "migrations/*"
