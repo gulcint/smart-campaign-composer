@@ -8,7 +8,7 @@
 #   scc_test  - migrated + seeded by the test container itself, for integration tests
 #               (TEST_DATABASE_URL / TEST_MIGRATE_DATABASE_URL); tests may migrate it down/up
 #               without disturbing the API.
-# The mock provider (E2E_MOCKPROVIDER_URL) joins in P5.
+# The mock provider (E2E_MOCKPROVIDER_URL) runs with its admin endpoints enabled.
 
 name: scc-test
 
@@ -69,6 +69,13 @@ services:
       seed:
         condition: service_completed_successfully
 
+  mockprovider:
+    <<: *app
+    command: ["mockprovider"]
+    environment:
+      MOCK_PROVIDER_ADDR: ":8090"
+      MOCK_PROVIDER_ADMIN: "true"
+
   test:
     build:
       context: .
@@ -85,4 +92,6 @@ services:
       db:
         condition: service_healthy
       api:
+        condition: service_started
+      mockprovider:
         condition: service_started

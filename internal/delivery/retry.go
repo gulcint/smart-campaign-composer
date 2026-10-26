@@ -4,7 +4,15 @@
 // environment; the policy, limiter and dispatcher arrive with the delivery slice (P5).
 package delivery
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var (
+	ErrLeaseLost     = errors.New("delivery: lease lost")
+	ErrInvalidConfig = errors.New("delivery: invalid dispatcher config")
+)
 
 // RetryConfig bounds retries per delivery (REQ-SND-04, PLAN §0.4).
 type RetryConfig struct {

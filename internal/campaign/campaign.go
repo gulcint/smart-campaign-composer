@@ -8,6 +8,7 @@ package campaign
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/gulcint/smart-campaign-composer/internal/composer"
@@ -26,6 +27,16 @@ const (
 	StateApproved      State = "approved"
 	StateSending       State = "sending"
 	StateCompleted     State = "completed"
+)
+
+var (
+	ErrCampaignNotFound       = errors.New("campaign: not found")                 // 404 campaign_not_found
+	ErrContentVersionNotFound = errors.New("campaign: content version not found") // 404 content_version_not_found
+	ErrCustomerNotFound       = errors.New("campaign: customer not in audience")  // 404 customer_not_found
+	ErrInvalidState           = errors.New("campaign: invalid state")             // 409 invalid_state
+	ErrContentNotValidated    = errors.New("campaign: content not validated")     // 409 content_not_validated
+	ErrStaleContentVersion    = errors.New("campaign: stale content version")     // 409 stale_content_version
+	ErrGenerationInProgress   = errors.New("campaign: generation in progress")    // 409 generation_in_progress
 )
 
 // BriefMaxRunes is the brief length limit (REQ-AUD-05).
