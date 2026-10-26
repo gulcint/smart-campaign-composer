@@ -65,6 +65,15 @@ func Load(ctx context.Context, db *pgxpool.Pool, d *Dataset, reset bool) error {
 	return nil
 }
 
+// HasRun reports whether seed_runs already records a loaded dataset (any parameters).
+func HasRun(ctx context.Context, db *pgxpool.Pool) (bool, error) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM seed_runs WHERE id = 1)`).Scan(&exists); err != nil {
+		return false, fmt.Errorf("seed: read seed_runs: %w", err)
+	}
+	return exists, nil
+}
+
 func upsertCustomers(ctx context.Context, tx pgx.Tx, customers []customer) error {
 	for start := 0; start < len(customers); start += loadBatch {
 		batch := customers[start:min(start+loadBatch, len(customers))]

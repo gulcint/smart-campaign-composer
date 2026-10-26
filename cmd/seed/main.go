@@ -37,6 +37,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	dbURL := fs.String("db-url", "", "target database (default $DATABASE_URL)")
 	skipDB := fs.Bool("skip-db", false, "do not connect to the database; only write manifest/export")
 	reset := fs.Bool("reset", false, "delete a different dataset before loading")
+	ifEmpty := fs.Bool("if-empty", false, "do nothing (exit 0) if the database already holds a seed run")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -44,8 +45,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "seed: unexpected arguments: %v\n", fs.Args())
 		return 2
 	}
-	if *users < seed.MinUsers {
-		_, _ = fmt.Fprintf(stderr, "seed: --users must be at least %d\n", seed.MinUsers)
+	if *users < seed.MinUsers || *users > seed.MaxUsers {
+		_, _ = fmt.Fprintf(stderr, "seed: --users must be between %d and %d\n", seed.MinUsers, seed.MaxUsers)
+		return 2
+	}
+	if *ifEmpty && *reset {
+		_, _ = fmt.Fprintln(stderr, "seed: --if-empty and --reset are mutually exclusive")
 		return 2
 	}
 	ref, err := parseRefTime(*refTime)
@@ -108,6 +113,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer pool.Close()
+	if *ifEmpty {
+		seeded, err := seed.HasRun(ctx, pool)
+		if err != nil {
+			logger.Error("seed state check failed", slog.String("error", err.Error()))
+			return 1
+		}
+		if seeded {
+			logger.Info("seed skipped: the database already holds a seed run (--if-empty)")
+			return 0
+		}
+	}
 	if err := seed.Load(ctx, pool, ds, *reset); err != nil {
 		logger.Error("seed load failed", slog.String("error", err.Error()))
 		return 1

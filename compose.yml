@@ -48,9 +48,11 @@ services:
 
   seed:
     <<: *app
-    # ref-time=now keeps "last 30 days" meaningful in the demo; because every run therefore
-    # produces a different dataset, --reset replaces the previous one (and its demo campaigns).
-    command: ["seed", "--seed=42", "--users=5000", "--ref-time=now", "--reset", "--manifest=/tmp/manifest.json"]
+    # ref-time=now keeps "last 30 days" meaningful on a fresh volume. --if-empty makes restarts
+    # non-destructive: once a dataset is loaded the seed exits 0 and campaigns are kept.
+    # To re-seed relative to today (deletes campaigns and deliveries), run explicitly:
+    #   docker compose run --rm seed seed --ref-time=now --reset --manifest=/tmp/manifest.json
+    command: ["seed", "--seed=42", "--users=5000", "--ref-time=now", "--if-empty", "--manifest=/tmp/manifest.json"]
     environment:
       <<: *db-env
     depends_on:
