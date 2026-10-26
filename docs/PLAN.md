@@ -241,7 +241,7 @@ Kodu yazan, review eden ve testi yazan ayrı bağlamlardır; hiçbiri kendi işi
 | **Sahip** | Proje sahibi (insan) | Her şey | Karar | Sözleşme onayı (`contracts-v1`), repo oluşturma, VARSAYIM kabulü. Merge yetkisini, `ci-ok` yeşilken orkestratöre devretti (2026-10-26); **her PR'ı okuyup açıklayabilmek** (merge'ü beklemeden, faz kapanışına kadar) |
 | **Mimar** | `architect` / `planner` | Doküman, kod | `docs/` | REQ kataloğu, OpenAPI, şemalar, DSL, Go arayüz imzaları, `DECISIONS.md` — koddan önce |
 | **Test yazarı** | `test-engineer`, **ayrı Claude Code session'ı + sparse checkout'lu ayrı worktree** | Yalnızca case dokümanı (mutlak yol), `docs/requirements.md`, `docs/contracts/**` | `**/*_test.go`, `test/**`, `testdata/**`, `web/tests/**` (frontend testleri `web/src` dışında) | Dokümandaki ister ve kısıtlardan test; implementasyona asla bakmaz |
-| **Kodu yazan** | `executor` | Doküman, sözleşmeler, testler | `cmd/`, `internal/`, `migrations/`, `web/src/` | Testleri yeşile çevirir; test dosyalarını değiştiremez |
+| **Kodu yazan** | `executor` | Doküman, sözleşmeler, testler | `cmd/`, `internal/`, `migrations/`, `web/src/` | Testleri yeşile çevirir; test dosyalarını değiştiremez. **Tek istisna:** `testdata/seed/manifest.json`'ı seed kodu üretir, kodu yazan commit'ler; test yazarı yazamaz, yalnızca okur (`docs/contracts/seed.md`) |
 | **Reviewer** | `code-reviewer` (+ güvenlikte `security-reviewer`) | Her şey | PR yorumu/raporu | Kodu sözleşmeye, testleri dokümana, ikisini güvenlik listesine göre inceler |
 | **Doğrulayıcı** | `verifier` | Her şey | Rapor | Faz kapısında kanıtla son onay |
 
@@ -348,7 +348,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 | Rastgelelik | Global `math/rand` yasak; seed'li `*rand.Rand` enjekte |
 | Ağ | Yalnızca `httptest`; dış host'a giden isteği düşüren guard transport |
 | DB | Unit'te yok; entegrasyonda test başına transaction-rollback veya ayrı şema; `-shuffle=on` |
-| LLM | Yalnızca `MockLLM` (fixture tabanlı, deterministik stream sırası) |
+| LLM | Yalnızca `llm.Mock` (fixture tabanlı, deterministik stream sırası) |
 | Eşzamanlılık | `-race`; goroutine sızıntısı için `goleak` (VARSAYIM) |
 | Çalıştırma | CI'da `-count=1 -shuffle=on -race`; flaky test karantinaya alınmaz, düzeltilir |
 

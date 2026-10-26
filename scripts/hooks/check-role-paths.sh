@@ -35,11 +35,20 @@ fi
 impl_re='^(cmd/|internal/|migrations/|web/src/)'
 test_re='(_test\.go$|^test/|(^|/)testdata/|^web/tests/)'
 
+# The one cross-over (docs/contracts/seed.md): the seed code generates
+# testdata/seed/manifest.json, so the implementer may write it and the test writer may not.
+manifest='testdata/seed/manifest.json'
+
 changed=$(git diff --name-only "$(git merge-base "$base" HEAD)" HEAD)
 
 case "$branch" in
-  test/*)                 offending=$(printf '%s\n' "$changed" | grep -E "$impl_re" | grep -Ev "$test_re" || true); role="test writer"; area="implementation" ;;
-  feat/*|fix/*|refactor/*) offending=$(printf '%s\n' "$changed" | grep -E "$test_re" || true); role="implementer"; area="test" ;;
+  test/*)
+    offending=$( { printf '%s\n' "$changed" | grep -E "$impl_re" | grep -Ev "$test_re" || true
+                   printf '%s\n' "$changed" | grep -Fx "$manifest" || true; } | grep -v '^$' || true)
+    role="test writer"; area="implementation or seed manifest" ;;
+  feat/*|fix/*|refactor/*)
+    offending=$(printf '%s\n' "$changed" | grep -E "$test_re" | grep -Fxv "$manifest" || true)
+    role="implementer"; area="test" ;;
   *) exit 0 ;;
 esac
 

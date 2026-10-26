@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "emit_segment_rule input (strict variant sent to the model)",
+  "description": "Strict-compatible variant of ../segment-rule.schema.json. Differences: anyOf instead of oneOf; no minItems/maxItems; 'value' is required (use null for is_null / is_not_null). Limits (max depth 3, max 10 conditions, value ranges, operator-per-type) are enforced only by the backend validator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rule"
+  ],
+  "properties": {
+    "rule": {
+      "$ref": "#/$defs/group1"
+    }
+  },
+  "$defs": {
+    "fieldName": {
+      "type": "string",
+      "enum": [
+        "city",
+        "language",
+        "loyalty_tier",
+        "last_cart_add_at",
+        "last_purchase_at",
+        "orders_30d",
+        "cart_adds_30d",
+        "total_orders",
+        "total_spent"
+      ]
+    },
+    "operator": {
+      "type": "string",
+      "enum": [
+        "eq",
+        "neq",
+        "in",
+        "not_in",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "between",
+        "within_last",
+        "older_than",
+        "is_null",
+        "is_not_null"
+      ]
+    },
+    "relativeDays": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "days"
+      ],
+      "properties": {
+        "days": {
+          "type": "integer"
+        }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min",
+        "max"
+      ],
+      "properties": {
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
+      }
+    },
+    "value": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "$ref": "#/$defs/relativeDays"
+        },
+        {
+          "$ref": "#/$defs/range"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "op",
+        "value"
+      ],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/fieldName"
+        },
+        "op": {
+          "$ref": "#/$defs/operator"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      }
+    },
+    "group3": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/condition"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ],
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/condition"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/condition"
+            }
+          }
+        }
+      ]
+    },
+    "group2": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/condition"
+                  },
+                  {
+                    "$ref": "#/$defs/group3"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ],
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/condition"
+                  },
+                  {
+                    "$ref": "#/$defs/group3"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/condition"
+                },
+                {
+                  "$ref": "#/$defs/group3"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "group1": {
+      "description": "Root group. Exactly one of all / any / not.",
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/condition"
+                  },
+                  {
+                    "$ref": "#/$defs/group2"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ],
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/condition"
+                  },
+                  {
+                    "$ref": "#/$defs/group2"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/condition"
+                },
+                {
+                  "$ref": "#/$defs/group2"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
