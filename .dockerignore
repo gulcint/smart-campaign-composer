@@ -1,0 +1,21 @@
+# Same secret rules as .gitignore: .env never enters a build context.
+# Patterns are anchored at the context root, hence the **/ prefixes.
+# Every build context (e.g. web/) needs its own copy of the secret rules.
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+
+.git
+.omc
+.claude
+ai-sessions
+**/Smart Campaign Composer Case.html
+
+bin
+**/coverage.*
+**/node_modules
+**/dist
+**/pgdata
+**/*.log

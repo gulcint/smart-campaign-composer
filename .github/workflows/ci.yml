@@ -1,0 +1,195 @@
+# CI is the real enforcement behind the local hooks (docs/PLAN.md §2.3).
+# Listed as a bonus in the case; set up from P0 because the main ruleset
+# requires the `ci-ok` check.
+# No Anthropic key is ever defined here: tests run with the mock LLM.
+# Actions are pinned by commit SHA and images by digest (docs/PLAN.md §6 #16).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_IMAGE: golang:1.27-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
+
+jobs:
+  # GitHub has no "exists:" rule; this job tells later jobs which parts of the repo exist yet.
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.d.outputs.go }}
+      migrations: ${{ steps.d.outputs.migrations }}
+      compose_test: ${{ steps.d.outputs.compose_test }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: d
+        run: |
+          {
+            echo "go=$([ -f go.mod ] && echo true || echo false)"
+            echo "migrations=$([ -d migrations ] && echo true || echo false)"
+            echo "compose_test=$([ -f compose.test.yml ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+  # ---------- policy ----------
+
+  pr-policy:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      # Passed through env, never interpolated into the script: PR fields are untrusted input.
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      HEAD_REF: ${{ github.head_ref }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: branch name
+        run: scripts/hooks/check-branch-name.sh "$HEAD_REF"
+      - name: PR title and commit messages
+        run: |
+          # The PR title becomes the squash commit subject on main.
+          printf '%s\n' "$PR_TITLE" > "$RUNNER_TEMP/title"
+          scripts/hooks/check-commit-msg.sh --subject-only "$RUNNER_TEMP/title"
+          base=$(git merge-base "$BASE_SHA" HEAD)
+          refs_found=0
+          for sha in $(git rev-list "$base..HEAD"); do
+            git log -1 --format=%B "$sha" > "$RUNNER_TEMP/msg"
+            scripts/hooks/check-commit-msg.sh "$RUNNER_TEMP/msg" || { echo "commit $sha"; exit 1; }
+            if grep -Eq '^Refs: REQ-' "$RUNNER_TEMP/msg"; then refs_found=1; fi
+          done
+          # feat/fix/test PRs must carry REQ refs into main: the squash message
+          # (PR title + commit messages) copies them from the commits.
+          case "$PR_TITLE" in
+            feat*|fix*|test*)
+              if [ "$refs_found" -eq 0 ]; then echo "no commit in this PR has a 'Refs: REQ-' line"; exit 1; fi ;;
+          esac
+      - name: role paths
+        run: scripts/hooks/check-role-paths.sh "$HEAD_REF" "$(git merge-base "$BASE_SHA" HEAD)"
+      - name: forbidden files in any commit of the PR
+        run: scripts/hooks/check-forbidden-files.sh --range "$(git merge-base "$BASE_SHA" HEAD)"
+      - name: migrations
+        run: |
+          if [ -d migrations ]; then
+            scripts/hooks/check-migrations.sh --range "$(git merge-base "$BASE_SHA" HEAD)"
+          fi
+
+  repo-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: forbidden files
+        run: |
+          scripts/hooks/check-forbidden-files.sh --all
+          git check-ignore -q .env
+          git check-ignore -q "Smart Campaign Composer Case.html"
+      - name: no API key in CI or .env.example
+        run: |
+          # The pattern is split so this file does not match itself.
+          if grep -rn 'ANTHROPIC_API''_KEY' .github/; then echo "CI must not reference the API key"; exit 1; fi
+          if grep -nE 'sk-ant-[A-Za-z0-9_-]{10,}' .env.example; then echo ".env.example contains a key"; exit 1; fi
+
+  # ---------- lint ----------
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: >
+          docker run --rm -v "$PWD:/repo" -w /repo
+          rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          -color
+
+  go-lint:
+    needs: detect
+    if: needs.detect.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint:v2.15.0@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: golangci-lint run ./...
+
+  sql-lint:
+    needs: detect
+    if: needs.detect.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: >
+          docker run --rm -v "$PWD:/src" -w /src
+          sqlfluff/sqlfluff:4.4.0@sha256:6a9083e55b1f4ea437636bc8ca7b55aaa0766a3e43a6d3e5b37614cf97e4e6ac
+          lint migrations/
+
+  # ---------- test ----------
+
+  go-unit:
+    needs: detect
+    if: needs.detect.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    container: golang:1.27-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: go test -race -short -count=1 -shuffle=on ./...
+
+  make-test:
+    needs: detect
+    if: needs.detect.outputs.compose_test == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The runner provides Docker + make only for this purpose: proves REQ-DLV-02.
+      - run: make test
+
+  # ---------- security ----------
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: >
+          docker run --rm -v "$PWD:/repo" -w /repo
+          zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git --redact --no-banner -c .gitleaks.toml .
+
+  ai-sessions-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/hooks/check-ai-sessions.sh --all
+
+  govulncheck:
+    needs: detect
+    if: needs.detect.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    container: golang:1.27-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  # ---------- gate ----------
+
+  # The only required status check in the main ruleset. Skipped jobs (parts of
+  # the repo that do not exist yet) pass; failed or cancelled jobs do not.
+  ci-ok:
+    if: always()
+    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, sql-lint, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) exit 1 ;; esac
+          done

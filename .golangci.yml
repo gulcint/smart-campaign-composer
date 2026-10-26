@@ -1,0 +1,19 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - gosec          # G201/G202: SQL built by string formatting
+    - sqlclosecheck
+    - rowserrcheck
+    - bodyclose
+    - errorlint
+    - noctx
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
