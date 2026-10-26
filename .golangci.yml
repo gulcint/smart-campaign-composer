@@ -12,6 +12,23 @@ linters:
     - bodyclose
     - errorlint
     - noctx
+  exclusions:
+    rules:
+      # Test code only: fake credentials (G101), fixture/file paths (G304), re-running the test
+      # binary (G204, G702, noctx on exec.Command), deliberate fmt.Sprintf("%s", x) to exercise the Stringer path (S1025) and
+      # comparing table-driven sentinel values with != (errorlint) are intended there.
+      - path: '(_test\.go$|^test/)'
+        linters: [gosec]
+        text: 'G(101|204|304|702):'
+      - path: '_test\.go$'
+        linters: [noctx]
+        text: 'os/exec.Command must not be called'
+      - path: '_test\.go$'
+        linters: [staticcheck]
+        text: 'S1025:'
+      - path: '_test\.go$'
+        linters: [errorlint]
+        text: 'comparing with'
 
 formatters:
   enable:

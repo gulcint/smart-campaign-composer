@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "params": {
+    "seed": 42,
+    "users": 5000,
+    "ref_time": "2026-01-15T12:00:00Z"
+  },
+  "dataset_sha256": "406fed7e0de163eaa6c81698b82c6a2fb03f1d9746c9d05cb77c8a8781e3968b",
+  "totals": {
+    "customers": 5000,
+    "events": 29551,
+    "events_by_type": {
+      "cart_add": 13272,
+      "purchase": 4348,
+      "page_view": 11931
+    }
+  },
+  "consent": {
+    "both": 2483,
+    "sms_only": 752,
+    "email_only": 735,
+    "none": 1030
+  },
+  "contact": {
+    "missing_phone": 276,
+    "missing_email": 148
+  },
+  "reachable": {
+    "matched": 5000,
+    "sms": 3058,
+    "email": 3121
+  },
+  "cities": {
+    "Adana": 350,
+    "Ankara": 397,
+    "Antalya": 407,
+    "Bursa": 367,
+    "Eskişehir": 378,
+    "Gaziantep": 376,
+    "Kayseri": 404,
+    "Konya": 371,
+    "İstanbul": 1557,
+    "İzmir": 393
+  },
+  "example_brief": {
+    "brief": "Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder. Samimi ama kısa olsun.",
+    "rule": {
+      "all": [
+        {
+          "field": "city",
+          "op": "eq",
+          "value": "İstanbul"
+        },
+        {
+          "field": "last_cart_add_at",
+          "op": "within_last",
+          "value": {
+            "days": 30
+          }
+        },
+        {
+          "field": "orders_30d",
+          "op": "eq",
+          "value": 0
+        }
+      ]
+    },
+    "audience": {
+      "matched": 584,
+      "sms": 350,
+      "email": 368
+    },
+    "consent": {
+      "both": 290,
+      "sms_only": 77,
+      "email_only": 87,
+      "none": 130
+    },
+    "longest_values": {
+      "first_name": 50,
+      "last_name": 8,
+      "city": 8
+    }
+  },
+  "groups": {
+    "cart_add_29d": {
+      "count": 5,
+      "customer_ids": [
+        "2b34d38c-486c-53d2-8fba-c448b990e359",
+        "56447d90-76c1-5150-b967-1043576eaae9",
+        "8ddeacf5-f479-597b-9227-64d46b761757",
+        "b54a5116-eed9-5adc-8d27-cfe7fe591f61",
+        "b54c41de-24d9-5134-ac10-02f7fe1d9494"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": true,
+      "in_email_audience": true
+    },
+    "cart_add_30d": {
+      "count": 5,
+      "customer_ids": [
+        "10e72f6c-0ea0-58e8-ba2a-32bf57d48723",
+        "6bd91779-5753-5530-9543-9400c0ce25f9",
+        "90c5a948-b9e4-5891-898e-f433506226d3",
+        "a4103892-3c4d-5e67-878d-4c6ae53fd981",
+        "b1d5590e-c716-5ea0-a593-7a1c577f8652"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": true,
+      "in_email_audience": true
+    },
+    "cart_add_31d": {
+      "count": 5,
+      "customer_ids": [
+        "07561c60-f3d5-5893-b699-3a403e4ee4cd",
+        "27a60fc5-2644-58d0-86b9-94f967e7779e",
+        "45c2bfde-a2fc-54d3-8e6f-0b38f734a623",
+        "60548090-a6e0-52f5-88f7-88ed253c6dcf",
+        "65cb909c-9d0b-5a34-8d80-8b7633843843"
+      ],
+      "matches_example_brief": false,
+      "in_sms_audience": false,
+      "in_email_audience": false
+    },
+    "cart_add_then_purchase": {
+      "count": 10,
+      "customer_ids": [
+        "10044deb-105b-5e18-8c02-1a4552425a4c",
+        "36569589-15b2-5f07-bc50-3cf2711b15b5",
+        "38e3d60b-c918-5b8f-ba43-fa7ac3de4456",
+        "3a83dc62-61b4-5d78-a34e-cf7167a650a6",
+        "440d40c5-729d-58f6-b12f-5cd7210dbd72",
+        "66ab13ec-92f9-5748-8322-72a6e38803ea",
+        "7e2b0a4c-5058-530f-99a8-db300b3530cf",
+        "96132eb0-e48f-58d6-bfc5-c08d36bd9678",
+        "aec6faa9-0c7a-5518-a502-0a6f08f63aaa",
+        "f6f7e017-b47a-5b2f-b056-c2e90cf8ccfe"
+      ],
+      "matches_example_brief": false,
+      "in_sms_audience": false,
+      "in_email_audience": false
+    },
+    "purchase_before_cart_add": {
+      "count": 6,
+      "customer_ids": [
+        "1635459e-630a-5d4d-89a0-e43862225975",
+        "35b706b9-4248-5752-99ba-e6119945d97b",
+        "54d6f431-ec7d-5d9f-9808-88a5505ef353",
+        "807c7d6d-65a6-5cc0-9fea-849345e53cc4",
+        "ac33b839-6b71-5f62-a167-36e558670382",
+        "ed3e563c-98ca-5ea8-8042-999fa669c91a"
+      ],
+      "matches_example_brief": false,
+      "in_sms_audience": false,
+      "in_email_audience": false
+    },
+    "istanbul_no_consent": {
+      "count": 10,
+      "customer_ids": [
+        "4023a738-e98b-5b9f-b200-0ed820c7231f",
+        "4282725b-c23a-5fee-a58a-26710bd6adfa",
+        "4a860cf4-3d1d-555d-b40a-268f939733f6",
+        "7b7df5f0-5e31-5e69-af55-17b39d66983c",
+        "9d59ce9d-ae22-5699-80ab-3f8de1cc15bc",
+        "a3f78725-fc14-5d34-95f5-50dafa4d4623",
+        "bdf78176-1a94-5da9-aff1-c1e94c69439b",
+        "c142a198-60b7-5f34-9a7d-8f276d518388",
+        "f32722c5-0a2c-58c2-bc45-7c0ba9e35c29",
+        "fb975aa1-8b44-5674-8eda-26a6c1c7b95c"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": false,
+      "in_email_audience": false
+    },
+    "istanbul_sms_only": {
+      "count": 8,
+      "customer_ids": [
+        "23807e7e-f0e8-50da-a6fa-87f85863d905",
+        "2b89aa75-ca93-52c9-a51f-64a699f26b3e",
+        "4b1083c3-2051-5f9f-9731-919ccdb2c311",
+        "5ab660bf-d328-5e90-a79d-45ca32d79034",
+        "73b5907c-5569-57bd-8ed6-d0131d8ce1b1",
+        "812ee220-61c6-5612-a5ca-0ced234fbf54",
+        "cd384d07-4218-5128-9728-eb91558a44a8",
+        "d8cdb87e-bb8d-57e8-84ae-2508617c7f98"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": true,
+      "in_email_audience": false
+    },
+    "istanbul_email_only": {
+      "count": 8,
+      "customer_ids": [
+        "30a1b4c7-c589-5cd5-9870-c15f9f668834",
+        "a326f3c8-821f-5668-b8c3-acbc2381db0f",
+        "b6a04ebb-8acf-5771-9318-43bb14289eff",
+        "d4526b73-76be-5c1d-a54c-84945f22b8b7",
+        "de72cb4c-8a48-5c5f-acfc-7e358607455f",
+        "e2158066-ef06-59f8-b453-670e7267237d",
+        "e8bb18fc-bb2e-53b8-bccb-fc43792a2612",
+        "f5fae2f3-9519-577c-b6f0-87bd2119d62e"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": false,
+      "in_email_audience": true
+    },
+    "sms_consent_missing_phone": {
+      "count": 4,
+      "customer_ids": [
+        "1cc08072-05a3-5a12-8336-b865ba20d993",
+        "52b17b8f-d71d-55fd-a3cd-1f00932c0d67",
+        "aba87ccc-3123-5df3-9243-c8bf0dbd157a",
+        "c390f338-92a7-53b1-b94a-ce7d66c6fb70"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": false,
+      "in_email_audience": false
+    },
+    "email_consent_missing_email": {
+      "count": 4,
+      "customer_ids": [
+        "4615c261-7c15-5002-b34c-d102b38b9c30",
+        "4ecbb129-3d75-5d08-899c-9e4fa1580d2a",
+        "afdbdeb7-ee41-5bb4-bc21-9b25f9f2e83a",
+        "dbde6d72-0679-5a08-9324-dde59dc14235"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": false,
+      "in_email_audience": false
+    },
+    "empty_first_name": {
+      "count": 6,
+      "customer_ids": [
+        "57c296b8-8053-56ba-b9bb-c212bc44fc0a",
+        "7ae9e692-7502-5a6f-b501-3810db214248",
+        "8879b9e1-347a-5bfa-a84d-879371beebbf",
+        "9e9e98ab-c82f-546c-92d3-d96494159e60",
+        "ecd69f1d-84a5-537e-8f67-5b12d94692f6",
+        "fefdf487-7496-525b-a88a-3622768da6fd"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": true,
+      "in_email_audience": true
+    },
+    "long_first_name": {
+      "count": 3,
+      "customer_ids": [
+        "b7f84d55-4a36-54fb-9d95-689433a726ea",
+        "dca43071-dd84-5efc-9b57-e0d038fbe9a0",
+        "ea3dffc5-1187-51ca-87c1-b4a265b69d95"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": true,
+      "in_email_audience": true
+    },
+    "shared_contact": {
+      "count": 2,
+      "customer_ids": [
+        "2e12d0f6-fcbb-57c8-8809-1c16d132ea1a",
+        "a4506ef2-69ad-5f9c-86d8-abd8b001d6e5"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": true,
+      "in_email_audience": true
+    },
+    "non_istanbul_cart_add": {
+      "count": 10,
+      "customer_ids": [
+        "11bf24ed-8bd2-5720-953e-57ca9a887c5b",
+        "25ea4586-df1f-5c21-adb5-14a116af7559",
+        "48c8341c-63ce-5cb9-b6f3-e745e3495e9c",
+        "665ae983-f988-5e79-9ab1-7d36775828cf",
+        "8f5cfae5-dd4d-5710-9f86-708c7fcff2b7",
+        "9365dcef-2a64-542b-8660-3e9a3e8c7133",
+        "ab2aa392-1c95-5a74-a068-f8e6dc3ecb94",
+        "deb8a519-7300-5845-9264-0e53eabb87a8",
+        "df1325b5-e7fa-58b0-ad8e-16a15c12dbc5",
+        "f4127d4a-621d-585a-9db2-64383345670d"
+      ],
+      "matches_example_brief": false,
+      "in_sms_audience": false,
+      "in_email_audience": false
+    }
+  }
+}

@@ -1,0 +1,97 @@
+# `make test` = docker compose -f compose.test.yml run --rm --build test, then down -v
+# (docs/PLAN.md §4.3, contracts README §7). Needs only Docker + make.
+# No ANTHROPIC_API_KEY anywhere in this file and no env_file: tests always use the
+# mock LLM, and SCC_FORBID_REAL_LLM=1 makes building the real client an error.
+#
+# Two databases on one ephemeral Postgres (tmpfs, removed by down -v):
+#   scc       - migrated + seeded here, served by `api` for E2E tests (E2E_API_URL)
+#   scc_test  - migrated + seeded by the test container itself, for integration tests
+#               (TEST_DATABASE_URL / TEST_MIGRATE_DATABASE_URL); tests may migrate it down/up
+#               without disturbing the API.
+# The mock provider (E2E_MOCKPROVIDER_URL) runs with its admin endpoints enabled.
+
+name: scc-test
+
+x-app: &app
+  image: scc-app:test-runtime
+  build:
+    context: .
+    target: runtime
+
+services:
+  db:
+    image: postgres:16-bookworm@sha256:d81f7b51697014367236d07ec58b54153fc28f828b72bf247fe5c7487520bcb0
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_test
+      POSTGRES_DB: postgres
+      SCC_MIGRATOR_PASSWORD: scc_migrator_test
+      SCC_APP_PASSWORD: scc_app_test
+      SCC_DATABASES: scc scc_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d scc_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: *app
+    command: ["migrate", "up"]
+    environment:
+      MIGRATE_DATABASE_URL: postgres://scc_migrator:scc_migrator_test@db:5432/scc?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+  seed:
+    <<: *app
+    command: ["seed", "--seed=42", "--users=5000", "--ref-time=2026-01-15T12:00:00Z", "--manifest=/tmp/manifest.json"]
+    environment:
+      DATABASE_URL: postgres://scc_app:scc_app_test@db:5432/scc?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    <<: *app
+    command: ["api"]
+    environment:
+      DATABASE_URL: postgres://scc_app:scc_app_test@db:5432/scc?sslmode=disable
+      HTTP_ADDR: ":8080"
+      LLM_PROVIDER: mock
+      SCC_FORBID_REAL_LLM: "1"
+      SEGMENT_REFERENCE_TIME: "2026-01-15T12:00:00Z"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  mockprovider:
+    <<: *app
+    command: ["mockprovider"]
+    environment:
+      MOCK_PROVIDER_ADDR: ":8090"
+      MOCK_PROVIDER_ADMIN: "true"
+
+  test:
+    build:
+      context: .
+      target: test
+    image: scc-app:test
+    environment:
+      LLM_PROVIDER: mock
+      SCC_FORBID_REAL_LLM: "1"
+      TEST_DATABASE_URL: postgres://scc_app:scc_app_test@db:5432/scc_test?sslmode=disable
+      TEST_MIGRATE_DATABASE_URL: postgres://scc_migrator:scc_migrator_test@db:5432/scc_test?sslmode=disable
+      E2E_API_URL: http://api:8080
+      E2E_MOCKPROVIDER_URL: http://mockprovider:8090
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+      mockprovider:
+        condition: service_started
