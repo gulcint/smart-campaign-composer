@@ -1,0 +1,158 @@
+# CI is the real enforcement behind the local hooks (docs/PLAN.md §2.3).
+# Listed as a bonus in the case; set up from P0 because protected main
+# relies on "Pipelines must succeed".
+# ANTHROPIC key is never defined here: tests run with the mock LLM.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+stages:
+  - policy
+  - lint
+  - test
+  - security
+
+variables:
+  GO_IMAGE: golang:1.27-bookworm
+  GOPATH: $CI_PROJECT_DIR/.go
+  GOFLAGS: -mod=readonly
+
+.go-cache:
+  cache:
+    key: go-$CI_COMMIT_REF_SLUG
+    paths: [.go/pkg/mod/]
+
+# Heavy jobs (make-test, govulncheck) run only for MRs into main and on main,
+# to save CI minutes.
+
+# ---------- policy ----------
+
+branch-name:
+  stage: policy
+  image: $GO_IMAGE
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - scripts/hooks/check-branch-name.sh "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+
+commit-messages:
+  stage: policy
+  image: $GO_IMAGE
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: 0
+  script:
+    # The squash commit on main takes the MR title, so the title must comply too.
+    - printf '%s\n' "$CI_MERGE_REQUEST_TITLE" > /tmp/mr-title
+    - scripts/hooks/check-commit-msg.sh /tmp/mr-title
+    - |
+      for sha in $(git rev-list "$CI_MERGE_REQUEST_DIFF_BASE_SHA..HEAD"); do
+        git log -1 --format=%B "$sha" > /tmp/msg
+        scripts/hooks/check-commit-msg.sh /tmp/msg || { echo "commit $sha"; exit 1; }
+      done
+
+role-paths:
+  stage: policy
+  image: $GO_IMAGE
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - scripts/hooks/check-role-paths.sh "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+
+forbidden-files:
+  stage: policy
+  image: $GO_IMAGE
+  script:
+    - scripts/hooks/check-forbidden-files.sh --all
+    - test -z "$(git ls-files | grep -E '(^|/)\.env$')"
+
+no-api-key-in-ci:
+  stage: policy
+  image: $GO_IMAGE
+  script:
+    # The pattern is split so this file does not match itself.
+    - "! grep -n 'ANTHROPIC_API''_KEY' .gitlab-ci.yml"
+    - "! grep -nE 'sk-ant-[A-Za-z0-9_-]{10,}' .env.example"
+
+# ---------- lint ----------
+
+go-lint:
+  stage: lint
+  image: golangci/golangci-lint:v2.15.0
+  extends: .go-cache
+  rules:
+    - exists: [go.mod]
+  script:
+    - golangci-lint run ./...
+
+sql-lint:
+  stage: lint
+  image: sqlfluff/sqlfluff:4.4.0
+  rules:
+    - exists: [migrations/**/*.sql]
+  script:
+    - sqlfluff lint migrations/
+
+# ---------- test ----------
+
+go-unit:
+  stage: test
+  image: $GO_IMAGE
+  extends: .go-cache
+  rules:
+    - exists: [go.mod]
+  script:
+    - go test -race -short -count=1 -shuffle=on ./...
+
+make-test:
+  stage: test
+  image: docker:27
+  services: [docker:27-dind]
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH
+      exists: [compose.test.yml]
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      exists: [compose.test.yml]
+  before_script:
+    - apk add --no-cache make bash
+  script:
+    # Only Docker + make are available here: proves REQ-DLV-02.
+    - make test
+
+# ---------- security ----------
+
+gitleaks:
+  stage: security
+  image:
+    name: zricethezav/gitleaks:v8.30.1
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - gitleaks git --redact --no-banner -c .gitleaks.toml .
+
+ai-sessions-scan:
+  stage: security
+  image: $GO_IMAGE
+  rules:
+    - exists: [ai-sessions/**/*]
+  script:
+    - scripts/hooks/check-ai-sessions.sh --all
+
+govulncheck:
+  stage: security
+  image: $GO_IMAGE
+  extends: .go-cache
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH
+      exists: [go.mod]
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      exists: [go.mod]
+  script:
+    - go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
