@@ -25,6 +25,7 @@ MIGRATE_DATABASE_URL="$TEST_MIGRATE_DATABASE_URL" wait_for "migrations on the te
 seed --seed=42 --users=5000 --ref-time=2026-01-15T12:00:00Z --db-url="$TEST_DATABASE_URL" --manifest=- >/dev/null
 
 wait_for "the API at $E2E_API_URL" curl -fsS "$E2E_API_URL/healthz"
+wait_for "the mock provider at $E2E_MOCKPROVIDER_URL" curl -fsS "$E2E_MOCKPROVIDER_URL/healthz"
 
 pkgs=("$@")
 if [[ ${#pkgs[@]} -eq 0 ]]; then pkgs=(./...); fi

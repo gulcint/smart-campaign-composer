@@ -1,8 +1,8 @@
 # `docker compose up` brings up the whole system without an API key (REQ-DLV-01):
-#   db -> migrate (scc_migrator) -> seed (scc_app) -> api (scc_app)
+#   db -> migrate (scc_migrator) -> seed (scc_app) -> api (scc_app), plus mockprovider
 # With no ANTHROPIC_API_KEY, LLM_PROVIDER=auto selects the mock LLM (REQ-AI-03).
 # Only the API publishes a host port (API_PORT, default 8080); Postgres stays internal.
-# The worker, the mock provider and the web UI join in later phases (P4, P5).
+# The mock provider is internal-only as well. The worker and the web UI join in P4/P5.
 #
 # Passwords below are local-demo values for a database that is never exposed.
 
@@ -75,6 +75,13 @@ services:
     depends_on:
       seed:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  mockprovider:
+    <<: *app
+    command: ["mockprovider"]
+    environment:
+      MOCK_PROVIDER_ADDR: ":8090"
     restart: unless-stopped
 
 volumes:
