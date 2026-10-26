@@ -46,6 +46,7 @@ Git kuralları (ayrıntı `docs/PLAN.md` §1–2):
 - `main`'e doğrudan push yok; MR'ları sahip GitLab arayüzünden merge eder. `scripts/claude/guard-git.sh` (PreToolUse hook) ajanlar için `main`'e push, `--force`, `--no-verify` ve `glab mr merge`'ü engeller.
 - `test/*` branch'leri implementasyona (`cmd/`, `internal/`, `migrations/`, `web/src/`), `feat|fix|refactor/*` branch'leri test dosyalarına dokunamaz (CI `role-paths` job'ı).
 - Yeni migration'ı olan faz `make db-roundtrip` hedefini eklemek zorunda; pre-push bunu çağırır.
+- Her Docker build context'i (ör. `web/`) kökteki `.dockerignore`'un sır kurallarını kendi `.dockerignore`'unda tekrarlamalı; Docker yalnızca context kökündeki dosyayı okur.
 
 ## Çoklu ajan orkestrasyonu
 

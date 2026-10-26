@@ -1,6 +1,7 @@
 ## Summary
 
-<!-- What changed and why. Title must follow Conventional Commits: it becomes the squash commit on main. -->
+<!-- What changed and why. Title must follow Conventional Commits: it becomes the squash commit subject on main;
+     the squash body is built from the commits, so their Refs: lines reach main. -->
 
 **Phase:** P
 **Role:** <!-- test writer | implementer | architect -->

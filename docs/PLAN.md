@@ -171,6 +171,7 @@ Dört kaynağa göre belirlendi: (a) yığının ürettiği artifact'ler, (b) s�
 - Protected branch: push = *No one*, merge = *Maintainers*, force push kapalı.
 - Merge checks: *Pipelines must succeed*, *All threads must be resolved*.
 - Merge yöntemi: squash = *Require*, fast-forward.
+- Squash commit şablonu: `%{title}` + boş satır + `%{all_commits}` → commit'lerdeki `Refs:` satırları `main`'e taşınır. CI, `feat`/`fix`/`test` başlıklı MR'da en az bir commit'te `Refs:` olmasını şart koşar.
 
 **Free'de olmayanlar ve yerine konanlar:**
 
