@@ -107,13 +107,16 @@ Doküman Türkçe ve örnek brief Türkçe. İngilizce sonradan eklenebilir.
 ### D22 — Metrikler veritabanından hesaplanır
 Teslimat sayaçları DB'den okunur; seed `--reset` sonrası düşebilir. Kabul edilen bedel: ayrı bir sayaç deposu kurmamak.
 
+### D23 — Her iki LLM aracı `strict: true` ile gider
+Segment aracında 16 birleşim tipi sınırı aşılabilir endişesi vardı; 2026-10-26'da gerçek API çağrısıyla (`claude-sonnet-5-5`, `tool_choice: auto`) segment ve içerik araçları strict kabul edildi ve şemaya uygun çıktı verdi. Backend doğrulaması yine her durumda çalışır. İleride 400 gelirse yedek: o aracı `strict: false` göndermek.
+
 ---
 
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |
 |---|---|
-| Strict modda segment aracının birleşik tip sayısı | Gerçek API çağrısıyla P2'de denenecek; yedek karar var (D7) |
+| Strict modda segment aracının birleşik tip sayısı | Gerçek API ile doğrulandı, strict kabul edildi (D23) |
 | SMS GSM-7/UCS-2 segment sayısı | Karakter sayımıyla yaklaşıldı (D10) |
 | Pazarlamacı brief'i güncelleyemez | API brief güncellemeyi desteklemiyor; "brief'i düzenle" yeni kampanya başlatır |
 | Gerçek ölçek (milyonlar) | PostgreSQL kuyruğu bu proje için yeterli, ölçek yolu `Queue` arayüzü (D1) |

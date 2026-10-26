@@ -11,5 +11,36 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Edit(**/.env)",
+      "Write(**/.env)",
+      "Read(**/.env.local)",
+      "Edit(**/.env.local)",
+      "Write(**/.env.local)",
+      "Read(**/.env.development)",
+      "Edit(**/.env.development)",
+      "Write(**/.env.development)",
+      "Read(**/.env.production)",
+      "Edit(**/.env.production)",
+      "Write(**/.env.production)",
+      "Read(**/.env.test)",
+      "Edit(**/.env.test)",
+      "Write(**/.env.test)",
+      "Read(**/.env.staging)",
+      "Edit(**/.env.staging)",
+      "Write(**/.env.staging)",
+      "Bash(cat *.env)",
+      "Bash(cat *.env.*)",
+      "Bash(cat .env*)",
+      "Bash(less *.env*)",
+      "Bash(head *.env*)",
+      "Bash(tail *.env*)",
+      "Bash(grep * .env)",
+      "Bash(grep * .env.*)",
+      "Bash(printenv ANTHROPIC_API_KEY*)"
+    ]
   }
 }

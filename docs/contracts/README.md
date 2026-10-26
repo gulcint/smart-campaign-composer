@@ -239,4 +239,4 @@ Hepsi `DECISIONS.md`'ye gerekçesiyle yazılır.
 
 ## 10. Açık noktalar
 
-1. **Strict birleşim sınırının sayım biçimi** (llm-tools §1.1): segment aracı tanım başına 10 `anyOf` birleşimi içerir (≤ 16). API birleşimleri `$ref` açılmış konum başına sayıyorsa sınır aşılır; bu, gerçek bir API çağrısı olmadan doğrulanamaz. Karar verilmiş geri dönüş: segment aracı `strict: false` ile gönderilir (backend doğrulaması aynı). Sahibin yapacağı tek şey: key ile ilk gerçek çağrıda sonucu `DECISIONS.md`'ye yazmak.
+1. ~~Strict birleşim sınırının sayım biçimi~~ **Kapandı (2026-10-26):** gerçek API çağrısıyla segment ve içerik aracı `strict: true` kabul edildi (llm-tools §1.1). Geri dönüş (`strict: false`) yalnız ileride 400 gelirse devreye girer; `DECISIONS.md`'ye D23 olarak yazıldı.

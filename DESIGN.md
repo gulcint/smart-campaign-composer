@@ -18,7 +18,7 @@ Pazarlamacı ne istediğini yazar; sistem kitleyi ve metni önerir; son söz ins
 
 ## 2. Kaynaklar
 
-Referanslar `assets/InsiderOne.jpeg` ve `assets/InsiderOne2.jpeg` (800×800). Renkler Python + Pillow 11.3 ile 3×3 piksel ortalaması veya bölgesel renk modu alınarak ölçüldü; JPEG sıkıştırması nedeniyle ±4 birim sapma beklenir. **Logo, ikon, ürün adı ve pazarlama metni alınmadı**; yalnızca palet, tipografi karakteri ve biçim dili türetildi. Uygulamanın kendi wordmark'ı "Smart Campaign Composer"dır.
+Referanslar `assets/InsiderOne.jpeg` ve `assets/InsiderOne2.jpeg` (800×800; üçüncü taraf pazarlama görselleri olduğu için repoda yoktur, `.gitignore`'dadır). Renkler Python + Pillow 11.3 ile 3×3 piksel ortalaması veya bölgesel renk modu alınarak ölçüldü; JPEG sıkıştırması nedeniyle ±4 birim sapma beklenir. **Logo, ikon, ürün adı ve pazarlama metni alınmadı**; yalnızca palet, tipografi karakteri ve biçim dili türetildi. Uygulamanın kendi wordmark'ı "Smart Campaign Composer"dır.
 
 | Öğe | Görsel 1 (sohbet + çubuklar) | Görsel 2 (canlı durum kartı) | Bizde nereye gitti |
 |---|---|---|---|
