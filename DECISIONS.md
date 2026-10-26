@@ -110,6 +110,24 @@ Teslimat sayaçları DB'den okunur; seed `--reset` sonrası düşebilir. Kabul e
 ### D23 — Her iki LLM aracı `strict: true` ile gider
 Segment aracında 16 birleşim tipi sınırı aşılabilir endişesi vardı; 2026-10-26'da gerçek API çağrısıyla (`claude-sonnet-5-5`, `tool_choice: auto`) segment ve içerik araçları strict kabul edildi ve şemaya uygun çıktı verdi. Backend doğrulaması yine her durumda çalışır. İleride 400 gelirse yedek: o aracı `strict: false` göndermek.
 
+### D24 — Compose seed'i yıkıcı değil: `--if-empty`
+`docker compose up` her açılışta seed'i yeniden koşturur. `--ref-time=now` her seferinde farklı veri kümesi üretir; `--reset` ile bu, kampanya ve teslimatları silerdi. Bunun yerine `--if-empty`: seed çalışmışsa hiçbir şeye dokunmadan çıkar. `--reset` yalnızca elle kullanılan açık bir komut (`seed.md` §1).
+
+### D25 — Mock provider P2'ye çekildi
+REQ-DLV-01 "docker compose up, mock provider dahil" der ve sözleşme provider'ı tam tarif eder. Yalnızca `/healthz` yanıtlayan bir iskelet yerine sözleşmeye uygun gerçeği yazıldı; REQ-MOCK testleri P5'te gelir (o zamana kadar bu kodun test kapsamı sınırlı, bilinen risk).
+
+### D26 — Test koduna özel lint istisnaları
+`.golangci.yml` yalnızca `_test.go` ve `test/` için gosec G101/G204/G304/G702, noctx, S1025 ve errorlint "comparing with" bulgularını susturur. Gerekçe: sahte key, test binary'sini yeniden çalıştırma ve tablo değerlerini karşılaştırma testlerin kasıtlı davranışıdır. Üretim kodu için istisna yok.
+
+### D27 — Bilinçle ertelenen CI kontrolleri
+PLAN §6'daki CodeQL (#17) ve imaj dosya sistemi / `docker history` taraması (#5) P2'de eklenmedi; P6 (sertleştirme) kapısına taşındı. Eklenenler: `db-roundtrip`, tool-şema sapma kontrolü, `compose-ports` (db ve mockprovider host portu yayınlamaz).
+
+### D28 — `/metrics` yayınlanan API portunda, yalnız 127.0.0.1
+`metrics.md` `/metrics`'i 8080'de sunar; PLAN'ın "yalnız iç ağ" ifadesi bu karara göre güncel sayılır. Kimlik doğrulama olmadığı için API portu yalnız `127.0.0.1`'e bağlanır (yerel demo).
+
+### D29 — Compose `.env`'i isteğe bağlı okur
+`api` servisi `env_file: .env` (`required: false`) kullanır. `.env` yoksa mock LLM; varsa ve key doluysa gerçek Claude. Yerelde "key'siz çalışır" kontrolü için `.env` anahtarı boşaltılmalı veya temiz klon kullanılmalıdır. `make test` etkilenmez (`compose.test.yml` `.env` okumaz).
+
 ---
 
 ## Bilinen sınırlar ve riskler
@@ -121,3 +139,6 @@ Segment aracında 16 birleşim tipi sınırı aşılabilir endişesi vardı; 202
 | Pazarlamacı brief'i güncelleyemez | API brief güncellemeyi desteklemiyor; "brief'i düzenle" yeni kampanya başlatır |
 | Gerçek ölçek (milyonlar) | PostgreSQL kuyruğu bu proje için yeterli, ölçek yolu `Queue` arayüzü (D1) |
 | Yapılmayan bonuslar | Zamanlanmış gönderim, A/B varyantları, dile göre içerik: çekirdek akış sağlam olunca ayrı REQ'lerle; bitmeyenler README'de belirtilecek |
+| Gerçek Claude istemcisi için otomatik test yok | Sözleşme gerçek istemciyi test binary'sinde yasaklar; elle `llm-smoke` doğrulaması + P3'te onarım turu (`then_ok_after_repair`) gerçek API ile denenecek |
+| `seed.Generate` 9999'dan fazla kullanıcıyı kabul eder | Yalnız komut satırı reddeder (telefon bloğu 4 hane); mimar `go-interfaces.md`'ye hata ekleyebilir |
+| Manifest sayıları `segment.Match` ile değil el yazısı değerlendirmeyle | P3'te `segment.Match`'e geçilecek, manifest aynı kalmalı |
