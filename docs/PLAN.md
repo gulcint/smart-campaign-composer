@@ -34,7 +34,7 @@ seed (Go, tek seferlik job)  ──▶  PostgreSQL
 ```
 
 - `cmd/api`, `cmd/worker`, `cmd/mockprovider`, `cmd/seed` — ayrı binary'ler, aynı Go modülü.
-- **Kampanya durum makinesi (VARSAYIM):** `draft → audience_ready → content_ready → approved → sending → completed | failed`. Onaysız `sending` yok [DOK]; onaydan sonra içerik düzenlenirse `content_ready`'e geri düşer (REQ-APR-03).
+- **Kampanya durum makinesi (VARSAYIM):** `draft → audience_ready → content_ready → approved → sending → completed` (kampanya düzeyinde `failed` yok; teslimat hataları `failed` teslimat olarak sayılır, kampanya yine `completed` olur; ayrıntı ve geri düşmeler `docs/requirements.md`). Onaysız `sending` yok [DOK]; onaydan sonra içerik düzenlenirse `content_ready`'e geri düşer (REQ-APR-03).
 
 ### 0.3 Kuyruk kararı: neden PostgreSQL
 
@@ -44,7 +44,7 @@ seed (Go, tek seferlik job)  ──▶  PostgreSQL
 | Onay → gönderim | Onay + teslimat kayıtları tek transaction | Atomik değil, outbox gerekir |
 | Retry [DOK] | `attempts`, `next_attempt_at` kolonları | Gecikmeli kuyruk için sorted set |
 | Canlı durum, metrics [DOK] | Kuyruk = durum tablosu; tek SQL, `LISTEN/NOTIFY` | Ayrı senkronizasyon |
-| 100 msg/sn/kanal [DOK] | Kanal başına tek dispatcher (`pg_try_advisory_lock`) + token bucket | Dağıtık limiter daha doğal — Redis'in tek gerçek avantajı |
+| 100 msg/sn/kanal [DOK] | Kanal başına tek dispatcher (`pg_try_advisory_lock`) + token bucket (burst = 1, yani istek başlangıçları arasında en az 10 ms; her yarı-açık 1 sn'lik pencerede ≤ 100) | Dağıtık limiter daha doğal — Redis'in tek gerçek avantajı |
 | Ölçek | Birkaç bin kullanıcı için fazlasıyla yeterli | Milyonlarca mesajda avantajlı |
 | Kurulum ve test | Tek bağımlılık | Ek servis + tutarlılık testleri |
 | Bonus: zamanlanmış gönderim | `next_attempt_at = scheduled_at` | Ayrı mekanizma |
@@ -58,13 +58,13 @@ seed (Go, tek seferlik job)  ──▶  PostgreSQL
 | Provider yanıtı | Davranış |
 |---|---|
 | 2xx | `sent` |
-| 429 | `Retry-After` varsa ona uy, yoksa backoff; deneme sayılır |
-| 5xx, timeout, bağlantı hatası | Üstel backoff + full jitter (taban 1 sn, tavan 60 sn) |
+| 429 | `Retry-After` varsa ona uy, yoksa backoff; hata denemesi sayılmaz, ayrı 429 bütçesinden sayılır |
+| 5xx, 408, timeout, bağlantı hatası | Üstel backoff + full jitter (taban 1 sn, tavan 60 sn) |
 | 4xx (429 ve 408 hariç) | Retry yok → `failed` |
-| 5 hata denemesi aşıldı | `failed` (dead), dashboard'da görünür |
+| Teslimatın 5. başarısız denemesi (ilk deneme dahil) | `failed` (dead), dashboard'da görünür |
 
 - Retry'lar da kanal başına 100/sn limitine dahildir.
-- **429 ayrı bütçeyle sayılır (VARSAYIM):** mock provider bilerek 429 döndürdüğü için 429'lar 5'lik hata bütçesini tüketmez. Ayrı tavan: 20 adet 429 veya teslimat başına 10 dakikalık toplam süre. Aşılırsa `failed`. Amaç, kasıtlı 429'ların toplu `failed` üretmesini önlemek.
+- **429 ayrı bütçeyle sayılır (VARSAYIM):** mock provider bilerek 429 döndürdüğü için 429'lar 5'lik hata bütçesini tüketmez. Ayrı tavan: 20 adet 429 veya teslimatın ilk gönderim denemesinden itibaren 10 dakika. Aşılırsa `failed`. Amaç, kasıtlı 429'ların toplu `failed` üretmesini önlemek.
 
 ### 0.5 Stream + JSON doğrulama protokolü (R5)
 
@@ -89,11 +89,11 @@ Doküman "her şeyi yapmak yerine çekirdek akışı sağlam yap" diyor; fronten
 |---|---|---|---|
 | 1 | **P0 Kurulum** | **İlk iş: bu planlama session'ının export'u.** `git init`, `.gitignore`, `.gitattributes`, `.dockerignore`, hook'lar, `.github/workflows/ci.yml` iskeleti, `Makefile` iskeleti, `.env.example`, `CLAUDE.md`, `ai-sessions/INDEX.md` | **GitHub public repo sahibin onayıyla oluşturulur**, `main` ruleset'i kurulur |
 | 1 | **P1 Sözleşmeler** | `docs/requirements.md` (REQ ID'leri), OpenAPI, LLM JSON şemaları, stream protokolü (0.5), izinli şablon değişkenleri listesi, segment DSL, `docs/contracts/go-interfaces.md`, **UI sözleşmesi** (`docs/contracts/ui.md`: ekranlar, bileşen adları, props, `data-testid`'ler), DB şema taslağı | Sahip onayı → `contracts-v1` etiketi |
-| 2 | **P2 Seed + altyapı** (`slice/p2-foundation`) | Seed üreticisi + manifest, compose, migration'lar, health, `LLMClient` fabrikası (auto/real/mock), mock LLM iskeleti, `make test` konteyner altyapısı | REQ-DLV-01, REQ-DLV-02, REQ-AI-02, REQ-AI-03 testleri yeşil |
-| 3 | **P3 Kitle dilimi** | Segment kuralı üretimi, doğrulama, parametreli sorgu, kanal bazında kişi sayısı + ekran | REQ-AUD, REQ-AI-01 (segment) testleri yeşil |
-| 4 | **P4 İçerik + onay dilimi** | SMS/email üretimi (stream protokolü 0.5), limitler, kişiselleştirme, düzenleme, yeniden doğrulama, sürümlü onay + ekranlar | REQ-CNT, REQ-APR, REQ-AI-01 (içerik) testleri yeşil |
-| 5 | **P5 Gönderim + takip dilimi** | `deliveries` kuyruğu, dispatcher, rate limit, retry, idempotency, mock provider, SSE dashboard, metrics + ekran | REQ-SND, REQ-TRK, REQ-MOCK testleri yeşil |
-| 6 | **P6 Sertleştirme + teslim** | Uçtan uca test, güvenlik taraması, `README.md`, `DECISIONS.md`, session export'ları, değerlendirici erişimi | REQ-DLV-03 + REQ eşleme raporu boş + doğrulayıcı onayı + teslim kontrol listesi |
+| 2 | **P2 Seed + altyapı** (`slice/p2-foundation`) | Seed üreticisi + manifest, compose, migration'lar, health, `LLMClient` fabrikası (auto/real/mock), mock LLM iskeleti, `make test` konteyner altyapısı | REQ-DLV-01, REQ-DLV-02, REQ-AI-02, REQ-AI-03, REQ-AI-04, REQ-AI-05, REQ-TRK-03, REQ-SEC-02, REQ-SEED-01, REQ-SEED-02 testleri yeşil |
+| 3 | **P3 Kitle dilimi** | Segment kuralı üretimi, doğrulama, parametreli sorgu, kanal bazında kişi sayısı + ekran | REQ-AUD (00–05), REQ-AI-01 (segment) testleri yeşil |
+| 4 | **P4 İçerik + onay dilimi** | SMS/email üretimi (stream protokolü 0.5), limitler, kişiselleştirme, düzenleme, yeniden doğrulama, sürümlü onay + ekranlar | REQ-CNT (01–05), REQ-APR, REQ-AI-01 (içerik), REQ-UI-01 testleri yeşil |
+| 5 | **P5 Gönderim + takip dilimi** | `deliveries` kuyruğu, dispatcher, rate limit, retry, idempotency, mock provider, SSE dashboard, metrics + ekran | REQ-SND (01–05), REQ-TRK-01/02, REQ-MOCK, REQ-SEC-01 testleri yeşil |
+| 6 | **P6 Sertleştirme + teslim** | Uçtan uca test, güvenlik taraması, `README.md`, `DECISIONS.md`, session export'ları, değerlendirici erişimi | REQ-DLV-03, REQ-DLV-04 + REQ eşleme raporu boş + doğrulayıcı onayı + teslim kontrol listesi |
 | 7 | Tampon / bonus | Bonus yalnızca P6 tamamsa (zamanlanmış gönderim en ucuzu) | — |
 
 Her faz sonunda `main` üzerinde `p<N>-done` etiketi.
@@ -269,6 +269,8 @@ Kodu yazan, review eden ve testi yazan ayrı bağlamlardır; hiçbiri kendi işi
 ## 4. Gereksinimler ve testler
 
 ### 4.1 Gereksinim kataloğu (`docs/requirements.md`)
+
+> **Güncel ve bağlayıcı katalog `docs/requirements.md`'dir** (kabul ölçütleri ve dokümandan birebir alıntılarla). Aşağıdaki tablo planlama anındaki özetidir; P1'de eklenen ID'ler: REQ-AUD-05, REQ-CNT-05, REQ-AI-04, REQ-AI-05, REQ-UI-01, REQ-SEC-01/02, REQ-SEED-01/02, REQ-SND-05, REQ-DLV-04.
 
 | ID | Gereksinim | Kaynak |
 |---|---|---|
