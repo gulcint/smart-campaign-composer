@@ -10,6 +10,9 @@
 # --- Case document (Insider's, kept out of the repo) ---
 Smart Campaign Composer Case.html
 
+# --- Third-party marketing images (Insider One); only palette/typography is derived in DESIGN.md ---
+assets/
+
 # --- Go ---
 /bin/
 *.exe
