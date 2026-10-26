@@ -42,6 +42,8 @@ all=$( { tracked; printf '%s\n' "$staged"; } | sort -u | grep -v '^$' || true)
 
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
+  # db-schema.md §2: migrations/embed.go embeds the SQL files for cmd/migrate.
+  [[ "$f" == "migrations/embed.go" ]] && continue
   [[ "$f" =~ $name_re ]] || { err "$f: expected migrations/NNNN_name.up.sql or .down.sql"; continue; }
 
   stem="${f%.*.sql}"
