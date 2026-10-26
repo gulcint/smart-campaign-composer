@@ -367,12 +367,14 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 
 Kabuk: `AppHeader` (64 px; solda wordmark Figtree 700 `--ink-900` + "Composer" kelimesi `--text-accent-display`; sağda `ProviderBadge` ve kampanya `StatusBadge`) → `CampaignStepper` → içerik (maks. 1120 px, ortalı). Breakpoint'ler (Tailwind varsayılanı): `sm 640`, `md 768`, `lg 1024`, `xl 1280`. Stepper adımları yalnızca kampanya durumunun izin verdiği yere kadar tıklanabilir; ileri gitmek her zaman o adımın birincil eylemiyle olur.
 
-| Adım | Görünür olduğu kampanya durumları | Ana eylem |
+Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu dosyayla çelişirse o geçerlidir). Özet:
+
+| Adım | Erişilebilir olduğu kampanya durumları | Ana eylem |
 |---|---|---|
-| 1 Brief | yeni, `draft` | "Kitleyi çıkar" |
+| 1 Brief | her zaman (`sending`/`completed`'de salt okunur) | "Kitleyi çıkar" |
 | 2 Kitle | `audience_ready` ve sonrası | "İçeriği üret" |
-| 3 İçerik | `content_ready` ve sonrası | "Önizle ve onayla" |
-| 4 Onay | `content_ready`, `approved` | "Onayla" → "Gönder" |
+| 3 İçerik | `audience_ready` ve sonrası (içerik burada üretilir) | "Önizle ve onayla" |
+| 4 Onay | `content_ready`, `approved` (ve sonrası salt okunur) | "Onayla" → "Gönder" |
 | 5 Takip | `sending`, `completed` | — (salt okunur) |
 
 ### 8.1 Brief (desktop)
@@ -502,15 +504,15 @@ web/src/
 
 ## 11. Açık sorular ve VARSAYIM listesi
 
-**Açık sorular (sahip / mimar):**
-1. Onay öncesi "kişiselleştirme sonrası en uzun" uzunluğu (REQ-CNT-05) API tarafından dönülecek mi? Dönülürse `CharCounter` ikinci satırı gösterilir; dönülmezse yalnızca şablon uzunluğu sayılır ve 422 onay anında yakalanır.
-2. Önizlemedeki "örnek alıcı" (REQ-APR-01) nasıl seçilir: sabit ilk alıcı mı, kullanıcı mı değiştirir? Seçici koymalı mıyız?
-3. İçerik akışı GET mi POST mu başlatılıyor (EventSource uygunluğu)? Teslimat akışında olay başına mı yoksa periyodik sayaç özeti mi geliyor (feed tasarımı buna bağlı)?
-4. `ActivityFeed` için teslimat olay alanları (müşteri kimliği, deneme sayısı, hata nedeni) sözleşmede var mı? Yoksa feed yalnızca sayaç değişimlerinden türetilir.
-5. Email gövdesi düz metin mi, sınırlı biçim (paragraf/link) mi? Düz metin varsayıldı; biçim gelirse sanitize stratejisi ayrıca kararlaştırılmalı.
-6. Turuncu metin preset'i: `accent` (varsayılan) uygun mu, yoksa `minimal`/`bold` mı?
-7. Dark tema teslimde istenen bir şey mi, yoksa P6 opsiyonu mu?
-8. Kampanya listesi / geçmiş ekranı kapsamda mı? (Bu doküman tek kampanya akışını tasarlar.)
+**Açık sorular — karara bağlandı (2026-10-26):**
+1. Onay öncesi en uzun uzunluk (REQ-CNT-05) API'den döner: her içerik sürümü ve `validated` olayı `worst_case {sms_runes, subject_runes}` taşır; `CharCounter` ikinci satırı gösterir (`docs/contracts/ui.md`).
+2. Önizleme varsayılan olarak eşleşen ilk alıcıyı gösterir; "sonraki örnek" kontrolü `sample_index` ile ilerler.
+3. İçerik üretimi **POST + fetch tabanlı akış** (EventSource değil); canlı durum GET + EventSource, otomatik yeniden bağlanma.
+4. `ActivityFeed`, sayaçlar değiştiğinde en fazla 2 sn'de bir `deliveries?order=recent` sorgusuyla beslenir.
+5. E-posta gövdesi düz metin.
+6. Turuncu metin preset'i: `accent` (varsayılan; sahip itiraz etmedi).
+7. Dark tema: teslimde zorunlu değil, opsiyonel (P6).
+8. Kampanya listesi / geçmiş ekranı: kapsam dışı (tek kampanya akışı).
 
 **VARSAYIM'lar:**
 - V1. Arayüz dili Türkçe; tüm metinler tek i18n dosyasında id ile; İngilizce sonradan eklenebilir.

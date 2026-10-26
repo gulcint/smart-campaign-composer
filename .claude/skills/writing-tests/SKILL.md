@@ -57,7 +57,7 @@ Quoted requirements every suite must cover (IDs from `docs/requirements.md`):
 | Layer | Location | Touches | Runs in |
 |---|---|---|---|
 | Unit | `internal/<pkg>/*_test.go`, `package <pkg>_test` | Contracted Go functions/interfaces only | `make test-unit`, `make test` |
-| LLM (mock) | same, fixtures in `testdata/llm/` | `MockLLM` scenarios, SSE event order | both |
+| LLM (mock) | same, fixtures in `testdata/llm/` | `llm.Mock` scenarios, SSE event order | both |
 | Integration (DB) | `*_test.go` guarded by `testing.Short()` | Postgres from `compose.test.yml`, seed manifest | `make test` |
 | Delivery | `test/delivery/` | worker + scripted `httptest` provider, and the real `cmd/mockprovider` (R10) | `make test` |
 | API E2E | `test/e2e/` | HTTP + SSE per OpenAPI, key-less | `make test` |
@@ -113,9 +113,9 @@ contract actually defines.)
 | Randomness | No global `math/rand`. Pass a seeded `*rand.Rand` (jitter, provider fault injection, seed data). |
 | Network | `httptest.Server` only. Never reach a real host; the Anthropic API is unreachable in tests by design. |
 | Database | No DB in unit tests. Integration tests isolate per test (transaction rollback or own schema) and must pass under `-shuffle=on`. |
-| LLM | `MockLLM` with fixtures from `testdata/llm/`; stream chunks in a fixed order. |
+| LLM | `llm.Mock` with fixtures from `testdata/llm/`; stream chunks in a fixed order. |
 | Concurrency | Must pass with `-race`; check goroutine leaks with `goleak` where goroutines start. |
-| Seed data | Use counts from `testdata/seed/manifest.json` with the fixed `--seed`/`--ref-time`; never hard-code a count you computed yourself. |
+| Seed data | Use counts from `testdata/seed/manifest.json` (read-only for you: the seed code generates it and the implementer commits it) with the fixed `--seed`/`--ref-time`; never hard-code a count you computed yourself. |
 
 A flaky test is a bug in the test or the system — fix it, never quarantine it.
 
