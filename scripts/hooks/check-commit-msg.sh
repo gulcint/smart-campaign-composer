@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Validates a commit message (or an MR title) against docs/PLAN.md §1.4.
+# Validates a commit message (or a PR title) against docs/PLAN.md §1.4.
 # Usage: check-commit-msg.sh <message-file>
-#        check-commit-msg.sh --subject-only <file>   # MR titles: no Refs: line expected
+#        check-commit-msg.sh --subject-only <file>   # PR titles: no Refs: line expected
 set -euo pipefail
 
 subject_only=0

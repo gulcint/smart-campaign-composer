@@ -1,6 +1,6 @@
 # Local git hooks (docs/PLAN.md §2). Install with: make hooks
 # Hooks are fast feedback only and can be skipped with --no-verify;
-# GitLab CI + protected main are the real enforcement.
+# GitHub Actions + the main ruleset are the real enforcement.
 
 pre-commit:
   parallel: true
@@ -46,6 +46,10 @@ pre-commit:
     - name: ai-sessions
       glob: "ai-sessions/*"
       run: scripts/hooks/check-ai-sessions.sh
+
+    - name: actionlint
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: actionlint {staged_files}
 
     - name: web-lint
       root: "web/"

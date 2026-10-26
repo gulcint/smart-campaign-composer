@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Claude Code PreToolUse hook for Bash (docs/PLAN.md §2.3).
 # Blocks agents from: pushing to main, force/mirror/all pushes, skipping or
-# disabling git hooks, and merging merge requests (the owner merges, §3).
+# disabling git hooks, and merging pull requests (the owner merges, §3).
 # Each shell segment (split on newlines, ; & |) is checked on its own, so text
 # inside heredocs or commit messages does not count as a flag.
-# This is a fast first layer; protected main on GitLab is the backstop.
+# This is a fast first layer; the GitHub ruleset on main is the backstop.
 # Exit 2 = block; stderr is shown to the agent.
 set -euo pipefail
 set -f  # commands are split into words below; never glob-expand them
@@ -45,9 +45,9 @@ check_segment() {
         check_all "$inner"
       fi
       return 0 ;;
-    glab)
-      if [[ "${words[i+1]:-}" == "mr" && "${words[i+2]:-}" =~ ^(merge|accept)$ ]]; then
-        block "merge requests are merged by the owner in the GitLab UI"
+    gh)
+      if [[ "${words[i+1]:-}" == "pr" && "${words[i+2]:-}" == "merge" ]]; then
+        block "pull requests are merged by the owner in the GitHub UI"
       fi
       return 0 ;;
     git) i=$((i + 1)) ;;
@@ -98,7 +98,7 @@ check_segment() {
         *)
           positional=$((positional + 1))
           [[ "$word" == +* ]] && block "'+' refspecs force-push; use --force-with-lease"
-          [[ "$word" =~ (^|:)(refs/heads/)?main$ ]] && block "pushing to main is not allowed; push a branch and open a merge request"
+          [[ "$word" =~ (^|:)(refs/heads/)?main$ ]] && block "pushing to main is not allowed; push a branch and open a pull request"
           ;;
       esac
     done

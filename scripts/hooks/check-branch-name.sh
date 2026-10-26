@@ -29,7 +29,7 @@ while read -r local_ref _ remote_ref _; do
   [[ -z "${remote_ref:-}" ]] && continue
   case "$remote_ref" in
     refs/heads/main)
-      echo "direct push to main is not allowed; open a merge request" >&2
+      echo "direct push to main is not allowed; open a pull request" >&2
       status=1 ;;
     refs/heads/*)
       check_name "${remote_ref#refs/heads/}" || status=1 ;;
