@@ -1,0 +1,43 @@
+# Rules follow docs/PLAN.md §1.5: nothing generated, nothing secret.
+
+# --- Secrets: the API key lives only in .env ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Case document (Insider's, kept out of the repo) ---
+Smart Campaign Composer Case.html
+
+# --- Go ---
+/bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# --- Frontend ---
+node_modules/
+dist/
+.vite/
+*.local
+
+# --- Docker / DB ---
+pgdata/
+*.dump
+*.sql.gz
+
+# --- Tool state ---
+.omc/
+.claude/settings.local.json
+
+# --- OS / IDE ---
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# --- Logs ---
+*.log
+logs/
