@@ -150,37 +150,9 @@ const invalidChips = computed(() => {
     : invalidVariables(d.email.subject, d.email.body)
 })
 
-// ---- base version handling ----
-function adopt(v: ContentVersion) {
-  base.value = v.content
-  draft.value = v.content
-  expectedVersion.value = v.id
-  knownNumber.value = v.version_number
-  worstCase.value = v.worst_case
-}
-
-// Adopt the latest version on load and when a refetch shows a newer one, unless the user
-// has unsaved work (then the next save gets a 409 and the conflict panel decides).
-watch(
-  latest,
-  (v) => {
-    if (!v) return
-    if (knownNumber.value !== null && v.version_number <= knownNumber.value) return
-    if (dirty.value || conflict.value || versionStatus.value === 'streaming') return
-    if (sessionStatus.value === 'invalid' || sessionStatus.value === 'interrupted') {
-      // A finished failed run shows its draft; the stored latest version stays the base id.
-      expectedVersion.value = v.id
-      knownNumber.value = v.version_number
-      return
-    }
-    const first = base.value === null
-    adopt(v)
-    if (first) void loadPreview(0)
-  },
-  { immediate: true },
-)
-
 // ---- preview (ui.md §1.1) ----
+// Declared before the immediate `latest` watcher below, which may call loadPreview during
+// setup when the campaign is already in the store (otherwise a TDZ ReferenceError).
 const preview = ref<Preview | null>(null)
 const previewLoading = ref(false)
 const previewError = ref<ApiError | null>(null)
@@ -215,6 +187,36 @@ function onNextSample() {
   if (!p || p.sample_count <= 1) return
   void loadPreview((p.sample_index + 1) % walkedSamples(p.sample_count))
 }
+
+// ---- base version handling ----
+function adopt(v: ContentVersion) {
+  base.value = v.content
+  draft.value = v.content
+  expectedVersion.value = v.id
+  knownNumber.value = v.version_number
+  worstCase.value = v.worst_case
+}
+
+// Adopt the latest version on load and when a refetch shows a newer one, unless the user
+// has unsaved work (then the next save gets a 409 and the conflict panel decides).
+watch(
+  latest,
+  (v) => {
+    if (!v) return
+    if (knownNumber.value !== null && v.version_number <= knownNumber.value) return
+    if (dirty.value || conflict.value || versionStatus.value === 'streaming') return
+    if (sessionStatus.value === 'invalid' || sessionStatus.value === 'interrupted') {
+      // A finished failed run shows its draft; the stored latest version stays the base id.
+      expectedVersion.value = v.id
+      knownNumber.value = v.version_number
+      return
+    }
+    const first = base.value === null
+    adopt(v)
+    if (first) void loadPreview(0)
+  },
+  { immediate: true },
+)
 
 // ---- generation (ui.md §5.2) ----
 const confirmOpen = ref(false)
