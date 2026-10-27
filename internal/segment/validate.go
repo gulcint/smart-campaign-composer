@@ -22,7 +22,8 @@ const (
 
 // Validate performs semantic checks and returns nil or a *validation.Error with every problem
 // (segment-dsl.md §1.1, §3, §7.3), in depth-first order. The depth and condition-count limits are
-// checked first; if either is exceeded the per-condition checks are skipped.
+// checked first; if either is exceeded the per-condition checks are skipped. Like Parse, it
+// returns at most 20 field errors (the first ones in that order) per document.
 func Validate(r Rule) error {
 	if !isGroup(r.Root) {
 		return &validation.Error{Fields: []validation.FieldError{schemaViolation("rule", "rule root must be a group (all, any or not)")}}
@@ -45,7 +46,7 @@ func Validate(r Rule) error {
 	if len(fields) == 0 {
 		return nil
 	}
-	return &validation.Error{Fields: fields}
+	return newError(fields)
 }
 
 func schemaViolation(path, msg string) validation.FieldError {
@@ -129,7 +130,7 @@ func countConditions(n Node) (int, bool) {
 // appendDepthErrors reports every group whose depth (groups on the path from the root, itself
 // included) exceeds MaxDepth; it does not descend below the first exceeding group of a branch.
 func appendDepthErrors(fields []validation.FieldError, n Node, path string, depth int) []validation.FieldError {
-	if !isGroup(n) {
+	if !isGroup(n) || len(fields) >= maxFieldErrors {
 		return fields
 	}
 	if depth > MaxDepth {
@@ -147,6 +148,9 @@ func appendDepthErrors(fields []validation.FieldError, n Node, path string, dept
 }
 
 func validateNode(fields []validation.FieldError, n Node, path string) []validation.FieldError {
+	if len(fields) >= maxFieldErrors {
+		return fields // the document already has as many errors as it can report
+	}
 	switch kind(n) {
 	case kindCond:
 		if fe := checkCondition(*n.Cond, path); fe != nil {
