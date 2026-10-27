@@ -23,6 +23,9 @@ export default defineConfig({
   },
   build: {
     sourcemap: false,
+    // Vite inlines assets under 4 KB as data: URLs, and nginx's CSP (font-src 'self') blocks
+    // data: fonts. Keep fonts as files; everything else keeps the default behaviour.
+    assetsInlineLimit: (file) => (file.endsWith('.woff2') ? false : undefined),
   },
   test: {
     environment: 'jsdom',
