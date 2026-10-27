@@ -146,7 +146,7 @@ func (fakeService) GenerateSegment(context.Context, string) (campaign.SegmentRes
 func (fakeService) StartContentGeneration(context.Context, string) (campaign.ContentRun, error) {
 	return nil, errNotUsed
 }
-func (fakeService) EditContent(context.Context, string, []byte) (campaign.ContentVersion, error) {
+func (fakeService) EditContent(context.Context, string, string, []byte) (campaign.ContentVersion, error) {
 	return campaign.ContentVersion{}, errNotUsed
 }
 func (fakeService) ListContentVersions(context.Context, string) ([]campaign.ContentVersion, error) {
