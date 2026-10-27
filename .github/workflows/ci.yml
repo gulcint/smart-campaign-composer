@@ -162,6 +162,12 @@ jobs:
 
   # ---------- test ----------
 
+  hook-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: make test-hooks
+
   go-unit:
     needs: detect
     if: needs.detect.outputs.go == 'true'
@@ -214,7 +220,7 @@ jobs:
   # the repo that do not exist yet) pass; failed or cancelled jobs do not.
   ci-ok:
     if: always()
-    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, sql-lint, db-roundtrip, compose-ports, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
+    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, sql-lint, db-roundtrip, compose-ports, hook-tests, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
     runs-on: ubuntu-latest
     steps:
       - env:

@@ -99,6 +99,37 @@ check_segment() {
       [[ "${words[*]:i}" =~ core\.hooks[Pp]ath ]] && block "changing core.hooksPath disables the project hooks" ;;
   esac
 
+  # Commands that throw away uncommitted or unmerged work. The safe forms stay allowed
+  # (worktree remove without --force refuses a dirty tree; branch -d refuses an unmerged branch).
+  local rest=" ${words[*]:i} "
+  case "$sub" in
+    worktree)
+      if [[ "${words[i]:-}" == "remove" && "$rest" =~ [[:space:]](--force|-[A-Za-z]*f[A-Za-z]*)[[:space:]] ]]; then
+        block "git worktree remove --force deletes uncommitted files; use scripts/worktree-remove.sh <path>"
+      fi ;;
+    branch)
+      [[ "$rest" =~ [[:space:]](-D|--force|-[A-Za-z]*f[A-Za-z]*)[[:space:]] ]] \
+        && block "git branch -D/--force deletes unmerged commits; use git branch -d"
+      [[ "$rest" =~ [[:space:]]-[A-Za-z]*D[A-Za-z]*[[:space:]] ]] && block "git branch -D deletes unmerged commits; use git branch -d" ;;
+    clean)
+      [[ "$rest" =~ [[:space:]](--force|-[A-Za-z]*f[A-Za-z]*)[[:space:]] ]] \
+        && block "git clean -f deletes untracked files for good; list them with git clean -n and remove by hand" ;;
+    reset)
+      [[ "$rest" =~ [[:space:]]--hard[[:space:]] ]] && block "git reset --hard discards uncommitted work; use --soft/--mixed or git stash" ;;
+    checkout|switch)
+      [[ "$rest" =~ [[:space:]](--force|--discard-changes|-[A-Za-z]*f[A-Za-z]*)[[:space:]] ]] \
+        && block "git $sub --force discards uncommitted work"
+      [[ "$sub" == "checkout" && "$rest" =~ [[:space:]]--[[:space:]] ]] \
+        && block "git checkout -- <path> discards uncommitted edits; use git stash" ;;
+    restore)
+      # Only index-only restore (--staged without --worktree) is non-destructive.
+      if ! { [[ "$rest" =~ [[:space:]]--staged[[:space:]] || "$rest" =~ [[:space:]]-S[[:space:]] ]] && ! [[ "$rest" =~ [[:space:]](--worktree|-W)[[:space:]] ]]; }; then
+        block "git restore overwrites working-tree files; use git stash"
+      fi ;;
+    stash)
+      [[ "${words[i]:-}" =~ ^(drop|clear)$ ]] && block "git stash drop/clear loses stashed work for good" ;;
+  esac
+
   if [[ "$sub" == "commit" ]]; then
     for word in "${words[@]:i}"; do
       # -n is --no-verify for commit; also inside clusters like -nm.

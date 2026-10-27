@@ -57,7 +57,16 @@ case "$tool" in
         ls|pwd|mkdir|gofmt|echo|wc) ;;
         git)
           case "${w[1]:-}" in
-            status|add|commit|push|branch|switch|fetch|worktree|rev-parse) ;;
+            status|add|commit|push|fetch|rev-parse) ;;
+            worktree)
+              [[ "${w[2]:-}" == "list" ]] || block "only 'git worktree list'; worktrees are managed by scripts/test-writer-worktree.sh and scripts/worktree-remove.sh"
+              ;;
+            branch)
+              [[ "$seg" =~ (^|[[:space:]])(-d|-D|--delete|-f|--force|-m|-M|--move)([[:space:]]|$) ]] && block "the test writer may not delete, move or force branches"
+              ;;
+            switch)
+              [[ "$seg" =~ (^|[[:space:]])(-f|--force|--discard-changes)([[:space:]]|$) ]] && block "git switch --force discards uncommitted work"
+              ;;
             log)
               [[ "$seg" =~ (^|[[:space:]])(-p|--patch|-u|--stat|--name-only|--name-status|--follow)([[:space:]]|$) ]] \
                 && block "git log may not show diffs or file lists"
