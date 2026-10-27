@@ -292,6 +292,7 @@ func (a *api) writeServiceError(w http.ResponseWriter, r *http.Request, err erro
 		writeError(w, r, http.StatusNotFound, "content_version_not_found", "content version not found")
 	case errors.Is(err, campaign.ErrCustomerNotFound):
 		writeError(w, r, http.StatusNotFound, "customer_not_found", "customer not found")
+	case errors.Is(err, campaign.ErrContentEditConflict) && writeEditConflict(w, r, err):
 	case errors.Is(err, campaign.ErrGenerationInProgress):
 		writeError(w, r, http.StatusConflict, "generation_in_progress", "a generation is already running for this campaign")
 	case errors.Is(err, campaign.ErrInvalidState):
