@@ -1,9 +1,10 @@
 // Package campaign is the campaign use-case layer behind the HTTP API.
 //
 // It holds the domain types, the pure state machine, the Service port that internal/httpapi
-// depends on and its implementation (service.go). P3 implements campaign creation, reading and
-// segment generation (draft -> audience_ready); content, approval and delivery use cases arrive
-// with the P4/P5 slices.
+// depends on and its implementation (service.go, content.go). P3 implements campaign creation,
+// reading and segment generation (draft -> audience_ready); P4 the content generation, human
+// edits, approval and preview; the delivery use cases (accepting a send, status, deliveries)
+// arrive with the P5 slice.
 package campaign
 
 import (
@@ -45,7 +46,29 @@ var (
 	ErrContentNotValidated    = errors.New("campaign: content not validated")     // 409 content_not_validated
 	ErrStaleContentVersion    = errors.New("campaign: stale content version")     // 409 stale_content_version
 	ErrGenerationInProgress   = errors.New("campaign: generation in progress")    // 409 generation_in_progress
+	ErrContentEditConflict    = errors.New("campaign: content edit conflict")     // 409 content_edit_conflict
 )
+
+// ExpectedVersionNone is the X-Expected-Version value meaning "the editor saw no latest validated version".
+const ExpectedVersionNone = "none"
+
+// EditConflictError is returned by EditContent when the expected version is not the current latest
+// validated version. errors.Is(err, ErrContentEditConflict) is true. Current is the CURRENT latest
+// validated version of the current segment revision; both members are nil when there is none.
+type EditConflictError struct {
+	CurrentID            *string `json:"id"`
+	CurrentVersionNumber *int    `json:"version_number"`
+}
+
+func (e *EditConflictError) Error() string {
+	if e.CurrentID == nil || e.CurrentVersionNumber == nil {
+		return ErrContentEditConflict.Error() + ": the campaign has no latest version"
+	}
+	return ErrContentEditConflict.Error() + ": the latest version is " + *e.CurrentID + " (number " + strconv.Itoa(*e.CurrentVersionNumber) + ")"
+}
+
+// Is reports whether target is ErrContentEditConflict.
+func (*EditConflictError) Is(target error) bool { return target == ErrContentEditConflict }
 
 // Event is an input of the campaign state machine.
 type Event string
@@ -104,9 +127,10 @@ func Transition(from State, ev Event) (State, error) {
 const BriefMaxRunes = 2000
 
 // MaxGenerationDuration bounds one segment or content generation (VARSAYIM). The per-campaign
-// generation lock is released when the request context is cancelled or, at the latest, after
-// this duration. While the lock is held, GenerateSegment, StartContentGeneration, EditContent and
-// Approve return ErrGenerationInProgress.
+// generation lock is released when the request context is cancelled (client disconnect) or, at the
+// latest, after this duration; a content stream still running then ends with the final invalid
+// event, code "llm_unavailable". While the lock is held, GenerateSegment, StartContentGeneration,
+// EditContent, Approve and Send return ErrGenerationInProgress.
 const MaxGenerationDuration = 120 * time.Second
 
 // NormalizeBrief NFC-normalizes and trims s. Errors (*validation.Error, path "brief"):
@@ -327,14 +351,26 @@ type Service interface {
 	Get(ctx context.Context, id string) (Campaign, error)
 	List(ctx context.Context, limit, offset int) (CampaignPage, error)
 	GenerateSegment(ctx context.Context, id string) (SegmentResult, error)
-	// StartContentGeneration performs every pre-stream check (404/409/422 header/502 unavailable)
-	// and connects LLM attempt 1. Errors here become JSON responses; after it returns a run,
-	// the handler writes HTTP 200 + SSE.
+	// StartContentGeneration performs every pre-stream check and connects LLM attempt 1. Errors here
+	// become JSON responses; after it returns a run, the handler writes HTTP 200 + SSE.
+	// Check order: ErrCampaignNotFound -> ErrInvalidState (draft, sending, completed) ->
+	// ErrGenerationInProgress -> llm.ErrUnavailable. Acquires the generation lock, which the returned
+	// run releases when Stream returns (any outcome) or when ctx is cancelled.
 	StartContentGeneration(ctx context.Context, id string) (ContentRun, error)
-	EditContent(ctx context.Context, id string, raw []byte) (ContentVersion, error)
+	// EditContent: ErrCampaignNotFound -> ErrGenerationInProgress -> ErrInvalidState (draft, sending,
+	// completed) -> *EditConflictError (expectedVersionID, a UUID or ExpectedVersionNone, is not the
+	// current latest validated version, compared under the row lock) -> content.Parse +
+	// content.Validate against the CURRENT segment's longest values (*validation.Error, nothing
+	// stored). Success, in one transaction under the campaign row lock: next version_number, status
+	// validated, source edit, state content_ready, active approval revoked ("content_changed").
+	EditContent(ctx context.Context, id, expectedVersionID string, raw []byte) (ContentVersion, error)
 	ListContentVersions(ctx context.Context, id string) ([]ContentVersion, error)
 	GetContentVersion(ctx context.Context, id, versionID string) (ContentVersion, error)
+	// Approve: openapi approveContent "Checks, in this order". Idempotent for the already approved
+	// version (unchanged Campaign, no new approvals row, the worst-case re-check is not run again).
 	Approve(ctx context.Context, id, versionID string) (Campaign, error)
+	// Send: ErrCampaignNotFound -> ErrContentVersionNotFound -> ErrGenerationInProgress ->
+	// ErrInvalidState (not approved / second send) -> ErrStaleContentVersion (README §5.4).
 	Send(ctx context.Context, id, versionID string) (SendResult, error)
 	Status(ctx context.Context, id string) (CampaignStatus, error)
 	Preview(ctx context.Context, id string, q PreviewQuery) (Preview, error)
@@ -344,8 +380,9 @@ type Service interface {
 
 // ContentRun is a started generation. Stream calls emit for every composer event in order and
 // finally exactly once with the terminal event (ValidatedEvent or InvalidEvent{Final:true}),
-// persisting the version before emitting it. On ctx cancellation it stores nothing and returns
-// ctx.Err().
+// persisting the version before emitting it, in ONE transaction under the campaign row lock. ctx is
+// checked before that transaction starts: if it is already cancelled nothing is stored and Stream
+// returns ctx.Err(); a transaction that has started is completed even if the client disconnects.
 type ContentRun interface {
 	Stream(ctx context.Context, emit func(composer.Event) error) error
 }
