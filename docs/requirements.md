@@ -96,6 +96,13 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 - İzni olmayan müşteri sayımda ilgili kanalın sayısına girmez.
 - Bir kanalda izin, diğerinde yoksa yalnızca izinli kanal için teslimat oluşur.
 - Telefonu (SMS) veya emaili (email) olmayan müşteri o kanaldan sayılmaz ve teslimat alamaz.
+- **Gönderim anında yeniden kontrol (P5):** teslimat kayıtları gönderim isteğinde güncel izin durumundan türetilir ve dispatcher her teslimatı alırken izni ve iletişim bilgisini `customers` tablosundan yeniden okur. Onaydan sonra izin geri alınırsa (veya telefon/email silinirse) o teslimat `failed` olur, hata nedeni `recipient_unavailable`'dır ve mock provider'a **hiç çağrı gitmez**; müşterinin diğer kanaldaki teslimatı etkilenmez. Onay anındaki sayı ile gönderilen sayı arasındaki bu fark kabul edilen davranıştır.
+- **Kabul durumları (P5, seed sabit grupları, `docs/contracts/seed.md`):**
+  - `istanbul_no_consent`: hiçbir kanalda teslimat satırı yok.
+  - `istanbul_sms_only`: yalnızca `sms` teslimatı; `istanbul_email_only`: yalnızca `email` teslimatı.
+  - `sms_consent_missing_phone` ve `email_consent_missing_email`: ilgili kanalda teslimat yok.
+  - Gönderim yanıtındaki kanal başına teslimat sayısı, segmentin `audience` sayısına ve manifeste eşittir.
+  - Onay + gönderim sonrası bir müşterinin SMS izni kapatılıp dispatcher çalışınca: SMS teslimatı `failed`/`recipient_unavailable`, provider'a 0 çağrı, aynı müşterinin email teslimatı gider.
 
 ### REQ-AUD-05 — Brief girişi sınırlanır · Faz P3 · VARSAYIM
 - Boş brief ve 2000 karakteri aşan brief doğrulama hatasıyla reddedilir; LLM çağrılmaz.
