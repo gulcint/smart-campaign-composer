@@ -9,6 +9,7 @@ import type { ChannelKey, Content, FieldError, FieldKey, WorstCase } from '@/api
 import { routeFieldErrors } from '@/composables/useContentGeneration'
 import type { MessageId } from '@/i18n'
 import { t } from '@/i18n'
+import { diffEdit, fitInsertion, runeCount } from '@/lib/text-cap'
 import { cn } from '@/lib/utils'
 import { ALLOWED_VARIABLES } from '@/lib/variables'
 
@@ -108,7 +109,7 @@ function withValue(c: Content, f: FieldKey, v: string): Content {
 }
 
 function overLimit(d: FieldDef): boolean {
-  return d.limit !== null && [...valueOf(props.modelValue, d.key).normalize('NFC')].length > d.limit
+  return d.limit !== null && runeCount(valueOf(props.modelValue, d.key)) > d.limit
 }
 
 function invalid(d: FieldDef): boolean {
@@ -141,9 +142,61 @@ function setEl(f: FieldKey, el: unknown) {
   else delete els[f]
 }
 
-function onInput(f: FieldKey, e: Event) {
-  const v = (e.target as HTMLInputElement | HTMLTextAreaElement).value
-  emit('update:modelValue', withValue(props.modelValue, f, v))
+type Field = HTMLInputElement | HTMLTextAreaElement
+
+/** Writes a capped value into the field itself (its native input was prevented or undone). */
+function applyValue(d: FieldDef, el: Field, v: string, caret: number) {
+  el.value = v
+  el.setSelectionRange(caret, caret)
+  if (v !== valueOf(props.modelValue, d.key))
+    emit('update:modelValue', withValue(props.modelValue, d.key, v))
+}
+
+/**
+ * Input cap (ui.md §3.14 d2, D48): replaces the selection with the fitting prefix of `data` and
+ * prevents the native input when `data` does not fit whole. Uncapped fields are left alone.
+ */
+function capInsert(d: FieldDef, e: Event, data: string) {
+  if (d.limit === null || readonly.value) return
+  const el = e.target as Field
+  const v = el.value
+  const start = el.selectionStart ?? v.length
+  const end = el.selectionEnd ?? start
+  const text = d.multiline ? data.replace(/\r\n?/g, '\n') : data.replace(/[\r\n]/g, '')
+  const fit = fitInsertion(v.slice(0, start), text, v.slice(end), d.limit, runeCount(v))
+  if (fit === text) return
+  e.preventDefault()
+  if (fit !== '') applyValue(d, el, v.slice(0, start) + fit + v.slice(end), start + fit.length)
+}
+
+function onPaste(d: FieldDef, e: ClipboardEvent) {
+  capInsert(d, e, e.clipboardData?.getData('text/plain') ?? '')
+}
+
+function onBeforeInput(d: FieldDef, e: InputEvent) {
+  // Drop targets and IME compositions have no reliable selection here: onInput caps them.
+  if (e.isComposing || e.inputType === 'insertFromDrop') return
+  if (!e.inputType.startsWith('insert')) return
+  const lineBreak = e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph'
+  capInsert(d, e, e.data ?? e.dataTransfer?.getData('text/plain') ?? (lineBreak ? '\n' : ''))
+}
+
+/** Emits the field value; a capped field that grew past the cap keeps only the fitting part. */
+function onInput(d: FieldDef, e: Event) {
+  if ((e as InputEvent).isComposing) return
+  const el = e.target as Field
+  const v = el.value
+  const prev = valueOf(props.modelValue, d.key)
+  const n = runeCount(v)
+  if (d.limit === null || readonly.value || n <= d.limit || n <= runeCount(prev)) {
+    emit('update:modelValue', withValue(props.modelValue, d.key, v))
+    return
+  }
+  const { start, prevEnd, nextEnd } = diffEdit(prev, v)
+  const before = prev.slice(0, start)
+  const after = prev.slice(prevEnd)
+  const fit = fitInsertion(before, v.slice(start, nextEnd), after, d.limit, runeCount(prev))
+  applyValue(d, el, before + fit + after, start + fit.length)
 }
 
 function save() {
@@ -168,6 +221,13 @@ function insertVariable(name: string) {
   const token = `{{${name}}}`
   const start = focused && el ? (el.selectionStart ?? current.length) : current.length
   const end = focused && el ? (el.selectionEnd ?? start) : start
+  // ui.md §3.14 d2: a chip that does not fit whole is not inserted.
+  const limit = visible.value.find((d) => d.key === target)?.limit ?? null
+  const fits =
+    limit === null ||
+    fitInsertion(current.slice(0, start), token, current.slice(end), limit, runeCount(current)) ===
+      token
+  if (!fits) return
   const next = current.slice(0, start) + token + current.slice(end)
   emit('update:modelValue', withValue(props.modelValue, target, next))
   lastFocused = target
@@ -258,7 +318,10 @@ watch(
             invalid(d) ? 'border-[1.5px] border-error' : 'border-border-default',
           )
         "
-        @input="onInput(d.key, $event)"
+        @paste="onPaste(d, $event)"
+        @beforeinput="onBeforeInput(d, $event as InputEvent)"
+        @input="onInput(d, $event)"
+        @compositionend="onInput(d, $event)"
         @focus="lastFocused = d.key"
         @keydown="onKeydown"
       />
@@ -279,7 +342,10 @@ watch(
             invalid(d) ? 'border-[1.5px] border-error' : 'border-border-default',
           )
         "
-        @input="onInput(d.key, $event)"
+        @paste="onPaste(d, $event)"
+        @beforeinput="onBeforeInput(d, $event as InputEvent)"
+        @input="onInput(d, $event)"
+        @compositionend="onInput(d, $event)"
         @focus="lastFocused = d.key"
         @keydown="onKeydown"
       />
