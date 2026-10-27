@@ -140,6 +140,12 @@ Strict araçla "önceki geçersiz çıktı sahte `tool_use` olarak yeniden oynat
 ### D33 — Agent'lar için veri kaybettiren git komutları engellidir
 P2'de `git worktree remove --force` commit edilmemiş test dosyalarını sildi (nesne deposundan kurtarıldı). `scripts/claude/guard-git.sh` artık `worktree remove --force`, `branch -D`, `clean -f`, `reset --hard`, `checkout -f|--`, `switch -f`, `restore` (yalnız `--staged` serbest), `stash drop|clear` komutlarını engeller; silme için `scripts/worktree-remove.sh`. Testler `make test-hooks`.
 
+### D34 — Slice → main PR'ında `api-breaking-ok` etiketi gerekir
+`main`'deki `openapi.yaml`, P1'de yazılmış ve hiç uygulanmamış bir taslaktı; P3 slice'ı onu sıkılaştırdı (`$ref`'li şemalar, kapalı nesneler, hata kodu kümeleri, 400/413/500 yanıtları). `oasdiff` bunu 13 kırıcı değişiklik sayar. Hiçbir istemci bu taslağa bağlı olmadığı için kırıcılık yoktur; bu tek PR `api-breaking-ok` etiketiyle geçer. Bundan sonra `api-breaking` PR'ın kendi taban branch'ine karşı çalışır.
+
+### D35 — Segment ayrıştırma doğrusal zamanlıdır
+Bağımsız review, 72 KB'lık iç içe `{"not":…}` gövdesinin eski `Parse`'ta 1,3 sn ve 500 MB harcadığını ölçtü (derinlik sınırı ayrıştırmadan sonra uygulanıyordu). `Parse` artık belgeyi tek geçişte okur, sınırı aşan dalı ayrıştırırken keser (~2 ms). LLM kaynaklı anahtar adları hata gövdesine yalnızca düz tanımlayıcı ve ≤64 karakter ise yansır, alan hatası sayısı 20 ile sınırlıdır. SQL gün aritmetiği saat cinsindendir ve havuz oturumları UTC'ye sabitlenir (`Match` ile DST'ye bağlı olmayan eşdeğerlik).
+
 ---
 
 ## Bilinen sınırlar ve riskler
@@ -154,3 +160,5 @@ P2'de `git worktree remove --force` commit edilmemiş test dosyalarını sildi (
 | Gerçek Claude istemcisi için otomatik test yok | Sözleşme gerçek istemciyi test binary'sinde yasaklar; strict araçlar ve onarım turu elle doğrulandı (D23, D32) |
 | `seed.Generate` 9999'dan fazla kullanıcıyı kabul eder | Yalnız komut satırı reddeder (telefon bloğu 4 hane); mimar `go-interfaces.md`'ye hata ekleyebilir |
 | Manifest sayıları `segment.Match` ile değil el yazısı değerlendirmeyle | P3'te `segment.Match`'e geçilecek, manifest aynı kalmalı |
+| Kampanya kilidi tek süreç içinde çalışır | `generateSegment` kilidi süreç içidir; birden fazla API kopyası planlanırsa veritabanı kilidine (`SaveSegment`'in `FOR UPDATE`'i zaten korur) taşınmalı |
+| Kitle taraması eşleşen satırları Go'ya çeker | Seed ölçeğinde (5000) yeterli; üç en uzun değer SQL'de toplanarak ölçeklenebilir |
