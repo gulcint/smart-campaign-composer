@@ -122,6 +122,8 @@ REQ-DLV-01 "docker compose up, mock provider dahil" der ve sözleşme provider'�
 ### D27 — Bilinçle ertelenen CI kontrolleri
 PLAN §6'daki CodeQL (#17) ve imaj dosya sistemi / `docker history` taraması (#5) P2'de eklenmedi; P6 (sertleştirme) kapısına taşındı. Eklenenler: `db-roundtrip`, tool-şema sapma kontrolü, `compose-ports` (db ve mockprovider host portu yayınlamaz).
 
+**Güncelleme (2026-10-27, sahip kararı):** `web-image`, `compose-ports` ve `actionlint` job'ları CI'dan kaldırıldı; bu üç kontrol artık CI'da koşmaz. Yerelde yalnızca `actionlint` pre-commit hook'u kalır (üretim nginx imajı build/`nginx -t` ve db/mockprovider host portu kontrolü artık otomatik değildir).
+
 ### D28 — `/metrics` yayınlanan API portunda, yalnız 127.0.0.1
 `metrics.md` `/metrics`'i 8080'de sunar; PLAN'ın "yalnız iç ağ" ifadesi bu karara göre güncel sayılır. Kimlik doğrulama olmadığı için API portu yalnız `127.0.0.1`'e bağlanır (yerel demo).
 

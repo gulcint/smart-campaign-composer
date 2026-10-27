@@ -135,15 +135,6 @@ jobs:
 
   # ---------- lint ----------
 
-  actionlint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: >
-          docker run --rm -v "$PWD:/repo" -w /repo
-          rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
-          -color
-
   go-lint:
     needs: detect
     if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.go == 'true'
@@ -218,20 +209,6 @@ jobs:
       # docs/PLAN.md §6 #16
       - run: npm audit --audit-level=high
 
-  # The served image builds (non-root nginx, digest-pinned bases). The only CI check of the
-  # production web image: compose.test.yml builds just the web `test` stage (Vitest).
-  web-image:
-    needs: detect
-    if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.web == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker compose -f compose.yml build web
-      # The nginx config is only exercised at runtime otherwise: a syntax or directive error would
-      # pass the build and fail the container start. `api` is resolved per request, not at start.
-      - name: nginx -t on the built image
-        run: docker run --rm --entrypoint nginx scc-web:local -t
-
   sql-lint:
     needs: detect
     if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.migrations == 'true'
@@ -254,19 +231,6 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make db-roundtrip
-
-  # REQ-DLV-01: Postgres and the mock provider must not publish host ports.
-  compose-ports:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: only the API publishes a port
-        run: |
-          for svc in db mockprovider; do
-            if docker compose -f compose.yml config --format json | jq -e --arg s "$svc" '.services[$s].ports // [] | length > 0' >/dev/null; then
-              echo "service $svc must not publish ports"; exit 1
-            fi
-          done
 
   # ---------- test ----------
 
@@ -322,7 +286,7 @@ jobs:
   # or cancelled jobs do not.
   ci-ok:
     if: always()
-    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, api-contract, web, web-image, sql-lint, db-roundtrip, compose-ports, hook-tests, make-test, gitleaks, ai-sessions-scan, govulncheck]
+    needs: [detect, pr-policy, repo-policy, go-lint, api-contract, web, sql-lint, db-roundtrip, hook-tests, make-test, gitleaks, ai-sessions-scan, govulncheck]
     runs-on: ubuntu-latest
     steps:
       - env:
