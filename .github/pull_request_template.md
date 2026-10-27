@@ -7,6 +7,10 @@
 **Role:** <!-- test writer | implementer | architect -->
 **Refs:** REQ-
 
+## Contract (docs/contracts/README.md §11) — every PR
+
+- [ ] Endpoint changed → `docs/contracts/openapi.yaml` and affected docs updated in this PR (or: no endpoint changed)
+
 ## Phase gate (docs/PLAN.md §3.2) — slice → main PRs only
 
 - [ ] Every REQ ID of this phase is mapped to at least one test
