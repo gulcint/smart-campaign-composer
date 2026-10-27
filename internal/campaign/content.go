@@ -195,6 +195,11 @@ func (s *service) EditContent(ctx context.Context, id, expectedVersionID string,
 		return ContentVersion{}, ErrGenerationInProgress
 	}
 	return s.d.Store.WriteContentVersion(ctx, id, func(lc LockedCampaign) (ContentWrite, error) {
+		// Re-checked under the row lock (D47b): a generation that started after the pre-check
+		// above must not be overtaken by this edit.
+		if s.locks.busy(id, s.d.Clock.Now()) {
+			return ContentWrite{}, ErrGenerationInProgress
+		}
 		next, err := Transition(lc.State, EventContentValidated)
 		if err != nil {
 			return ContentWrite{}, err
@@ -279,6 +284,10 @@ func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, 
 	}
 	a := ApprovalWrite{ID: uuid.NewString(), ApprovedAt: s.now()}
 	return s.d.Store.ApproveVersion(ctx, id, versionID, a, func(chk ApprovalCheck) (bool, error) {
+		// Re-checked under the row lock (D47b): no approval while a generation is running.
+		if s.locks.busy(id, s.d.Clock.Now()) {
+			return false, ErrGenerationInProgress
+		}
 		if chk.Version.Status != ContentValidated {
 			return false, ErrContentNotValidated
 		}
@@ -315,6 +324,8 @@ func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, e
 	if s.locks.busy(id, s.d.Clock.Now()) {
 		return SendResult{}, ErrGenerationInProgress
 	}
+	// P5 must repeat this busy check under the campaign row lock of the transaction that accepts
+	// the send (D47b), as Approve and EditContent do; this slice has no such transaction yet.
 	c, err := s.d.Store.GetCampaign(ctx, id)
 	if err != nil {
 		return SendResult{}, err
