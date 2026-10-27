@@ -6,7 +6,7 @@ export PATH := $(GOBIN):$(PATH)
 
 TEST_COMPOSE := docker compose -f compose.test.yml
 
-.PHONY: help hooks test test-hooks test-unit test-integration test-web db-roundtrip seed-manifest lint check-tool-schemas secrets sanitize-sessions check-sessions web-lint web-build check-contract-copies api-lint api-breaking api-routes
+.PHONY: help hooks test test-hooks test-unit test-integration test-web db-roundtrip seed-manifest lint check-tool-schemas secrets sanitize-sessions check-sessions web-lint web-build check-contract-copies api-lint api-breaking api-routes api-types api-types-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -76,8 +76,17 @@ web/node_modules: web/package.json web/package-lock.json
 	cd web && npm ci
 	@touch web/node_modules
 
-web-lint: web/node_modules ## ESLint (vue/no-v-html: error) + Prettier + vue-tsc for web/
+web-lint: web/node_modules api-types-check ## ESLint (vue/no-v-html: error) + Prettier + vue-tsc + API types freshness for web/
 	cd web && npm run lint && npm run typecheck
+
+api-types: web/node_modules ## Regenerate web/src/api/schema.gen.ts from docs/contracts/openapi.yaml
+	cd web && npm run api-types
+
+api-types-check: web/node_modules ## Fail if web/src/api/schema.gen.ts is stale against docs/contracts/openapi.yaml
+	@tmp=$$(mktemp); trap 'rm -f "$$tmp"' EXIT; \
+	(cd web && node scripts/api-types.mjs "$$tmp") && \
+	diff -u web/src/api/schema.gen.ts "$$tmp" \
+	|| { echo "web/src/api/schema.gen.ts is stale: run 'make api-types' and commit it"; exit 1; }
 
 web-build: web/node_modules ## Type-check and build the web bundle into web/dist
 	cd web && npm run build
