@@ -180,7 +180,7 @@ func (s deliveryStore) Requeue(ctx context.Context, jobs []delivery.Job, now tim
 const fenced = `WHERE id = $1 AND status = 'sending' AND ($2 = 0 OR attempts = $2)`
 
 func (s deliveryStore) MarkSent(ctx context.Context, id string, u delivery.SentUpdate) error {
-	return s.finish(ctx, "mark sent", u.At, true, query{`
+	return s.finish(ctx, "mark sent", u.At, query{`
 		UPDATE deliveries SET
 			status = 'sent', sent_at = $3, last_http_status = $4, provider_message_id = NULLIF($5, ''),
 			lease_expires_at = NULL, updated_at = $3
@@ -193,7 +193,7 @@ func (s deliveryStore) ScheduleRetry(ctx context.Context, id string, u delivery.
 	if u.Count == delivery.CountRateLimited {
 		reason = delivery.FailureRateLimitBudget
 	}
-	return s.finish(ctx, "schedule retry", u.At, false, query{`
+	return s.finish(ctx, "schedule retry", u.At, query{`
 		UPDATE deliveries SET
 			status = 'queued', next_attempt_at = $4, lease_expires_at = NULL,
 			retry_count = retry_count + 1,
@@ -205,7 +205,7 @@ func (s deliveryStore) ScheduleRetry(ctx context.Context, id string, u delivery.
 }
 
 func (s deliveryStore) MarkFailed(ctx context.Context, id string, u delivery.FailedUpdate) error {
-	return s.finish(ctx, "mark failed", u.At, true, query{`
+	return s.finish(ctx, "mark failed", u.At, query{`
 		UPDATE deliveries SET
 			status = 'failed', failure_reason = $4, failed_at = $3, lease_expires_at = NULL,
 			failed_attempts = failed_attempts + $5, rate_limited_count = rate_limited_count + $6,
@@ -232,15 +232,15 @@ func failWithoutCount(id string, attempts int, at time.Time, reason delivery.Fai
 		[]any{id, attempts, at, string(reason), status, lastError}}
 }
 
-// finish runs one delivery update (which must RETURN campaign_id) and, for a terminal status,
-// completes the campaign in the same transaction when no queued/sending delivery remains. If the
+// finish runs one delivery update (which must RETURN campaign_id) and, in the same transaction,
+// completes the campaign when no queued/sending delivery remains (completeCampaignIfDone). If the
 // update violates a CHECK constraint (SQLSTATE 23514) and onCheck is set, onCheck runs instead,
-// in a new transaction, as a terminal update.
-func (s deliveryStore) finish(ctx context.Context, op string, at time.Time, terminal bool, q query, onCheck *query) error {
-	err := s.update(ctx, at, terminal, q)
+// in a new transaction.
+func (s deliveryStore) finish(ctx context.Context, op string, at time.Time, q query, onCheck *query) error {
+	err := s.update(ctx, at, q)
 	var pgErr *pgconn.PgError
 	if onCheck != nil && errors.As(err, &pgErr) && pgErr.Code == "23514" { // check_violation
-		err = s.update(ctx, at, true, *onCheck)
+		err = s.update(ctx, at, *onCheck)
 	}
 	if err != nil && !errors.Is(err, delivery.ErrLeaseLost) {
 		return fmt.Errorf("postgres: %s: %w", op, err)
@@ -248,7 +248,7 @@ func (s deliveryStore) finish(ctx context.Context, op string, at time.Time, term
 	return err
 }
 
-func (s deliveryStore) update(ctx context.Context, at time.Time, terminal bool, q query) error {
+func (s deliveryStore) update(ctx context.Context, at time.Time, q query) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -262,28 +262,12 @@ func (s deliveryStore) update(ctx context.Context, at time.Time, terminal bool, 
 		}
 		return err
 	}
-	if terminal {
-		if err := completeCampaign(ctx, tx, campaignID, at); err != nil {
-			return err
-		}
-	}
-	return tx.Commit(ctx)
-}
-
-// completeCampaign moves a sending campaign to completed when none of its deliveries is queued or
-// sending. The campaign row is locked first, in its own statement, so that the NOT EXISTS check
-// runs on a snapshot taken after any concurrent finisher of the same campaign has committed;
-// otherwise two last deliveries finishing at once could each see the other still sending.
-func completeCampaign(ctx context.Context, tx pgx.Tx, campaignID string, at time.Time) error {
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM campaigns WHERE id = $1 FOR UPDATE`, campaignID); err != nil {
+	// Shared with the send acceptance (send.go): locks the campaign row, then completes it if no
+	// delivery is queued or sending. After a retry the row is queued again, so it is a no-op.
+	if _, err := completeCampaignIfDone(ctx, tx, campaignID, at); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `
-		UPDATE campaigns SET state = 'completed', completed_at = $2, updated_at = $2
-		WHERE id = $1 AND state = 'sending'
-			AND NOT EXISTS (SELECT 1 FROM deliveries WHERE campaign_id = $1 AND status IN ('queued', 'sending'))`,
-		campaignID, at)
-	return err
+	return tx.Commit(ctx)
 }
 
 func failureInc(c delivery.CountKind) int {
