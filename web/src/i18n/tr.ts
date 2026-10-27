@@ -204,7 +204,6 @@ export const tr = {
   'approval.audience': 'Kitle',
   'approval.approve': 'Onayla',
   'approval.send': 'Gönder',
-  'approval.approvedNote': 'Onaylandı',
   'approval.readyNote': 'İki kanal doğrulandı',
 
   // --- Confirm dialog ---

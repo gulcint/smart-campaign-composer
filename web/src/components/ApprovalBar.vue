@@ -63,15 +63,9 @@ function onApprove() {
     :data-state="state"
     class="sticky bottom-0 z-10 flex flex-col gap-3 rounded-card border border-border-default bg-surface-raised p-4 shadow-raised sm:flex-row sm:items-center sm:justify-between"
   >
+    <!-- approved: no note; the step header badge already says "Onaylandı". -->
     <p
-      v-if="state === 'approved'"
-      class="flex items-center gap-1.5 text-body-sm font-semibold text-success"
-    >
-      <CircleCheck class="size-5" aria-hidden="true" />
-      {{ t('approval.approvedNote') }}
-    </p>
-    <p
-      v-else-if="state === 'stale'"
+      v-if="state === 'stale'"
       data-testid="approval-stale-note"
       role="status"
       class="flex items-center gap-1.5 text-body-sm font-semibold text-warning"
@@ -89,7 +83,7 @@ function onApprove() {
       <Info class="size-4" aria-hidden="true" />
       {{ t(`approval.reason.${reason}`) }}
     </p>
-    <p v-else class="flex items-center gap-1.5 text-body-sm text-ink-600">
+    <p v-else-if="state !== 'approved'" class="flex items-center gap-1.5 text-body-sm text-ink-600">
       <CircleCheck class="size-4 text-success" aria-hidden="true" />
       {{ t('approval.readyNote') }}
     </p>
