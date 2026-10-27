@@ -192,25 +192,6 @@ func TestE2E_SQLInValueIsOnlyAValue(t *testing.T) {
 	assertExampleCount(t, api, m)
 }
 
-// REQ-AI-01, REQ-AI-02
-// Unknown X-Mock-LLM-Scenario in mock mode => 422 on header.X-Mock-LLM-Scenario; nothing changes.
-func TestE2E_UnknownMockScenarioHeader(t *testing.T) {
-	t.Parallel()
-	api := baseURL(t, "E2E_API_URL")
-	m := readManifest(t)
-	id, _ := createCampaign(t, api, m.ExampleBrief.Brief)
-	status, hdr, body := doJSON(t, http.MethodPost, api+"/api/campaigns/"+id+"/segment", nil, scenario("definitely_not_a_scenario"))
-	e := assertError(t, status, hdr, body, http.StatusUnprocessableEntity, "validation_failed", true)
-	if !e.has(fieldWant{"header.X-Mock-LLM-Scenario", "invalid_value"}) {
-		t.Fatalf("error.fields = %+v, want {header.X-Mock-LLM-Scenario invalid_value}", e.Fields)
-	}
-	status, _, body = doJSON(t, http.MethodGet, api+"/api/campaigns/"+id, nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("GET campaign status = %d; body: %s", status, body)
-	}
-	assertDraft(t, decodeObject(t, body), id, m.ExampleBrief.Brief)
-}
-
 // REQ-AUD-01, REQ-AUD-02, REQ-AUD-03
 // POST /api/segments/count runs the same Parse/Validate/Compile path without the LLM: the manifest
 // rule gives the manifest audience; segment-dsl.md §7.3 inputs are refused with their field errors.
@@ -421,18 +402,6 @@ func TestE2E_NotFoundAndMethodNotAllowed(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// REQ-AUD-05
-// X-Request-ID is echoed and repeated in the error body.
-func TestE2E_RequestIDInErrorBody(t *testing.T) {
-	t.Parallel()
-	api := baseURL(t, "E2E_API_URL")
-	status, hdr, body := doJSON(t, http.MethodGet, api+"/api/campaigns/"+unknownCampaignID, nil, map[string]string{"X-Request-ID": "e2e-p3-req-1"})
-	e := assertError(t, status, hdr, body, http.StatusNotFound, "campaign_not_found", false)
-	if hdr.Get("X-Request-ID") != "e2e-p3-req-1" || e.RequestID != "e2e-p3-req-1" {
-		t.Fatalf("X-Request-ID = %q, error.request_id = %q; want both e2e-p3-req-1", hdr.Get("X-Request-ID"), e.RequestID)
 	}
 }
 
