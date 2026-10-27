@@ -33,6 +33,7 @@ import { useNotify } from '@/composables/useNotify'
 import { FIELD_KEYS, useContentGeneration } from '@/composables/useContentGeneration'
 import type { MessageId } from '@/i18n'
 import { t } from '@/i18n'
+import { walkedSamples } from '@/lib/preview'
 import { isLockedForEditing } from '@/lib/steps'
 import { invalidVariables } from '@/lib/variables'
 import { campaignIdOf } from '@/router'
@@ -212,7 +213,7 @@ function onNextSample() {
   }
   const p = preview.value
   if (!p || p.sample_count <= 1) return
-  void loadPreview((p.sample_index + 1) % p.sample_count)
+  void loadPreview((p.sample_index + 1) % walkedSamples(p.sample_count))
 }
 
 // ---- generation (ui.md §5.2) ----

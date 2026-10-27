@@ -8,6 +8,7 @@ import type { ApiError } from '@/api/errors'
 import { errorPresentation } from '@/api/errors'
 import type { Preview } from '@/api/types'
 import { t } from '@/i18n'
+import { walkedSamples } from '@/lib/preview'
 
 import Button from './Button.vue'
 import Skeleton from './Skeleton.vue'
@@ -76,7 +77,7 @@ function onNext() {
     </p>
     <div v-if="showNext" class="flex items-center justify-between gap-2">
       <span v-if="shown" data-testid="sms-preview-sample" class="text-caption text-ink-500">{{
-        t('preview.sample', { i: shown.sample_index + 1, n: shown.sample_count })
+        t('preview.sample', { i: shown.sample_index + 1, n: walkedSamples(shown.sample_count) })
       }}</span>
       <Button
         data-testid="sms-preview-next"

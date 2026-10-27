@@ -17,6 +17,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import SmsPreview from '@/components/SmsPreview.vue'
 import { useNotify } from '@/composables/useNotify'
 import { formatNumber, t } from '@/i18n'
+import { walkedSamples } from '@/lib/preview'
 import { campaignIdOf } from '@/router'
 import { injectApiClient, reportError } from '@/stores/api'
 import { useCampaignStore } from '@/stores/campaign'
@@ -68,7 +69,7 @@ function onNextSample() {
   }
   const p = preview.value
   if (!p || p.sample_count <= 1) return
-  void loadPreview((p.sample_index + 1) % p.sample_count)
+  void loadPreview((p.sample_index + 1) % walkedSamples(p.sample_count))
 }
 
 // ---- approve / send (ui.md §3.24) ----
