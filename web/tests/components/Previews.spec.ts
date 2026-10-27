@@ -41,6 +41,24 @@ describe('SmsPreview (REQ-APR-01, REQ-CNT-03)', () => {
     expect(w.get(sel('sms-preview-recipient')).text()).toBe('Ayşe')
   })
 
+  // ui.md §3.15: sms-preview-text textContent is EXACTLY preview.sms.text — the template adds no
+  // leading/trailing whitespace or line breaks around it and does not trim or collapse the text.
+  it.each([
+    { name: 'plain text', text: 'Merhaba Ayşe, sepetindeki ürünler seni bekliyor!' },
+    { name: 'leading and trailing spaces kept', text: '  Merhaba Ayşe  ' },
+    {
+      name: 'inner line break and double space kept',
+      text: 'Merhaba Ayşe,\nindirim  seni bekliyor',
+    },
+    { name: 'single character', text: 'x' },
+  ])('sms-preview-text textContent equals sms.text exactly ($name)', ({ text }) => {
+    const p = preview()
+    p.sms.text = text
+    const el = mountSms({ preview: p }).get(sel('sms-preview-text')).element
+    expect(el.textContent).toBe(text)
+    expect(el.textContent?.length).toBe(text.length)
+  })
+
   it('an empty first name shows the fallback recipient label', () => {
     const p = preview({
       customer: { id: 'c', first_name: '', last_name: 'Kaya', city: 'İstanbul' },

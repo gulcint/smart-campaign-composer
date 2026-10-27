@@ -310,6 +310,57 @@ describe('ContentPage edit conflict (REQ-APR-03, D40)', () => {
     expect((last?.opts?.body as ReturnType<typeof content>).sms.body).toBe('Benim metnim')
   })
 
+  // ui.md §3.23: keep-mine rebases onto the version named by the 409 (error.current_version, carried
+  // as ApiError.currentVersion, ui.md §4) — 'none' when its id is null — even when the campaign
+  // refetch after the conflict fails.
+  it.each([
+    { name: 'a current version', current: { id: V2, version_number: 2 }, want: V2 },
+    {
+      name: 'no current version (id null)',
+      current: { id: null, version_number: null },
+      want: 'none',
+    },
+  ])(
+    'keep-mine uses error.current_version ($name) as the base when the refetch fails',
+    async ({ current, want }) => {
+      let gets = 0
+      const saves: unknown[] = []
+      const a = fakeApi({
+        [`GET ${C}`]: () => {
+          gets += 1
+          if (gets === 1) return campaign('content_ready', version(V1, 1))
+          throw apiError(500, 'internal_error')
+        },
+        [`GET ${C}/preview`]: () => preview(),
+        [`POST ${C}/content-versions`]: (r) => {
+          saves.push(r.opts?.body)
+          if (saves.length === 1) throw apiError(409, 'content_edit_conflict', [], current)
+          return version('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 3, r.opts?.body as never, {
+            source: 'edit',
+          })
+        },
+      })
+      const r = await mountPage(ContentPage, 'content', {
+        api: a.client,
+        fetch: vi.fn(async () => sseResponse(controllableStream().stream)),
+      })
+      wrapper = r.wrapper
+      const w = r.wrapper
+      await typeSMS(w, 'Benim metnim')
+      await clickSave(w)
+      expect(gets).toBeGreaterThanOrEqual(2) // the refetch after the conflict was attempted (and failed)
+      expect(w.find(sel('editor-conflict')).exists()).toBe(true)
+      await w.get(sel('editor-conflict-keep-mine')).trigger('click')
+      await flushPromises()
+      expect((w.get(sel('editor-sms-body')).element as HTMLTextAreaElement).value).toBe(
+        'Benim metnim',
+      )
+      await clickSave(w)
+      expect(saves).toHaveLength(2)
+      expect(header(a.last('POST', `${C}/content-versions`), 'X-Expected-Version')).toBe(want)
+    },
+  )
+
   it('a conflict whose latest content equals the editor text is treated as success (retried request)', async () => {
     const setup = conflictSetup(version(V2, 2, content('Benim metnim')))
     const { w } = await mountContent(setup)

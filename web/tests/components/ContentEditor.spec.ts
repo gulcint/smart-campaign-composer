@@ -247,6 +247,74 @@ describe('ContentEditor field errors (REQ-APR-02, REQ-CNT-01)', () => {
   })
 })
 
+// ui.md §3.14 (e): path "" errors are added to every field's inline-error-<f>; §4: the 413
+// payload_too_large pseudo-error is shown on the editor field with data-code="payload_too_large".
+// Whatever the number of inline-error elements, element ids stay unique in the document and every
+// id in a field's aria-describedby resolves to exactly one element.
+describe('ContentEditor inline error ids (REQ-APR-02, ui.md §3.14 e, §4)', () => {
+  function assertUniqueIds() {
+    const ids = [...document.querySelectorAll('[id]')].map((el) => el.id)
+    const dupes = ids.filter((id, i) => ids.indexOf(id) !== i)
+    expect(dupes).toEqual([])
+  }
+
+  function assertDescribedBy(field: string) {
+    const el = document.querySelector(sel(`editor-${field}`)) as HTMLElement
+    expect(el).not.toBeNull()
+    const ids = describedIds(el)
+    expect(ids.length).toBeGreaterThan(0)
+    for (const id of ids) {
+      expect([...document.querySelectorAll('[id]')].filter((x) => x.id === id)).toHaveLength(1)
+    }
+    const targets = ids.map((id) => document.getElementById(id)?.getAttribute('data-testid'))
+    expect(targets).toContain(`inline-error-${field}`)
+    expect(el.getAttribute('aria-invalid')).toBe('true')
+  }
+
+  it.each([
+    {
+      name: 'path "" plus an error of the SMS body',
+      channel: 'sms',
+      errors: [fieldError('', 'internal_error'), fieldError('sms.body', 'sms_too_long', 160, 161)],
+      fields: ['sms-body'],
+      codes: { 'sms-body': ['sms_too_long'] },
+    },
+    {
+      name: 'payload_too_large on the SMS body plus a path "" error',
+      channel: 'sms',
+      errors: [fieldError('sms.body', 'payload_too_large'), fieldError('', 'internal_error')],
+      fields: ['sms-body'],
+      codes: { 'sms-body': ['payload_too_large'] },
+    },
+    {
+      name: 'path "" plus errors on both email fields',
+      channel: 'email',
+      errors: [
+        fieldError('', 'internal_error'),
+        fieldError('email.subject', 'subject_too_long', 80, 81),
+        fieldError('email.body', 'payload_too_large'),
+      ],
+      fields: ['email-subject', 'email-body'],
+      codes: { 'email-subject': ['subject_too_long'], 'email-body': ['payload_too_large'] },
+    },
+  ])(
+    '$name: unique ids, aria-describedby resolves to one element each',
+    ({ channel, errors, fields, codes }) => {
+      mountEditor({ channel, fieldErrors: errors, dirty: true })
+      assertUniqueIds()
+      for (const f of fields) {
+        assertDescribedBy(f)
+        const shown = [...document.querySelectorAll(sel(`inline-error-${f}`))].map((el) =>
+          el.getAttribute('data-code'),
+        )
+        for (const code of (codes as Record<string, string[]>)[f] ?? []) {
+          expect(shown).toContain(code)
+        }
+      }
+    },
+  )
+})
+
 describe('ContentEditor conflict (REQ-APR-03, D40)', () => {
   const conflict = { currentVersionId: V2, currentVersionNumber: 4 }
 
