@@ -13,10 +13,16 @@ info:
     Invalid query parameter values (e.g. `status=foo`, `channel=fax`, `limit=0`) => 422 `validation_failed`
     with field code `invalid_value` and path `query.<name>` (e.g. `query.status`, `query.channel`).
     Per-campaign generation lock: while a segment or content generation runs, generateSegment,
-    generateContent, editContent and approveContent return 409 `generation_in_progress`. The lock is
+    generateContent, editContent, approveContent and sendCampaign return 409 `generation_in_progress`. The lock is
     released when the generating request's context is cancelled (client disconnect) or at the latest
     after 120 s (campaign.MaxGenerationDuration, VARSAYIM).
-    SSE event payloads are specified in sse-events.md; LLM scenarios in llm-tools.md.
+    SSE event payloads are specified in sse-events.md and, machine-readably, by the components
+    ContentDeltaEvent, ContentInvalidEvent, ContentValidatedEvent (content stream) and CampaignStatus
+    (live status stream); LLM scenarios in llm-tools.md.
+    Check order shared by every operation with a path id, header and/or body (README.md §5.4):
+    (1) malformed path UUID => 404; (2) unknown X-Mock-LLM-Scenario (mock mode) => 422;
+    (3) body: unreadable/not JSON => 400, > 65536 bytes => 413, unknown/wrong-typed property or
+    malformed id => 422; (4) use case: unknown campaign 404, then the operation's own list.
 
     Drift guard (README.md §11): this multi-file spec is the hand-written source of truth and the code
     is checked against it. Every object schema is closed (`additionalProperties: false`), every status
@@ -233,21 +239,29 @@ paths:
         `invalid` with `final: true` (unless the client disconnects).
 
         Allowed states: audience_ready, content_ready, approved. Errors detected before the stream
-        opens are returned as JSON with the status codes below (no SSE). After HTTP 200 the
-        equivalent of 502 is the final `invalid` event.
+        opens are returned as JSON with the status codes below (no SSE); use-case order: 404
+        `campaign_not_found`, 409 `invalid_state`, 409 `generation_in_progress`, 502 `llm_unavailable`.
+        After HTTP 200 the equivalent of 502 is the final `invalid` event. HTTP 200 is written only
+        after LLM attempt 1 is connected; headers: `Content-Type: text/event-stream; charset=utf-8`,
+        `Cache-Control: no-cache`, `X-Accel-Buffering: no`. The `Accept` header is not negotiated
+        (always SSE). The client cancels by closing the connection (no cancel endpoint).
         Effects: `validated` => new version (status validated, source llm), state `content_ready`,
         active approval revoked (`content_changed`). Final `invalid` with a storable draft => new
         version with status `invalid` that does NOT become `latest_content_version`, does NOT revoke
         an approval and does NOT change the state (VARSAYIM, sse-events.md §1.2 #6). A concurrent
         generation for the same campaign => 409 `generation_in_progress` (reproducible with the
         `stalled_stream` mock scenario).
-      x-sse-events: { doc: sse-events.md, section: '§1', events: [delta, invalid, validated] }
+      x-sse-events:
+        doc: sse-events.md
+        section: '§1'
+        events: [delta, invalid, validated]
+        schemas: { delta: ContentDeltaEvent, invalid: ContentInvalidEvent, validated: ContentValidatedEvent }
       parameters:
         - $ref: '#/components/parameters/MockScenario'
       requestBody: { $ref: '#/components/requestBodies/EmptyBody' }
       responses:
         '200':
-          description: SSE stream (see sse-events.md §1). Not body-validated (x-sse-events); per-event schemas arrive in P4.
+          description: SSE stream (see sse-events.md §1). The body is not validated as a whole (x-sse-events); every event's `data` JSON validates against the schema named in `x-sse-events.schemas`.
           content:
             text/event-stream:
               schema: { type: string }
@@ -293,11 +307,17 @@ paths:
         Body follows schemas/content.schema.json (full content: sms.body, email.subject, email.body).
         Goes through exactly the same content.Parse + content.Validate(c, segment.longest_values) as LLM
         output: lengths are measured AFTER substituting every variable with the current segment's
-        longest values (REQ-CNT-01/05). Invalid content => 422 and NOTHING is stored. Allowed states: audience_ready, content_ready, approved
-        (draft, sending, completed => 409 invalid_state); while a generation runs => 409
-        `generation_in_progress`. On success: new version
-        (status validated, source edit, version_number = previous max + 1), state `content_ready`,
-        active approval revoked (`content_changed`).
+        longest values (REQ-CNT-01/05). Invalid content => 422 and NOTHING is stored; field paths are
+        `sms.body`, `email.subject`, `email.body` (a missing or unknown key is `schema_violation` at that
+        path, an empty/whitespace-only value is `required`; at most one error per field).
+        Use-case order: 404 `campaign_not_found`, 409 `generation_in_progress`, 409 `invalid_state`
+        (draft, sending, completed), then validation. Allowed states: audience_ready, content_ready,
+        approved. On success, in one transaction: new version
+        (status validated, source edit, version_number = highest existing number of ANY status + 1,
+        never reused, not reset by a new segment revision), state `content_ready`,
+        active approval revoked (`content_changed`). Identical text still creates a new version.
+        Two racing edits both succeed with consecutive numbers (serialized by the campaign row lock);
+        the later one is the latest. Existing versions are never modified.
         The response carries `worst_case` (post-substitution lengths) for the UI's second counter line.
       requestBody:
         required: true
@@ -343,6 +363,8 @@ paths:
       summary: Approve a content version (REQ-APR-01, REQ-APR-03, REQ-CNT-04, REQ-CNT-05)
       description: |
         Checks, in this order (first failure wins):
+        0. (before the checks below) body: unreadable/not JSON 400, > 65536 bytes 413, unknown or
+           missing property or malformed `content_version_id` 422 (`schema_violation` / `invalid_value`);
         1. campaign exists, else 404 `campaign_not_found`;
         2. version belongs to the campaign, else 404 `content_version_not_found`;
         2b. no generation running for the campaign, else 409 `generation_in_progress`;
@@ -359,8 +381,15 @@ paths:
            validate content, then `UPDATE customers SET first_name = <longer value> WHERE id = <matched id>`
            as the app role `scc_app`, then approve => 422). This mutation is FORBIDDEN in the shared
            seeded E2E database (it would change manifest counts for other tests).
-        Success: approval row bound to the version, state `approved`. Approving the already
-        approved version again is idempotent (200, same approval).
+        The 422 `fields[]` entries are `{path: "sms.body", code: "sms_too_long_worst_case", limit: 160,
+        actual: n}` and/or `{path: "email.subject", code: "subject_too_long_worst_case", limit: 80,
+        actual: n}`; nothing changes.
+        Success, in one transaction: approval row bound to the version, `campaigns.approved_content_version_id`
+        set, state `approved`. Approving the already approved version again (state `approved`, version
+        is still the latest validated) is idempotent: 200 with the unchanged Campaign, no new approval row,
+        `approved_at` unchanged, and check 6 is NOT run again. A newer version created in the meantime
+        makes the older one 409 `stale_content_version`. Racing with editContent the outcome is
+        sequential: approve first (then the edit revokes it) or edit first (then approve is stale).
       requestBody:
         required: true
         content:
@@ -388,6 +417,8 @@ paths:
       summary: Accept the send and create all deliveries atomically (REQ-SND-01, REQ-APR-01, REQ-AUD-04, REQ-SND-03)
       description: |
         Checks in order: 404 `campaign_not_found`; 404 `content_version_not_found`;
+        409 `generation_in_progress` (a content generation could otherwise persist into a campaign that
+        is already `sending`);
         state must be `approved`, else 409 `invalid_state` (no delivery row is created);
         `content_version_id` must equal the approved version, else 409 `stale_content_version`.
         Success, in ONE transaction: one delivery per (channel, customer) of the channel audiences
@@ -437,10 +468,14 @@ paths:
       operationId: streamCampaignEvents
       summary: Live delivery status over SSE, EventSource compatible (REQ-TRK-01)
       description: Events `snapshot`, `status`, `completed` (sse-events.md §2).
-      x-sse-events: { doc: sse-events.md, section: '§2', events: [snapshot, status, completed] }
+      x-sse-events:
+        doc: sse-events.md
+        section: '§2'
+        events: [snapshot, status, completed]
+        schemas: { snapshot: CampaignStatus, status: CampaignStatus, completed: CampaignStatus }
       responses:
         '200':
-          description: SSE stream (see sse-events.md §2). Not body-validated (x-sse-events); per-event schemas arrive in P4.
+          description: SSE stream (see sse-events.md §2). The body is not validated as a whole (x-sse-events); every event's `data` JSON validates against CampaignStatus.
           content:
             text/event-stream:
               schema: { type: string }
@@ -504,7 +539,11 @@ paths:
         modulo `sample_count`. Errors: no segment or no validated version => 409
         `invalid_state`; given version not in campaign => 404 `content_version_not_found`; given
         version has status invalid => 409 `content_not_validated`; given customer not matched by the
-        rule => 404 `customer_not_found`. `email.html` is content.RenderEmailHTML output: every
+        rule => 404 `customer_not_found`; malformed `customer_id`, `content_version_id` or negative /
+        non-integer `sample_index` => 422 `invalid_value` (path `query.<name>`). Allowed in every state
+        that has a segment and a validated version (including sending and completed). The render is
+        deterministic: same query, same stored data, same output. `sms.text` and `email.subject`/`email.text`
+        are plain text (never HTML); `email.html` is the only HTML and is escaped. `email.html` is content.RenderEmailHTML output: every
         template and variable fragment is HTML-escaped, it contains no element other than the
         fixed skeleton (no script element), and the UI shows it only in a sandboxed iframe.
       parameters:
@@ -624,13 +663,13 @@ components:
               - $ref: '#/components/schemas/ErrorResponse'
               - properties: { error: { properties: { code: { enum: [invalid_state, generation_in_progress] }, fields: { not: {} } } } }
     SendConflict:
-      description: '`invalid_state` (not approved, second send) or `stale_content_version`.'
+      description: '`invalid_state` (not approved, second send), `stale_content_version` or `generation_in_progress`.'
       content:
         application/json:
           schema:
             allOf:
               - $ref: '#/components/schemas/ErrorResponse'
-              - properties: { error: { properties: { code: { enum: [invalid_state, stale_content_version] }, fields: { not: {} } } } }
+              - properties: { error: { properties: { code: { enum: [invalid_state, stale_content_version, generation_in_progress] }, fields: { not: {} } } } }
     PreviewConflict:
       description: '`invalid_state` (no segment or no validated version) or `content_not_validated`.'
       content:
@@ -886,7 +925,10 @@ components:
       properties:
         id: { type: string, format: uuid }
         campaign_id: { type: string, format: uuid }
-        version_number: { type: integer, minimum: 1 }
+        version_number:
+          type: integer
+          minimum: 1
+          description: Per campaign, increasing, never reused, not reset by a new segment revision; stored `invalid` drafts consume a number too (validated versions may therefore skip numbers).
         segment_revision: { type: integer, minimum: 1 }
         status: { type: string, enum: [validated, invalid] }
         source: { type: string, enum: [llm, edit] }
@@ -910,6 +952,57 @@ components:
       else:
         properties:
           validation_errors: { minItems: 1 }
+
+    ContentDeltaEvent:
+      description: Data of SSE event `delta` (sse-events.md §1.1). Valid (channel, field) pairs are (sms, body), (email, subject), (email, body).
+      type: object
+      additionalProperties: false
+      required: [attempt, channel, field, text]
+      properties:
+        attempt: { type: integer, enum: [1, 2], description: '2 = repair attempt' }
+        channel: { $ref: '#/components/schemas/Channel' }
+        field: { type: string, enum: [body, subject] }
+        text: { type: string, minLength: 1, description: 'Non-empty chunk; concatenated in order per (attempt, channel, field).' }
+      allOf:
+        - if: { required: [channel], properties: { channel: { const: sms } } }
+          then: { properties: { field: { const: body } } }
+
+    ContentInvalidEvent:
+      description: |
+        Data of SSE event `invalid` (sse-events.md §1.1). `final: false` => end of attempt 1 (attempt is 1,
+        content_version_id is null) and the next `delta` carries attempt 2. `final: true` => terminal event;
+        content_version_id is set only when the last draft is structurally valid and was stored with
+        status `invalid`.
+      type: object
+      additionalProperties: false
+      required: [attempt, final, errors, content_version_id]
+      properties:
+        attempt: { type: integer, enum: [1, 2] }
+        final: { type: boolean }
+        errors:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/FieldError' }
+        content_version_id: { type: [string, 'null'], format: uuid }
+      if:
+        required: [final]
+        properties: { final: { const: false } }
+      then:
+        properties:
+          attempt: { const: 1 }
+          content_version_id: { type: 'null' }
+
+    ContentValidatedEvent:
+      description: Data of SSE event `validated` (sse-events.md §1.1), always the terminal event of a successful run; the version is already stored and the campaign is `content_ready`.
+      type: object
+      additionalProperties: false
+      required: [attempt, content_version_id, version_number, content, worst_case]
+      properties:
+        attempt: { type: integer, enum: [1, 2] }
+        content_version_id: { type: string, format: uuid }
+        version_number: { type: integer, minimum: 1 }
+        content: { $ref: '#/components/schemas/Content' }
+        worst_case: { $ref: '#/components/schemas/WorstCase' }
 
     Approval:
       type: object

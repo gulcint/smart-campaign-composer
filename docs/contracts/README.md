@@ -85,7 +85,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `invalid_state` | 409 | Kampanya durumu işleme izin vermiyor (onaysız gönderim, `sending`/`completed`'da düzenleme/üretim, ikinci gönderim, …) |
 | `content_not_validated` | 409 | `validated` olmayan sürümü onaylama/önizleme |
 | `stale_content_version` | 409 | En son sürüm olmayanı onaylama; onaylanandan farklı sürümle gönderim |
-| `generation_in_progress` | 409 | Aynı kampanyada segment/içerik üretimi sürerken üretim, içerik düzenleme veya onay isteği (kilit istemci koptuğunda veya en geç 120 sn sonra bırakılır) |
+| `generation_in_progress` | 409 | Aynı kampanyada segment/içerik üretimi sürerken üretim, içerik düzenleme, onay veya gönderim isteği (kilit istemci koptuğunda veya en geç 120 sn sonra bırakılır) |
 | `payload_too_large` | 413 | Gövde > 64 KiB |
 | `validation_failed` | 422 | Brief, içerik, segment kuralı, sorgu parametresi (`invalid_value`, path `query.<ad>`), senaryo başlığı veya onay-anı en kötü durum doğrulaması |
 | `llm_invalid_output` | 502 | Düzeltme denemesinden sonra da geçersiz LLM çıktısı (segment) |
@@ -108,8 +108,8 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `sms_too_long` | `sms.body` değişkenler en uzun değerlerle doldurulduktan sonra > 160 | `content.ErrSMSTooLong` |
 | `subject_too_long` | `email.subject` doldurulduktan sonra > 80 | `content.ErrSubjectTooLong` |
 | `email_body_too_long` | `email.body` doldurulduktan sonra > 5000 (VARSAYIM) | `content.ErrEmailBodyTooLong` |
-| `sms_too_long_worst_case` | Onay anındaki yeniden denetimde en kötü durum SMS > 160 | `content.ErrSMSTooLong` + `content.ErrWorstCaseTooLong` |
-| `subject_too_long_worst_case` | Onay anındaki yeniden denetimde en kötü durum konu > 80 | `content.ErrSubjectTooLong` + `content.ErrWorstCaseTooLong` |
+| `sms_too_long_worst_case` | Onay anındaki yeniden denetimde en kötü durum SMS > 160; yol `sms.body`, `limit` 160, `actual` = doldurulmuş uzunluk | `content.ErrSMSTooLong` + `content.ErrWorstCaseTooLong` |
+| `subject_too_long_worst_case` | Onay anındaki yeniden denetimde en kötü durum konu > 80; yol `email.subject`, `limit` 80 | `content.ErrSubjectTooLong` + `content.ErrWorstCaseTooLong` |
 | `unknown_variable` | İzinli olmayan `{{x}}` | `content.ErrUnknownVariable` |
 | `malformed_variable` | Bozuk `{{` söz dizimi | `content.ErrMalformedVariable` |
 | `unknown_field` | Segment alanı listede yok | `segment.ErrUnknownField` |
@@ -131,6 +131,39 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `llm.ErrUnavailable` | 502 `llm_unavailable` |
 | (router) bilinmeyen yol / desteklenmeyen metot | 404 `not_found` / 405 `method_not_allowed` |
 | diğer | 500 `internal_error` |
+
+### 5.4 Kontrol sırası ve P4 hata matrisi
+
+**Genel sıra** (P3'te uygulandı; her işlemde ilk başarısızlık kazanır): (1) path'teki UUID biçimsiz → 404 `campaign_not_found`; (2) yalnız `generateSegment`/`generateContent`: mock modunda bilinmeyen `X-Mock-LLM-Scenario` → 422 `invalid_value` (`header.X-Mock-LLM-Scenario`); (3) sorgu/gövde: okunamaz, JSON değil veya `Content-Type` JSON değil → 400; > 65536 bayt → 413; bilinmeyen/eksik/yanlış tipli alan veya biçimsiz kimlik → 422; (4) kullanım durumu: bilinmeyen kampanya → 404, ardından işlemin kendi sırası (aşağıda ve openapi açıklamalarında). Dolayısıyla bilinmeyen kampanyaya biçimsiz gövde gönderilirse 404 değil 400/413/422 döner.
+
+P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
+
+| İşlem | HTTP · `error.code` | `fields[]` (yol · kod) / ne zaman | UI |
+|---|---|---|---|
+| `generateContent` | 400 `malformed_request` | gövde var ama JSON değil | toast |
+| | 404 `campaign_not_found` | bilinmeyen kampanya | sayfa |
+| | 409 `invalid_state` | `draft`, `sending`, `completed` | toast + yeniden çek |
+| | 409 `generation_in_progress` | kilit tutuluyor | toast |
+| | 413 `payload_too_large` | gövde > 64 KiB | — |
+| | 422 `validation_failed` | `schema_violation` (gövdede `{}` dışında alan; yol = alan adı); `invalid_value` (`header.X-Mock-LLM-Scenario`) | `ErrorCard` |
+| | 502 `llm_unavailable` | stream açılmadan önce erişim yok | `ErrorCard` + "yeniden üret" |
+| | 200 SSE, son `invalid` | `invalid_json`, `schema_violation`, `truncated_output`, `no_tool_call` (yol alan adı veya `""`); `sms_too_long`, `subject_too_long`, `email_body_too_long`, `unknown_variable`, `malformed_variable`, `required`; `llm_unavailable`, `internal_error` (yol `""`) | `StreamingText` `invalid` |
+| `editContent` | 400, 413 | `generateContent` ile aynı | toast / satır içi |
+| | 404 `campaign_not_found` | | sayfa |
+| | 409 `generation_in_progress` › `invalid_state` | `invalid_state`: `draft`, `sending`, `completed` | toast |
+| | 422 `validation_failed` | `schema_violation` (eksik/fazla/yanlış tipli alan; yol alan veya fazla anahtar adı), `required` (boş/yalnız boşluk), `malformed_variable`, `unknown_variable`, `sms_too_long`, `subject_too_long`, `email_body_too_long` (yollar `sms.body`, `email.subject`, `email.body`) | satır içi |
+| `approveContent` | 400, 413 | | toast |
+| | 404 `campaign_not_found` › `content_version_not_found` | sürüm yok veya başka kampanyanın | sayfa / toast |
+| | 409 `generation_in_progress` › `content_not_validated` › `invalid_state` › `stale_content_version` | sıra openapi `approveContent`; `invalid_state`: `content_ready`/`approved` dışı | toast; `stale` → `ApprovalBar stale` |
+| | 422 `validation_failed` | `schema_violation` (eksik/fazla alan), `invalid_value` (`content_version_id` biçimsiz); `sms_too_long_worst_case` (`sms.body`), `subject_too_long_worst_case` (`email.subject`) | `ConfirmDialog` içinde |
+| `sendCampaign` | 404 `campaign_not_found` › `content_version_not_found`; 409 `generation_in_progress` › `invalid_state` › `stale_content_version`; 422 `invalid_value` | | toast |
+| `previewContent` | 404 `campaign_not_found` › `content_version_not_found` › `customer_not_found` | `sample_index` ≥ eşleşen sayı → `customer_not_found` | toast (uyarı) |
+| | 409 `invalid_state` › `content_not_validated` | segment/doğrulanmış sürüm yok; verilen sürüm `invalid` | önizleme `empty` |
+| | 422 `validation_failed` | `invalid_value`: `query.sample_index`, `query.customer_id`, `query.content_version_id` | — |
+| `listContentVersions` | 404 `campaign_not_found` | | sayfa |
+| `getContentVersion` | 404 `campaign_not_found` › `content_version_not_found` | | toast |
+
+Her satırda ayrıca 500 `internal_error` olabilir (toast). `fields[]` yalnız `validation_failed` ve `llm_invalid_output`'ta bulunur.
 
 ## 6. Ortam değişkenleri (tek liste)
 
@@ -189,7 +222,7 @@ Test türleri ve konumları `.claude/skills/writing-tests/SKILL.md` §4'tedir. G
 | REQ-CNT-01 | go-interfaces `content.Validate(c, Longest)` (doldurma **sonrası** uzunluk), `SMSMaxRunes`, `ErrSMSTooLong`, `RuneCount`; llm-tools §2; ui.md §3.13 |
 | REQ-CNT-02 | go-interfaces `content.Validate` (`SubjectMaxRunes`, `ErrSubjectTooLong`); ui.md §3.13 |
 | REQ-CNT-03 | go-interfaces `content.Variables`, `Render`, `EffectiveFirstName`, `FirstNameFallback`, `ErrUnknownVariable`, `ErrMalformedVariable`; openapi `previewContent`; seed `empty_first_name`; ui.md §3.12, §3.15 |
-| REQ-CNT-04 | sse-events §1; openapi `generateContent`; llm-tools `then_ok_after_repair`, `truncated_stream`, `stalled_stream`; openapi `approveContent` (409 `content_not_validated`); **ui.md §3.10, §3.17, §5.2** |
+| REQ-CNT-04 | sse-events §1 (§1.3.1 istemci kuralları, §1.3.2 kayıt tablosu); openapi `generateContent` + `ContentDeltaEvent`/`ContentInvalidEvent`/`ContentValidatedEvent`; llm-tools §3.5; llm-tools `then_ok_after_repair`, `truncated_stream`, `stalled_stream`; openapi `approveContent` (409 `content_not_validated`); **ui.md §3.10, §3.17, §5.2** |
 | REQ-CNT-05 | go-interfaces `content.Validate`, `MeasureWorstCase`, `CheckWorstCase`, `CheckRendered`, `Longest`; openapi `Segment.longest_values`, `ContentVersion.worst_case`, `approveContent` adım 6; db-schema `failure_reason = content_too_long`; seed `example_brief.longest_values`, `long_first_name`; ui.md §3.13 |
 | REQ-APR-01 | openapi `sendCampaign` (409, teslimat yok), `editContent`, `previewContent`, `approveContent`; **ui.md §3.14–3.18** |
 | REQ-APR-02 | openapi `editContent` (aynı `content.Parse`+`Validate`, 422); llm-tools §2; ui.md §3.14 |
@@ -256,6 +289,6 @@ Hepsi `DECISIONS.md`'ye gerekçesiyle yazılır.
 | `check-contract-copies` | `internal/httpapi/openapi/` kopyaları `docs/contracts/openapi.yaml` ve başvurulan `schemas/*.schema.json` ile bayt bayt aynı (`cmp`, `make lint` içinde) | kodu yazan |
 | Sıkı E2E doğrulama (`OPENAPI_VALIDATE=strict`) | E2E istemcisi her yanıtı (SSE gövdeleri hariç, `x-sse-events`) libopenapi-validator ile spec'e karşı doğrular; 2xx alan isteği de doğrular; bilinmeyen alan, yanlış tip, listelenmemiş durum kodu veya izinsiz hata kodu testi düşürür; uygulanmış her `operationId` en az bir kez çağrılır | test yazarı (`test/e2e`), `compose.test.yml` |
 
-**İnsan incelemesinde kalanlar** (araçlar denetlemez): hata kodlarının anlamı ve hangi durumda hangisinin seçildiği, kontrol sırası ("ilk hata kazanır"), sıralama/sayfalama anlamı, retry ve idempotency davranışı, SSE olay sırası ve anlamı (P4'te olay başına şemalar gelene kadar gövdeleri de), `X-Request-ID` başlığı, düzyazı dokümanlar (`*.md`) ile spec açıklamalarının tutarlılığı.
+**İnsan incelemesinde kalanlar** (araçlar denetlemez): hata kodlarının anlamı ve hangi durumda hangisinin seçildiği, kontrol sırası ("ilk hata kazanır"), sıralama/sayfalama anlamı, retry ve idempotency davranışı, SSE olay sırası ve anlamı (olay `data` gövdeleri P4'ten itibaren `ContentDeltaEvent`/`ContentInvalidEvent`/`ContentValidatedEvent`/`CampaignStatus` bileşenlerine karşı test yazarı tarafından doğrulanır; sıra ve anlam yine insan incelemesinde), `X-Request-ID` başlığı, düzyazı dokümanlar (`*.md`) ile spec açıklamalarının tutarlılığı.
 
 **İnceleme kuralı:** bir uç noktayı ekleyen, silen veya davranışını (yol, metot, gövde, durum kodu, hata kodu) değiştiren her PR, `openapi.yaml`'ı ve etkilenen `.md` sözleşmelerini **aynı PR'da** günceller; PR şablonundaki kutu işaretlenir. Spec'siz uç nokta değişikliği `api-routes` / sıkı E2E'de kırmızıya düşer; kırmızıyı spec'i koda uydurarak geçmek ancak mimar onayıyla olur.
