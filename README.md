@@ -59,11 +59,11 @@ stateDiagram-v2
 
 ## Parçalar ve neden böyle
 
-Düz çizgi `main`'de çalışan, "slice" etiketli olan yalnızca `slice/p3-audience` branch'inde olan, kesikli çizgi henüz yazılmamış parçadır.
+Düz çizgi `main`'de çalışan, kesikli çizgi henüz yazılmamış parçadır.
 
 ```mermaid
 flowchart LR
-  web["web (Vue)<br/>slice/p3"]
+  web["web (Vue)"]
   api["api"]
   llm["LLMClient<br/>Claude veya sahte"]
   db[("PostgreSQL<br/>kuyruk dahil")]
@@ -71,7 +71,7 @@ flowchart LR
   worker["worker<br/>planlandı, P5"]
   mock["mockprovider"]
 
-  web -. "HTTP, slice/p3" .-> api
+  web --> api
   api -. "canlı akış, P4/P5" .-> web
   api --> llm
   api --> db
@@ -97,25 +97,25 @@ Faz kapsamları: [`docs/PLAN.md`](docs/PLAN.md). Durum yalnızca koddan, git ge�
 | P0 Kurulum | ✅ bitti | Repo, hook'lar, CI, plan |
 | P1 Sözleşmeler | ✅ bitti | Gereksinimler, OpenAPI, şemalar, arayüz ve Go sözleşmeleri |
 | P2 Seed + altyapı | ✅ bitti | Seed, migration'lar, compose, LLM fabrikası ve sahte LLM, mock provider, `make test` |
-| P3 Kitle | 🟡 kısmen | Segment kuralı, kişi sayıları, brief ve kitle ekranları (`slice/p3-audience`'ta, `main`'e girmedi) |
+| P3 Kitle | ✅ bitti | Segment kuralı, kişi sayıları, brief ve kitle ekranları, API'nin sözleşmeden sapmaması için koruma |
 | P4 İçerik + onay | ⬜ başlamadı | SMS/email üretimi (SSE), limitler, düzenleme, onay |
 | P5 Gönderim + takip | ⬜ başlamadı | Kuyruk, hız sınırı, retry, canlı durum, dashboard |
 | P6 Sertleştirme + teslim | ⬜ başlamadı | Uçtan uca test, güvenlik taraması, son README ve DECISIONS |
 | Bonus | ⬜ başlamadı | Zamanlanmış gönderim, A/B varyantları, dile göre içerik |
-
-`main`'de bugün altyapı çalışır (veritabanı, seed, API'nin sağlık uçları, LLM katmanı, mock provider). Slice branch'i ayrıca Vue arayüzünü, Insider One logolu başlığı ve P3 testlerini içerir; henüz `main`'e girmedi, bu yüzden kampanya akışının hiçbir adımı `main`'de uçtan uca çalışmaz.
 
 ## Çalıştırma
 
 Gereken yalnızca Docker ve make.
 
 ```sh
-docker compose up   # veritabanı, seed, api, mock provider
+docker compose up   # veritabanı, seed, api, mock provider, web arayüzü
 make test           # tüm testler konteynerde, API key'siz
 make help           # diğer komutlar
 ```
 
 Yerelde `.env` dosyasına Claude anahtarı koyarsanız sistem gerçek Claude'u kullanır, koymazsanız sahte LLM çalışır. Örnek: [`.env.example`](.env.example).
+
+Bugün denenebilecek olan: `docker compose up` bitince tarayıcıda <http://127.0.0.1:8081> adresini açın ve örnek brief'i yazın ("Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder"); sistem segment kuralını ve kanal başına kaç kişiye ulaşılacağını gösterir. Anahtar yoksa cevabı sahte LLM verir, `.env`'ye anahtar koyarsanız gerçek Claude cevaplar. Henüz yapılamayanlar: mesaj içeriği üretimi ve onay (P4), gönderim ve canlı takip (P5).
 
 ## Nereden okunur
 
@@ -132,6 +132,7 @@ Yerelde `.env` dosyasına Claude anahtarı koyarsanız sistem gerçek Claude'u k
 - Claude anahtarı yalnızca yerel `.env` dosyasında durur; git'e girmez, hook'lar ve CI sızıntıyı tarar.
 - Yapay zeka SQL yazmaz; kural doğrulanır ve parametreli sorguya kod tarafından çevrilir.
 - Kanal izni olmayan kişiye o kanaldan mesaj gitmez.
+- API ile dokümanı CI aynı tutar: OpenAPI sözleşmedir, testler her istek ve cevabı ona göre doğrular.
 - Kimlik doğrulama yoktur; sistem yerel demo olarak yalnızca `127.0.0.1`'e açılır.
 - Henüz yok: mesaj üretimi ve onay (P4), gönderim ve canlı panel (P5), uçtan uca test ve güvenlik taraması (P6).
 - Bonuslar (zamanlanmış gönderim, A/B varyantları, dile göre içerik) başlamadı. Gerçek Claude istemcisi için otomatik test yoktur, elle doğrulandı ([`DECISIONS.md`](DECISIONS.md)).
