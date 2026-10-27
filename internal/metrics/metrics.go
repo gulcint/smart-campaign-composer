@@ -8,6 +8,7 @@ package metrics
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,45 @@ var (
 
 const scrapeTimeout = 2 * time.Second
 
+// Process-wide API series (metrics.md §1) that are incremented in the request path rather than
+// derived from the database. They are registered by NewAPIHandler.
+var (
+	httpRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "scc_http_requests_total", Help: "HTTP responses by method, route template and status.",
+	}, []string{"method", "route", "status"})
+	httpDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "scc_http_request_duration_seconds", Help: "HTTP response time by method and route template (SSE routes excluded).",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"method", "route"})
+	llmRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "scc_llm_requests_total", Help: "LLM attempts by operation, provider and outcome.",
+	}, []string{"operation", "provider", "outcome"})
+	llmRepairs = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "scc_llm_repairs_total", Help: "Repair attempts (attempt 2) started, by operation.",
+	}, []string{"operation"})
+)
+
+// ObserveHTTPRequest counts one HTTP response. route is the route template (e.g.
+// "/api/campaigns/{campaign_id}"), never the raw path. Streaming responses are counted but not
+// timed.
+func ObserveHTTPRequest(method, route string, status int, d time.Duration, streaming bool) {
+	httpRequests.WithLabelValues(method, route, strconv.Itoa(status)).Inc()
+	if !streaming {
+		httpDuration.WithLabelValues(method, route).Observe(d.Seconds())
+	}
+}
+
+// ObserveLLMAttempt counts one LLM attempt; operation is "segment" or "content", outcome is
+// "valid", "invalid" or "unavailable".
+func ObserveLLMAttempt(operation, provider, outcome string) {
+	llmRequests.WithLabelValues(operation, provider, outcome).Inc()
+}
+
+// ObserveLLMRepair counts one started repair attempt.
+func ObserveLLMRepair(operation string) {
+	llmRepairs.WithLabelValues(operation).Inc()
+}
+
 // NewAPIHandler serves /metrics for cmd/api (metrics.md §1); DB-derived series are collected at
 // scrape time. If the database cannot be read, the DB-derived series are omitted from that scrape.
 func NewAPIHandler(src DeliveryStatsSource) http.Handler {
@@ -48,6 +88,7 @@ func NewAPIHandler(src DeliveryStatsSource) http.Handler {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		newDBCollector(src),
+		httpRequests, httpDuration, llmRequests, llmRepairs,
 	)
 	return contentType(promhttp.HandlerFor(reg, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
 }

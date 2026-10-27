@@ -1,0 +1,247 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import './styles/tokens.css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* Layer 3: Tailwind utilities generated from the role tokens (DESIGN.md §6.3). */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-accent-text: var(--text-accent);
+  --color-accent-heading: var(--text-accent-heading);
+  --color-accent-display: var(--text-accent-display);
+  --color-accent-numeral: var(--text-accent-numeral);
+  --color-accent-hover: var(--text-accent-hover);
+  --color-brand: var(--brand-graphic);
+  --color-brand-line: var(--brand-line);
+  --color-brand-icon: var(--brand-icon-line);
+
+  --color-ink-900: var(--ink-900);
+  --color-ink-700: var(--ink-700);
+  --color-ink-600: var(--ink-600);
+  --color-ink-500: var(--ink-500);
+  --color-ink-300: var(--ink-300);
+  --color-ink-200: var(--ink-200);
+  --color-ink-100: var(--ink-100);
+
+  --color-surface-page: var(--surface-page);
+  --color-surface-card: var(--surface-card);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-bubble-user: var(--surface-bubble-user);
+  --color-bubble-ai: var(--surface-bubble-ai);
+  --color-track: var(--track);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
+
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-error: var(--error);
+  --color-error-bg: var(--error-bg);
+  --color-error-strong: var(--error-strong);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-neutral-status: var(--neutral-status);
+  --color-neutral-status-bg: var(--neutral-status-bg);
+  --color-brand-status: var(--brand-status);
+  --color-brand-status-bg: var(--brand-status-bg);
+
+  --color-sms: var(--channel-sms);
+  --color-sms-text: var(--channel-sms-text);
+  --color-sms-bg: var(--channel-sms-bg);
+  --color-email: var(--channel-email);
+  --color-email-text: var(--channel-email-text);
+  --color-email-bg: var(--channel-email-bg);
+
+  --font-sans: 'Figtree Variable', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --radius-pill: var(--radius-pill);
+  --radius-card: var(--radius-card);
+  --radius-card-lg: var(--radius-card-lg);
+  --radius-bubble: var(--radius-bubble);
+  --radius-input: var(--radius-input);
+  --radius-sm: var(--radius-sm);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-cta: var(--shadow-cta);
+  --shadow-cta-hover: var(--shadow-cta-hover);
+  --shadow-focus: var(--shadow-focus);
+
+  --ease-standard: var(--ease-standard);
+  --ease-emphasized: var(--ease-emphasized);
+}
+
+/* Type scale (DESIGN.md §4.3) */
+@utility text-display {
+  font-size: 32px;
+  line-height: 40px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  @media (width >= 48rem) {
+    font-size: 44px;
+    line-height: 52px;
+  }
+}
+@utility text-h1 {
+  font-size: 26px;
+  line-height: 34px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  @media (width >= 48rem) {
+    font-size: 32px;
+    line-height: 40px;
+  }
+}
+@utility text-h2 {
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+@utility text-h3 {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+@utility text-h4 {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+}
+@utility text-body-lg {
+  font-size: 18px;
+  line-height: 28px;
+}
+@utility text-body {
+  font-size: 16px;
+  line-height: 24px;
+}
+@utility text-body-sm {
+  font-size: 14px;
+  line-height: 20px;
+}
+@utility text-caption {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+@utility text-overline {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+@utility text-numeral-xl {
+  font-size: 40px;
+  line-height: 44px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+@utility text-numeral-md {
+  font-size: 24px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+@utility text-numeral-sm {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+@utility bg-gradient-cta {
+  background-image: var(--gradient-cta);
+}
+@utility bg-gradient-cta-hover {
+  background-image: var(--gradient-cta-hover);
+}
+@utility bg-gradient-brand {
+  background-image: var(--gradient-brand-vivid);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    font-family: var(--font-sans);
+    color: var(--ink-700);
+    background-color: var(--surface-page);
+    background-image: var(--gradient-page);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    min-height: 100dvh;
+    @apply text-body;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: var(--ink-900);
+  }
+  a {
+    color: var(--text-accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  a:hover {
+    color: var(--text-accent-hover);
+  }
+  /* Transparent outline keeps a visible ring in forced-colors mode. */
+  :focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: var(--shadow-focus);
+  }
+  ::placeholder {
+    color: var(--ink-500);
+    opacity: 1;
+  }
+}
+
+.sr-only-focusable:not(:focus) {
+  @apply sr-only;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

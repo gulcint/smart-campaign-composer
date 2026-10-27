@@ -236,8 +236,11 @@ type Rule struct{ Root Node }
 func (r Rule) MarshalJSON() ([]byte, error)
 
 // Parse decodes a document of the form {"rule": <group>} (the emit_segment_rule tool input and
-// the POST /api/segments/count body). Structural checks only. Errors: *validation.Error matching
-// validation.ErrInvalidJSON or validation.ErrSchemaViolation.
+// the POST /api/segments/count body). Structural checks only, in one linear pass; it does not walk
+// past the limits: a group nested deeper than MaxDepth+1 => max_depth_exceeded (path of the first
+// group over MaxDepth, as Validate), more than MaxConditions+1 conditions => max_conditions_exceeded
+// (path "rule"). At most 20 field errors. Errors: *validation.Error matching
+// validation.ErrInvalidJSON or validation.ErrSchemaViolation (or those two limit sentinels).
 func Parse(raw []byte) (Rule, error)
 
 // Validate performs semantic checks and returns nil or a *validation.Error with every problem
@@ -1449,7 +1452,32 @@ type Deps struct {
 // New returns the full router of openapi.yaml (including /healthz, /readyz, /metrics,
 // body limit 64 KiB, X-Request-ID, error mapping).
 func New(d Deps) http.Handler
+
+// Route is one method + path template the router registers. Template uses the OpenAPI
+// `{name}` syntax exactly as the key under `paths:` in openapi.yaml (e.g.
+// "/api/campaigns/{campaign_id}/segment"); Method is upper case ("GET", "POST").
+type Route struct {
+	Method, Template string
+}
+
+// Routes returns every route New registers, sorted by Template, then Method. It is a pure
+// function of the code (independent of Deps: /metrics is listed even when Deps.Metrics is nil)
+// and lists only explicitly registered methods (the implicit HEAD-on-GET fallback is not a route).
+func Routes() []Route
+
+// OpenAPI is the embedded copy of the contract (openapi.yaml + schemas/*.schema.json under
+// internal/httpapi/openapi/, same relative layout as docs/contracts/). Byte-identical to
+// docs/contracts/ by `make check-contract-copies`.
+var OpenAPI embed.FS
 ```
+
+### Rota tablosu ve sözleşme kapsamı (API ↔ doc sapma koruması, README §11)
+
+- **Tek tablo:** `New` rotalarını `Routes()`'un döndürdüğü **aynı** paket düzeyi tablodan (ör. `[]struct{Route; handler func(*api) http.Handler}`) kaydeder; `New` içinde tablo dışı `handle(...)` çağrısı yoktur. Böylece `Routes()` router'dan sapamaz. Bir faz yeni uç nokta eklerken tabloya satır ekler ve aynı PR'da `openapi.yaml`'ı günceller.
+- **`api-routes` (test yazarı, `test/contract`):** `httpapi.Routes()` ile `openapi.yaml`'ın `paths × method` kümesi **iki yönlü** eşit olmalıdır: her spec operasyonunun bir rotası, her rotanın bir spec operasyonu vardır. İki SSE operasyonu (`generateContent`, `streamCampaignEvents`) dahildir. Faz içinde henüz yazılmamış operasyonlar için tek izinli istisna `test/contract/allowlist.go`'daki faz başına liste (`operationId` → faz; ör. P3'te `generateContent` … `previewContent` "P4/P5"); listedeki bir operasyonun rotası **varsa** test yine başarısız olur (liste temizlenmeli). Faz kapısında (slice → main) liste o fazın operasyonlarını içeremez.
+- **`operationId` kapsamı (test yazarı, E2E):** sıkı doğrulama açıkken (`OPENAPI_VALIDATE=strict`) E2E istemcisi her istek/yanıt çiftini spec'e karşı doğrular ve eşleşen `operationId`'yi kaydeder; paket sonunda (`TestMain`) **uygulanmış her operasyon en az bir kez çağrılmış** olmalıdır (aynı faz izin listesi hariç). Yanıt gövdesi her zaman doğrulanır (SSE hariç, `x-sse-events`); istek gövdesi yalnız yanıt 2xx ise doğrulanır (testlerin bilerek gönderdiği geçersiz istekler 4xx almalıdır; geçersiz isteğe 2xx bir hatadır). Operasyona ait olmayan router yanıtları (bilinmeyen yol 404, desteklenmeyen metot 405) `components.responses.RouteNotFound` / `MethodNotAllowed` şemasına karşı doğrudan doğrulanır.
+- **Spec'in okunduğu yer:** testler doğruluk kaynağını diskten okur: `OPENAPI_SPEC_PATH` (test konteynerinde `/src/docs/contracts/openapi.yaml`; Dockerfile `test` aşaması kaynağı `/src` altına kopyalar), boşsa modül kökü (`go.mod`'u içeren dizin) + `docs/contracts/openapi.yaml`. Yükleme `libopenapi` ile `DocumentConfiguration{BasePath: <spec dizini>, AllowFileReferences: true}`; `schemas/*.schema.json` göreli `$ref`'leri bu dizine göre çözülür. `LocalFS` (`fs.FS`) modu kullanılmaz: libopenapi v0.41.3'te dış dosya içindeki `#/$defs/...` referanslarını çözemiyor (P3'te denendi). `httpapi.OpenAPI` (embed) okunacaksa önce `os.CopyFS(t.TempDir(), sub)` ile diske açılır, sonra aynı `BasePath` yolu.
+- **`go:embed` kısıtı:** `go:embed` paket dizininin dışını (`../../docs`) gömemez; bu yüzden `internal/httpapi/openapi/` altında birebir kopya tutulur (`openapi.yaml`, `schemas/segment-rule.schema.json`, `schemas/content.schema.json`) ve `make check-contract-copies` bunları `cmp` ile `docs/contracts/` karşılıklarıyla karşılaştırır (`check-tool-schemas` deseni; `make lint` ikisini de çağırır). Kopya elle düzenlenmez; değişiklik önce `docs/contracts/`'ta yapılır, sonra kopyalanır.
 
 Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clock.Fake`, `httptest.ResponseRecorder`/`httptest.Server`):
 

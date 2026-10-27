@@ -76,6 +76,13 @@ services:
       MOCK_PROVIDER_ADDR: ":8090"
       MOCK_PROVIDER_ADMIN: "true"
 
+  # Vitest for web/tests (docs/contracts/ui.md §0): Node image of web/Dockerfile, no services.
+  web-test:
+    build:
+      context: ./web
+      target: test
+    image: scc-web:test
+
   test:
     build:
       context: .
@@ -88,6 +95,10 @@ services:
       TEST_MIGRATE_DATABASE_URL: postgres://scc_migrator:scc_migrator_test@db:5432/scc_test?sslmode=disable
       E2E_API_URL: http://api:8080
       E2E_MOCKPROVIDER_URL: http://mockprovider:8090
+      # Drift guard (contracts README §11): the E2E client validates every response against the
+      # spec read from disk; the Dockerfile test stage copies the sources (docs/ included) to /src.
+      OPENAPI_VALIDATE: strict
+      OPENAPI_SPEC_PATH: /src/docs/contracts/openapi.yaml
     depends_on:
       db:
         condition: service_healthy

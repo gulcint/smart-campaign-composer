@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gulcint/smart-campaign-composer/docs/contracts/schemas/segment-rule.schema.json",
+  "title": "SegmentRuleToolInput",
+  "description": "Input of the emit_segment_rule tool and body of POST /api/segments/count. Root is an object with a single 'rule' property. The rule tree is unrolled to depth 3 (group1 > group2 > group3); no recursion. Semantic limits that JSON Schema cannot express (max 10 conditions in total, operator-per-type table, value ranges, enum members) are enforced by the backend validator, see segment-dsl.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rule"
+  ],
+  "properties": {
+    "rule": {
+      "$ref": "#/$defs/group1"
+    }
+  },
+  "$defs": {
+    "fieldName": {
+      "type": "string",
+      "description": "Yalnızca yapı denetlenir (string). İzinli adlar: city, language, loyalty_tier, last_cart_add_at, last_purchase_at, orders_30d, cart_adds_30d, total_orders, total_spent. Listede olmayan ad `segment.Validate`'te `unknown_field` olur; enum yalnızca modele giden strict varyantta (schemas/llm/) bulunur."
+    },
+    "operator": {
+      "type": "string",
+      "description": "Yalnızca yapı denetlenir (string). İzinli adlar: eq, neq, in, not_in, gt, gte, lt, lte, between, within_last, older_than, is_null, is_not_null. Listede olmayan ad `segment.Validate`'te `unknown_operator` olur; enum yalnızca modele giden strict varyantta (schemas/llm/) bulunur."
+    },
+    "relativeDays": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "days"
+      ],
+      "properties": {
+        "days": {
+          "type": "integer"
+        }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min",
+        "max"
+      ],
+      "properties": {
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
+      }
+    },
+    "value": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "$ref": "#/$defs/relativeDays"
+        },
+        {
+          "$ref": "#/$defs/range"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "op"
+      ],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/fieldName"
+        },
+        "op": {
+          "$ref": "#/$defs/operator"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      }
+    },
+    "group3": {
+      "description": "Deepest group level: children are conditions only.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 10,
+              "items": {
+                "$ref": "#/$defs/condition"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ],
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 10,
+              "items": {
+                "$ref": "#/$defs/condition"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/condition"
+            }
+          }
+        }
+      ]
+    },
+    "group2": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 10,
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/condition"
+                  },
+                  {
+                    "$ref": "#/$defs/group3"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ],
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 10,
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/condition"
+                  },
+                  {
+                    "$ref": "#/$defs/group3"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/condition"
+                },
+                {
+                  "$ref": "#/$defs/group3"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "group1": {
+      "description": "Root group (depth 1). The root must be a group, never a bare condition.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 10,
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/condition"
+                  },
+                  {
+                    "$ref": "#/$defs/group2"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ],
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 10,
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/condition"
+                  },
+                  {
+                    "$ref": "#/$defs/group2"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/condition"
+                },
+                {
+                  "$ref": "#/$defs/group2"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

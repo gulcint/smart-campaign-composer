@@ -1,0 +1,135 @@
+/*
+ * Design tokens (DESIGN.md §3–§6). Every raw value lives here; components use the role
+ * tokens (layer 2) or the Tailwind utilities generated from them (layer 3), never hex
+ * values and never --orange-* directly for text (§4.1).
+ */
+:root {
+  /* --- Layer 1: raw palette --- */
+  --orange-50: #fdf1ec;
+  --orange-100: #f4ddd7;
+  --orange-200: #f1c7ba;
+  --orange-300: #f3967f;
+  --orange-400: #f66850;
+  --orange-500: #f4462a;
+  --orange-600: #d63a1e;
+  --orange-700: #b83015;
+  --orange-800: #9c2812;
+  --red-cta-end: #c42a26;
+
+  --ink-900: #241c20;
+  --ink-700: #3c2c2c;
+  --ink-600: #5e5054;
+  --ink-500: #66585c;
+  --ink-300: #b8adb2;
+  --ink-200: #ded5d3;
+  --ink-100: #efefed;
+  --ink-50: #f6f6f4;
+
+  --white: #ffffff;
+
+  /* --- Surfaces and gradients (§3.3) --- */
+  --surface-page: #efeae4;
+  --gradient-page: linear-gradient(180deg, #efdbd2 0%, #f0e3db 45%, #efeae4 100%);
+  --surface-card: #fcfcf9;
+  --surface-raised: var(--white);
+  --surface-bubble-user: var(--orange-100);
+  --surface-bubble-ai: var(--surface-card);
+  --surface-sunken: #f4efeb;
+  --track: #efefed;
+  --border-subtle: #f0ebe6;
+  --border-default: #e4dad5;
+  --gradient-brand-vivid: linear-gradient(180deg, #fa5b23 0%, #ea2d2b 100%);
+  --gradient-cta: linear-gradient(180deg, var(--orange-600) 0%, var(--red-cta-end) 100%);
+  --gradient-cta-hover: linear-gradient(180deg, #c8361b 0%, #b02322 100%);
+
+  /* --- Semantic status colours (§3.4) --- */
+  --success: #17673f;
+  --success-bg: #e3f2ea;
+  --warning: #855000;
+  --warning-bg: #fbefd9;
+  --error: #b4233c;
+  --error-bg: #fbe4e8;
+  --error-strong: #9c1f35;
+  --info: #2557a8;
+  --info-bg: #e4ecf8;
+  --neutral-status: #66585c;
+  --neutral-status-bg: #efeae7;
+  --brand-status: var(--orange-700);
+  --brand-status-bg: var(--orange-50);
+
+  /* --- Channel colours (§3.5) --- */
+  --channel-sms: #0e7c7e;
+  --channel-sms-text: #0b6668;
+  --channel-sms-bg: #e1f1f1;
+  --channel-email: #3b5bdb;
+  --channel-email-text: #3049b8;
+  --channel-email-bg: #e6eafb;
+
+  /* --- Layer 2: orange text role tokens (§4.1), preset "accent" (default) --- */
+  --text-accent: var(--orange-700);
+  --text-accent-heading: var(--orange-700);
+  --text-accent-display: var(--orange-600);
+  --text-accent-numeral: var(--orange-700);
+  --text-accent-hover: var(--orange-800);
+
+  /* Decorative (non-text) brand roles: bars, caret, icon fills, focus ring */
+  --brand-graphic: var(--orange-500);
+  --brand-ring: var(--orange-600);
+  --brand-line: var(--orange-200);
+  --brand-icon-line: var(--orange-300);
+
+  /* --- Shape (§5) --- */
+  --radius-pill: 9999px;
+  --radius-card: 16px;
+  --radius-card-lg: 20px;
+  --radius-bubble: 12px;
+  --radius-input: 12px;
+  --radius-sm: 8px;
+
+  --shadow-card: 0 1px 2px rgb(36 28 32 / 0.04), 0 8px 24px rgb(36 28 32 / 0.06);
+  --shadow-raised: 0 2px 4px rgb(36 28 32 / 0.06), 0 16px 40px rgb(36 28 32 / 0.12);
+  --shadow-cta: 0 6px 16px rgb(196 42 38 / 0.28);
+  --shadow-cta-hover: 0 8px 20px rgb(196 42 38 / 0.34);
+  --shadow-focus: 0 0 0 2px var(--surface-card), 0 0 0 4px var(--brand-ring);
+
+  /* --- Motion (§5) --- */
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --dur-bar: 600ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+
+  /* --- shadcn-vue role names (§6.3) --- */
+  --background: var(--surface-page);
+  --foreground: var(--ink-700);
+  --card: var(--surface-card);
+  --card-foreground: var(--ink-700);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--ink-900);
+  --primary: var(--orange-600);
+  --primary-foreground: var(--white);
+  --secondary: var(--orange-50);
+  --secondary-foreground: var(--orange-700);
+  --muted: var(--surface-sunken);
+  --muted-foreground: var(--ink-500);
+  --accent: var(--orange-50);
+  --accent-foreground: var(--orange-700);
+  --destructive: var(--error);
+  --border: var(--border-default);
+  --input: var(--ink-200);
+  --ring: var(--orange-600);
+  --radius: 1rem;
+}
+
+/* Only display + numerals stay orange (§4.1). */
+:root[data-accent-text='minimal'] {
+  --text-accent-heading: var(--ink-900);
+  --text-accent: var(--ink-900);
+  --text-accent-hover: var(--ink-700);
+}
+
+/* Body emphasis orange too; card headings use the large-text orange. */
+:root[data-accent-text='bold'] {
+  --text-accent-heading: var(--orange-600);
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gulcint/smart-campaign-composer/docs/contracts/schemas/content.schema.json",
+  "title": "CampaignContent",
+  "description": "Input of the emit_campaign_content tool AND request body of POST /api/campaigns/{campaign_id}/content-versions (human edit). Both go through the same backend validator (content.Validate). Length limits (sms.body <= 160, email.subject <= 80, email.body <= 5000 Unicode code points of the template text) and template-variable rules are NOT expressed as maxLength/pattern here on purpose: the backend reports them with specific field error codes (sms_too_long, subject_too_long, email_body_too_long, unknown_variable, malformed_variable). See llm-tools.md and go-interfaces.md#content.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sms", "email"],
+  "properties": {
+    "sms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body"],
+      "properties": {
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}."
+        }
+      }
+    },
+    "email": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "body"],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Plain-text email subject template. At most 80 Unicode characters after personalization."
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters."
+        }
+      }
+    }
+  }
+}

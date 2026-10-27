@@ -1,15 +1,23 @@
 // Package campaign is the campaign use-case layer behind the HTTP API.
 //
-// P2 provides the domain types and the Service port that internal/httpapi
-// depends on; the state machine and the service implementation arrive with the
-// audience, content and delivery slices (P3–P5).
+// It holds the domain types, the pure state machine, the Service port that internal/httpapi
+// depends on and its implementation (service.go). P3 implements campaign creation, reading and
+// segment generation (draft -> audience_ready); content, approval and delivery use cases arrive
+// with the P4/P5 slices.
 package campaign
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/gulcint/smart-campaign-composer/internal/composer"
 	"github.com/gulcint/smart-campaign-composer/internal/content"
@@ -39,8 +47,87 @@ var (
 	ErrGenerationInProgress   = errors.New("campaign: generation in progress")    // 409 generation_in_progress
 )
 
+// Event is an input of the campaign state machine.
+type Event string
+
+const (
+	EventSegmentGenerated   Event = "segment_generated"   // valid rule stored
+	EventContentValidated   Event = "content_validated"   // new validated version (LLM or edit)
+	EventContentInvalid     Event = "content_invalid"     // invalid LLM draft stored (failed (re)generation)
+	EventApproved           Event = "approved"            // a validated version was approved
+	EventSendAccepted       Event = "send_accepted"       // deliveries created
+	EventDeliveriesFinished Event = "deliveries_finished" // no queued/sending delivery left
+)
+
+// Transition is the pure state machine (requirements "Kampanya durum makinesi").
+//
+//	segment_generated:   draft|audience_ready|content_ready|approved -> audience_ready
+//	content_validated:   audience_ready|content_ready|approved      -> content_ready
+//	content_invalid:     audience_ready|content_ready|approved      -> unchanged
+//	approved:            content_ready|approved -> approved
+//	send_accepted:       approved -> sending
+//	deliveries_finished: sending -> completed
+//
+// Any other pair => ErrInvalidState.
+func Transition(from State, ev Event) (State, error) {
+	in := func(states ...State) bool { return slices.Contains(states, from) }
+	switch ev {
+	case EventSegmentGenerated:
+		if in(StateDraft, StateAudienceReady, StateContentReady, StateApproved) {
+			return StateAudienceReady, nil
+		}
+	case EventContentValidated:
+		if in(StateAudienceReady, StateContentReady, StateApproved) {
+			return StateContentReady, nil
+		}
+	case EventContentInvalid:
+		if in(StateAudienceReady, StateContentReady, StateApproved) {
+			return from, nil
+		}
+	case EventApproved:
+		if in(StateContentReady, StateApproved) {
+			return StateApproved, nil
+		}
+	case EventSendAccepted:
+		if from == StateApproved {
+			return StateSending, nil
+		}
+	case EventDeliveriesFinished:
+		if from == StateSending {
+			return StateCompleted, nil
+		}
+	}
+	return from, fmt.Errorf("%w: %s on %s", ErrInvalidState, ev, from)
+}
+
 // BriefMaxRunes is the brief length limit (REQ-AUD-05).
 const BriefMaxRunes = 2000
+
+// MaxGenerationDuration bounds one segment or content generation (VARSAYIM). The per-campaign
+// generation lock is released when the request context is cancelled or, at the latest, after
+// this duration. While the lock is held, GenerateSegment, StartContentGeneration, EditContent and
+// Approve return ErrGenerationInProgress.
+const MaxGenerationDuration = 120 * time.Second
+
+// NormalizeBrief NFC-normalizes and trims s. Errors (*validation.Error, path "brief"):
+// empty => code "required" (matches validation.ErrRequired); > 2000 runes => code "too_long"
+// (matches validation.ErrTooLong).
+func NormalizeBrief(s string) (string, error) {
+	b := strings.TrimSpace(norm.NFC.String(s))
+	if b == "" {
+		return "", &validation.Error{Fields: []validation.FieldError{{
+			Path: "brief", Code: validation.CodeRequired, Message: "brief must not be empty", Err: validation.ErrRequired,
+		}}}
+	}
+	if n := utf8.RuneCountInString(b); n > BriefMaxRunes {
+		limit, actual := BriefMaxRunes, n
+		return "", &validation.Error{Fields: []validation.FieldError{{
+			Path: "brief", Code: validation.CodeTooLong, Message: "brief exceeds " + strconv.Itoa(BriefMaxRunes) + " characters",
+			Limit: &limit, Actual: &actual, Err: validation.ErrTooLong,
+		}}}
+	}
+	return b, nil
+}
 
 // ---- Domain structs: JSON encoding of each is EXACTLY the OpenAPI schema of the same name ----
 

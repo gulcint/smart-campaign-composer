@@ -39,13 +39,22 @@ var ErrOutboundBlocked = errors.New("testenv: outbound network request blocked i
 var allowedHostEnv = []string{"E2E_API_URL", "E2E_MOCKPROVIDER_URL"}
 
 // Main installs the network guard, refuses a real LLM client and then runs the tests.
-func Main(m *testing.M) {
+func Main(m *testing.M) { MainThen(m, nil) }
+
+// MainThen is Main with a hook that runs after the tests and returns the final exit code (it may
+// turn a passing run into a failing one, e.g. the E2E operationId coverage check of
+// docs/contracts/README.md §11). A nil hook keeps m.Run's code.
+func MainThen(m *testing.M, after func(code int) int) {
 	installNetworkGuard(os.Getenv)
 	if err := checkLLM(os.Getenv); err != nil {
 		fmt.Fprintf(os.Stderr, "testenv: %v\n", err)
 		os.Exit(1)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if after != nil {
+		code = after(code)
+	}
+	os.Exit(code)
 }
 
 // checkLLM builds the LLM client exactly as the configuration in the environment asks for.

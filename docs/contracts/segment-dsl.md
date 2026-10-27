@@ -93,7 +93,7 @@ Kurallar:
 1. `$1` her zaman `ref`'tir (`Args[0] == ref`, `time.Time`, UTC).
 2. Alan → SQL ifadesi eşlemesi **sabit tablodur** (`city` → `c.city`, `orders_30d` → `s.orders_30d`, …); alan adı asla kullanıcı/LLM metninden SQL'e kopyalanmaz.
 3. Her değer yeni bir `$n` parametresidir (`$2`, `$3`, …, soldan sağa, derinlik öncelikli sırayla). `in` dizisi tek parametre olarak `= ANY($n)` (`text[]`) ile geçer.
-4. `within_last` → `s.last_cart_add_at >= $1 - make_interval(days => $n) AND s.last_cart_add_at <= $1`.
+4. `within_last` → `s.last_cart_add_at >= $1 - make_interval(hours => $n * 24) AND s.last_cart_add_at <= $1` (gün = tam 24 saat, oturum saat diliminden bağımsız; uygulama oturumları UTC'dir).
 5. `all` → `( a AND b )`, `any` → `( a OR b )`, `not` → `NOT ( a )`.
 6. `Where` metninde **hiçbir kural değeri bulunmaz** (test: zararlı değer `Args` içinde aynen yer alır, `Where` içinde geçmez).
 
@@ -169,6 +169,6 @@ Brief: "Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'da
 | 17 | `{"rule":{"all":[{"field":"total_spent","op":"between","value":{"min":10,"max":5}}]}}` | Red | `rule.all[0].value` | `invalid_value` |
 | 18 | Geçersiz JSON metni (`{"rule": {"all": [ ,]}}`) | Red | `` (boş) | `invalid_json` |
 
-Path biçimi: noktalı alan adları + köşeli parantezli dizin, kök `rule` (gövde düzeyindeki bilinmeyen anahtar için anahtarın kendisi, ör. `sql`). Derinlik hatası, sınırı aşan **ilk düğümün** path'ini taşır; koşul sayısı hatası `rule` path'ini taşır.
+Path biçimi: noktalı alan adları + köşeli parantezli dizin, kök `rule` (gövde düzeyindeki bilinmeyen anahtar için anahtarın kendisi, ör. `sql`; 64 karakterden uzun veya `[A-Za-z_][A-Za-z0-9_]*` biçiminde olmayan bilinmeyen anahtar adı path'e yazılmaz, yerine sabit `_invalid_key_` gelir). Bir belge en çok 20 alan hatası döner. Derinlik hatası, sınırı aşan **ilk düğümün** path'ini taşır; koşul sayısı hatası `rule` path'ini taşır.
 
-Bir kural birden çok hata içerebilir; `Validate` hepsini toplar (sıra: derinlik-öncelikli gezinme sırası). `max_conditions_exceeded` ve `max_depth_exceeded` kontrolleri alan/operatör kontrollerinden **önce** yapılır ve bunlardan biri varsa diğer kontroller atlanır (büyük girdilerde maliyet sınırı).
+Bir kural birden çok hata içerebilir; `Validate` hepsini toplar (sıra: derinlik-öncelikli gezinme sırası). `max_conditions_exceeded` ve `max_depth_exceeded` kontrolleri alan/operatör kontrollerinden **önce** yapılır ve bunlardan biri varsa diğer kontroller atlanır (büyük girdilerde maliyet sınırı). `Parse` da sınırların ötesini gezmez: derinliği `MaxDepth+1`'i aşan bir grup görürse (ör. 5. seviye) ayrıştırmayı keser ve `max_depth_exceeded`'i (aynı path) kendisi döner; `MaxConditions+1`'den fazla koşulda `max_conditions_exceeded`'i (path `rule`) kendisi döner. Derinlik 4 ve 11 koşul `Parse`'tan geçer, `Validate` raporlar.

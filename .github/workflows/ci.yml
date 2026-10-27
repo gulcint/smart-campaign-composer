@@ -7,6 +7,9 @@ name: ci
 
 on:
   pull_request:
+    # labeled/unlabeled: re-run when the api-breaking-ok label changes.
+    # edited: the PR title is the squash subject, so fixing it must re-run pr-policy.
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -28,6 +31,7 @@ jobs:
       go: ${{ steps.d.outputs.go }}
       migrations: ${{ steps.d.outputs.migrations }}
       compose_test: ${{ steps.d.outputs.compose_test }}
+      web: ${{ steps.d.outputs.web }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: d
@@ -36,6 +40,7 @@ jobs:
             echo "go=$([ -f go.mod ] && echo true || echo false)"
             echo "migrations=$([ -d migrations ] && echo true || echo false)"
             echo "compose_test=$([ -f compose.test.yml ] && echo true || echo false)"
+            echo "web=$([ -f web/package.json ] && echo true || echo false)"
           } >> "$GITHUB_OUTPUT"
 
   # ---------- policy ----------
@@ -123,6 +128,78 @@ jobs:
           for f in segment-rule content; do
             cmp docs/contracts/schemas/llm/"$f".tool.json internal/llm/schemas/"$f".tool.json
           done
+
+  # API <-> doc drift guard (contracts README §11). api-routes and the strict E2E validation run
+  # inside `make test` (make-test job).
+  api-contract:
+    runs-on: ubuntu-latest
+    env:
+      # A boolean derived from PR labels, passed through env (never interpolated into the script).
+      API_BREAKING_OK: ${{ contains(github.event.pull_request.labels.*.name, 'api-breaking-ok') }}
+      # Base branch of the PR (e.g. slice/p3-audience); empty on push. Used via env only.
+      PR_BASE_REF: ${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history and all branches, so origin/<base> exists
+      - name: choose the api-breaking base
+        run: |
+          # A PR is compared with its own base branch; a push to main with origin/main (script default).
+          if [ -n "$PR_BASE_REF" ]; then
+            git fetch --no-tags origin "+refs/heads/$PR_BASE_REF:refs/remotes/origin/$PR_BASE_REF"
+            echo "API_BASE=origin/$PR_BASE_REF" >> "$GITHUB_ENV"
+          fi
+      - name: api-lint (redocly, pinned image, errors and warnings fail)
+        run: make api-lint
+      - name: check-contract-copies (embedded spec == docs/contracts)
+        run: make check-contract-copies
+      - name: api-breaking (oasdiff vs the PR base, origin/main on push; label api-breaking-ok lets intentional changes through)
+        run: |
+          if [ "$API_BREAKING_OK" = "true" ]; then
+            make api-breaking || echo "::warning::breaking API changes accepted by the api-breaking-ok label; justify them in the PR and DECISIONS.md"
+          else
+            make api-breaking
+          fi
+
+  # Web UI: ESLint (vue/no-v-html: error) + Prettier, vue-tsc, Vitest, production build.
+  web:
+    needs: detect
+    if: needs.detect.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    container: node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: npm ci --no-audit --no-fund
+      # contracts README §11 `api-types-check` (same as `make api-types-check`; the image has no make).
+      # The full checkout provides ../docs/contracts, and the job has no path filter, so spec-only
+      # PRs run it too.
+      - name: API types match docs/contracts/openapi.yaml
+        run: |
+          node scripts/api-types.mjs "$RUNNER_TEMP/schema.gen.ts"
+          diff -u src/api/schema.gen.ts "$RUNNER_TEMP/schema.gen.ts" \
+            || { echo "web/src/api/schema.gen.ts is stale: run 'make api-types' and commit it"; exit 1; }
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # docs/PLAN.md §6 #4: the key never reaches the bundle (pattern split so this file does not match).
+      - name: no API key material in the bundle
+        run: |
+          if grep -rnE 'sk-''ant-|ANTHROPIC''_' dist; then echo "secret-looking string in web/dist"; exit 1; fi
+      # docs/PLAN.md §6 #16
+      - run: npm audit --audit-level=high
+
+  # The served image builds (non-root nginx, digest-pinned bases).
+  web-image:
+    needs: detect
+    if: needs.detect.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker compose -f compose.yml build web
 
   sql-lint:
     needs: detect
@@ -220,7 +297,7 @@ jobs:
   # the repo that do not exist yet) pass; failed or cancelled jobs do not.
   ci-ok:
     if: always()
-    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, sql-lint, db-roundtrip, compose-ports, hook-tests, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
+    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, api-contract, web, web-image, sql-lint, db-roundtrip, compose-ports, hook-tests, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
     runs-on: ubuntu-latest
     steps:
       - env:
