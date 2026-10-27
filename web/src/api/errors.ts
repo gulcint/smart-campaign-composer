@@ -28,6 +28,7 @@ const RULES: Record<ApiError['code'], Rule> = {
   invalid_state: { display: 'toast', variant: 'warning' },
   content_not_validated: { display: 'toast', variant: 'warning' },
   stale_content_version: { display: 'toast', variant: 'warning' },
+  content_edit_conflict: { display: 'inline', variant: 'warning' },
   generation_in_progress: { display: 'toast', variant: 'warning' },
   payload_too_large: { display: 'inline', variant: 'error' },
   validation_failed: { display: 'inline', variant: 'error' },
