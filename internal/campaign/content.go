@@ -24,35 +24,35 @@ var errGenerationTimeout = errors.New("campaign: generation exceeded the maximum
 // deliveries) is the P5 slice. go-interfaces.md names no sentinel for it, so it maps to 500.
 var errSendNotInSlice = fmt.Errorf("%w: accepting a send", errNotInSlice)
 
-// StartContentGeneration: 404 -> invalid_state (draft, sending, completed) -> generation lock ->
-// LLM attempt 1 connected (llm.ErrUnavailable otherwise). The lock is held by the returned run.
+// StartContentGeneration: 404 -> invalid_state (draft, sending, completed) -> generation lease,
+// all under the campaign row lock (D52) -> LLM attempt 1 connected (llm.ErrUnavailable otherwise).
+// The lease is held by the returned run.
 func (s *service) StartContentGeneration(ctx context.Context, id string) (ContentRun, error) {
 	id, ok := canonicalID(id)
 	if !ok {
 		return nil, ErrCampaignNotFound
 	}
-	c, err := s.d.Store.GetCampaign(ctx, id)
+	lease, release, err := s.beginGeneration(ctx, id, func(lc LockedCampaign) error {
+		if _, err := Transition(lc.State, EventContentValidated); err != nil {
+			return err
+		}
+		if !lc.HasSegment {
+			return fmt.Errorf("%w: campaign has no segment", ErrInvalidState)
+		}
+		return lc.CheckNoGeneration(s.d.Clock.Now())
+	})
 	if err != nil {
 		return nil, err
 	}
-	if _, err := Transition(c.State, EventContentValidated); err != nil {
-		return nil, err
-	}
-	if c.Segment == nil {
-		return nil, fmt.Errorf("%w: campaign has no segment", ErrInvalidState)
-	}
-	release, ok := s.locks.acquire(id, s.d.Clock.Now())
-	if !ok {
-		return nil, ErrGenerationInProgress
-	}
 
 	// genCtx carries the request's values (the mock scenario) and ends when the request is
-	// cancelled, when the run finishes or after MaxGenerationDuration on the injected clock.
+	// cancelled, when the run finishes or at the lease's deadline (MaxGenerationDuration after
+	// the instant the lease was stamped with) on the injected clock.
 	genCtx, cancel := context.WithCancelCause(ctx)
-	// Until Stream takes over, the lock ends with genCtx (e.g. the handler never streams). Stream
-	// stops this before persisting, so a timeout can never release the lock mid-transaction.
+	// Until Stream takes over, the lease ends with genCtx (e.g. the handler never streams). Stream
+	// stops this before persisting, so a timeout can never release the lease mid-transaction.
 	stopRelease := context.AfterFunc(genCtx, release)
-	timer := s.d.Clock.After(MaxGenerationDuration)
+	timer := s.d.Clock.After(lease.ExpiresAt.Sub(s.d.Clock.Now()))
 	go func() {
 		select {
 		case <-timer:
@@ -60,6 +60,17 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 		case <-genCtx.Done():
 		}
 	}()
+
+	// Read after the lease is held: no segment generation can change the campaign meanwhile.
+	c, err := s.d.Store.GetCampaign(genCtx, id)
+	if err == nil && c.Segment == nil {
+		err = fmt.Errorf("%w: campaign has no segment", ErrInvalidState)
+	}
+	if err != nil {
+		cancel(nil)
+		release()
+		return nil, err
+	}
 
 	sess, err := composer.OpenContent(genCtx, s.d.LLM, llm.ContentRequest{
 		Brief: c.Brief, Rule: c.Segment.Rule, Longest: c.Segment.LongestValues,
@@ -73,13 +84,14 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 		}
 		return nil, err
 	}
-	return &contentRun{s: s, id: id, genCtx: genCtx, cancel: cancel, release: release, stopRelease: stopRelease, sess: sess}, nil
+	return &contentRun{s: s, id: id, token: lease.Token, genCtx: genCtx, cancel: cancel, release: release, stopRelease: stopRelease, sess: sess}, nil
 }
 
 // contentRun is the ContentRun of the service.
 type contentRun struct {
 	s       *service
 	id      string
+	token   string // the run's generation lease
 	genCtx  context.Context
 	cancel  context.CancelCauseFunc
 	release func() // idempotent; also called by context.AfterFunc when genCtx ends
@@ -161,6 +173,10 @@ func (r *contentRun) finish(ctx context.Context, out composer.ContentOutcome, em
 		w.Status, w.ValidationErrors = ContentInvalid, out.Errors
 	}
 	v, err := r.s.d.Store.WriteContentVersion(context.WithoutCancel(ctx), r.id, func(lc LockedCampaign) (ContentWrite, error) {
+		// A run whose lease expired and was taken over (by any process) stores nothing (D52).
+		if err := lc.CheckGenerationOwner(r.token); err != nil {
+			return ContentWrite{}, err
+		}
 		next, err := Transition(lc.State, ev)
 		if err != nil {
 			return ContentWrite{}, err
@@ -170,6 +186,13 @@ func (r *contentRun) finish(ctx context.Context, out composer.ContentOutcome, em
 		}
 		return w, nil
 	})
+	if errors.Is(err, errLeaseLost) {
+		r.s.d.Logger.Info("content version not stored: generation lease lost", slog.String("campaign_id", r.id))
+		return emit(composer.InvalidEvent{Attempt: out.Attempts, Final: true, Errors: []validation.FieldError{{
+			Path: "", Code: validation.CodeLLMUnavailable,
+			Message: "the generation did not finish within " + MaxGenerationDuration.String(),
+		}}})
+	}
 	if err != nil {
 		r.s.d.Logger.Error("content version not stored", slog.String("campaign_id", r.id), slog.String("error", err.Error()))
 		return emit(composer.InvalidEvent{Attempt: out.Attempts, Final: true, Errors: []validation.FieldError{{
@@ -185,7 +208,7 @@ func (r *contentRun) finish(ctx context.Context, out composer.ContentOutcome, em
 	return emit(composer.InvalidEvent{Attempt: out.Attempts, Final: true, Errors: out.Errors, ContentVersionID: &v.ID})
 }
 
-// EditContent: 404 -> generation lock -> (under the row lock) invalid_state -> edit conflict ->
+// EditContent: (under the row lock) 404 -> generation lease -> invalid_state -> edit conflict ->
 // content.Parse + content.Validate with the current segment's longest values -> new validated
 // version, state content_ready, active approval revoked.
 func (s *service) EditContent(ctx context.Context, id, expectedVersionID string, raw []byte) (ContentVersion, error) {
@@ -196,17 +219,11 @@ func (s *service) EditContent(ctx context.Context, id, expectedVersionID string,
 	if v, ok := canonicalID(expectedVersionID); ok {
 		expectedVersionID = v
 	}
-	if _, err := s.d.Store.GetCampaign(ctx, id); err != nil {
-		return ContentVersion{}, err
-	}
-	if s.locks.busy(id, s.d.Clock.Now()) {
-		return ContentVersion{}, ErrGenerationInProgress
-	}
 	return s.d.Store.WriteContentVersion(ctx, id, func(lc LockedCampaign) (ContentWrite, error) {
-		// Re-checked under the row lock (D47b): a generation that started after the pre-check
-		// above must not be overtaken by this edit.
-		if s.locks.busy(id, s.d.Clock.Now()) {
-			return ContentWrite{}, ErrGenerationInProgress
+		// Under the row lock (D47b, D52): a generation lease on the row, from any process, refuses
+		// the edit; a generation cannot start until this transaction ends.
+		if err := lc.CheckNoGeneration(s.d.Clock.Now()); err != nil {
+			return ContentWrite{}, err
 		}
 		next, err := Transition(lc.State, EventContentValidated)
 		if err != nil {
@@ -278,8 +295,8 @@ func (s *service) GetContentVersion(ctx context.Context, id, versionID string) (
 	return s.d.Store.GetContentVersion(ctx, id, versionID)
 }
 
-// Approve follows openapi approveContent: 404 campaign -> 404 version -> generation lock ->
-// (under the row lock) content_not_validated -> invalid_state -> stale -> idempotent re-approval
+// Approve follows openapi approveContent: 404 campaign -> 404 version -> (under the row lock)
+// generation lease -> content_not_validated -> invalid_state -> stale -> idempotent re-approval
 // or worst-case re-check with the current customers -> approval row, state approved.
 func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, error) {
 	v, err := s.GetContentVersion(ctx, id, versionID)
@@ -287,14 +304,11 @@ func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, 
 		return Campaign{}, err
 	}
 	id, versionID = v.CampaignID, v.ID // canonical (D47a)
-	if s.locks.busy(id, s.d.Clock.Now()) {
-		return Campaign{}, ErrGenerationInProgress
-	}
 	a := ApprovalWrite{ID: uuid.NewString(), ApprovedAt: s.now()}
 	return s.d.Store.ApproveVersion(ctx, id, versionID, a, func(chk ApprovalCheck) (bool, error) {
-		// Re-checked under the row lock (D47b): no approval while a generation is running.
-		if s.locks.busy(id, s.d.Clock.Now()) {
-			return false, ErrGenerationInProgress
+		// Under the row lock (D47b, D52): no approval while a generation lease is on the row.
+		if err := chk.Campaign.CheckNoGeneration(s.d.Clock.Now()); err != nil {
+			return false, err
 		}
 		if chk.Version.Status != ContentValidated {
 			return false, ErrContentNotValidated
@@ -321,28 +335,29 @@ func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, 
 }
 
 // Send performs the pre-checks of sendCampaign (README §5.4): 404 campaign -> 404 version ->
-// generation lock -> invalid_state (not approved) -> stale (not the approved version). Accepting
-// the send is the P5 slice.
+// (under the row lock) generation lease -> invalid_state (not approved) -> stale (not the approved
+// version). Accepting the send is the P5 slice: its transaction must run the same checks on the
+// row it locks before creating deliveries (D52), so a send and a generation start never both win.
 func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, error) {
 	v, err := s.GetContentVersion(ctx, id, versionID)
 	if err != nil {
 		return SendResult{}, err
 	}
 	id, versionID = v.CampaignID, v.ID // canonical (D47a)
-	if s.locks.busy(id, s.d.Clock.Now()) {
-		return SendResult{}, ErrGenerationInProgress
-	}
-	// P5 must repeat this busy check under the campaign row lock of the transaction that accepts
-	// the send (D47b), as Approve and EditContent do; this slice has no such transaction yet.
-	c, err := s.d.Store.GetCampaign(ctx, id)
+	err = s.d.Store.InspectLocked(ctx, id, func(lc LockedCampaign) error {
+		if err := lc.CheckNoGeneration(s.d.Clock.Now()); err != nil {
+			return err
+		}
+		if _, err := Transition(lc.State, EventSendAccepted); err != nil {
+			return err
+		}
+		if lc.ApprovedVersionID == nil || *lc.ApprovedVersionID != versionID {
+			return ErrStaleContentVersion
+		}
+		return nil
+	})
 	if err != nil {
 		return SendResult{}, err
-	}
-	if _, err := Transition(c.State, EventSendAccepted); err != nil {
-		return SendResult{}, err
-	}
-	if c.Approval == nil || c.Approval.ContentVersionID != versionID {
-		return SendResult{}, ErrStaleContentVersion
 	}
 	return SendResult{}, errSendNotInSlice
 }

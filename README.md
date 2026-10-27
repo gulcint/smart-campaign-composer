@@ -141,7 +141,7 @@ Bugün denenebilecek olan: `docker compose up` bitince tarayıcıda <http://127.
 ## Bilinen sınırlar
 
 - Arayüzde gönder düğmesi görünür, ama `/send` ucu P5'e kadar kayıtlı değildir; düğme 404 uyarısı verir.
-- İçerik üretim kilidi süreç başınadır. P5'te `Send` yazılmadan önce veritabanı düzeyinde bir üretim işaretçisi gerekir ([`DECISIONS.md`](DECISIONS.md) D47).
+- Üretim kilidi kampanya satırında süreli bir kiradır (en çok 120 sn); bitişi API süreçlerinin saatine dayanır ([`DECISIONS.md`](DECISIONS.md) D52).
 - Swagger UI gibi etkileşimli API dokümanı yoktur (sahip kararıyla kaldırıldı, D36). API başvurusu: [`docs/contracts/openapi.yaml`](docs/contracts/openapi.yaml).
 - Otomatik testler yalnızca `docs/requirements.md`'den türetilir (D50); yalnız sözleşmede yazan birçok davranış testsizdir.
 - Gerçek Claude istemcisinin otomatik testi yoktur; şehir yazımı ve SMS uzunluğu gibi davranışlar elle doğrulanmalıdır.
