@@ -82,6 +82,8 @@ services:
   worker:
     <<: *app
     command: ["worker"]
+    # Requests already started finish (PROVIDER_TIMEOUT 10s) and are recorded before exit.
+    stop_grace_period: 20s
     environment:
       DATABASE_URL: postgres://scc_app:scc_app_test@db:5432/scc?sslmode=disable
       WORKER_HTTP_ADDR: ":8081"

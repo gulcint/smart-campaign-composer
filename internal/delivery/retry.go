@@ -79,6 +79,9 @@ func NewRetryPolicy(cfg RetryConfig, rng *rand.Rand) *RetryPolicy {
 
 // Next decides what happens after a provider response (rules in go-interfaces.md §delivery).
 func (p *RetryPolicy) Next(a Attempt) Decision {
+	if a.FirstAttemptAt.IsZero() {
+		a.FirstAttemptAt = a.Now // unknown first attempt: the 429 window starts now
+	}
 	switch {
 	case a.Err == nil && a.StatusCode >= 200 && a.StatusCode <= 299:
 		return Decision{Action: ActionMarkSent, Count: CountNone}

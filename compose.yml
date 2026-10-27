@@ -92,6 +92,8 @@ services:
   worker:
     <<: *app
     command: ["worker"]
+    # Requests already started finish (PROVIDER_TIMEOUT 10s) and are recorded before exit.
+    stop_grace_period: 20s
     environment:
       <<: *db-env
       WORKER_HTTP_ADDR: ":8081"

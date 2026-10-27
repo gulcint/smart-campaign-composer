@@ -69,12 +69,19 @@ func run() error {
 	clk := clock.Real()
 	store := postgres.NewDeliveryStore(pool)
 	client := provider.NewHTTPClient(cfg.ProviderBaseURL, &http.Client{Timeout: cfg.ProviderTimeout}, clk)
-	policy := delivery.NewRetryPolicy(cfg.Retry, rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))) //nolint:gosec // jitter, not security
 	metricsHandler, recorder := metrics.NewWorkerHandler()
-	interval := time.Second / time.Duration(cfg.DispatchRatePerSecond)
+	// Rounded up: a truncated interval (e.g. 1s/3) would allow more than the rate per second.
+	rate := time.Duration(cfg.DispatchRatePerSecond)
+	interval := (time.Second + rate - 1) / rate
+	if err := checkLease(cfg); err != nil {
+		return err
+	}
 
 	var dispatchers []*delivery.Dispatcher
-	for _, ch := range []delivery.Channel{delivery.ChannelSMS, delivery.ChannelEmail} {
+	for i, ch := range []delivery.Channel{delivery.ChannelSMS, delivery.ChannelEmail} {
+		// Each channel has its own jitter stream (salt 1 = sms, 2 = email), so one channel's
+		// draws never shift the other's delays.
+		policy := delivery.NewRetryPolicy(cfg.Retry, rand.New(rand.NewPCG(seed, uint64(i+1)))) //nolint:gosec // jitter, not security
 		d, err := delivery.NewDispatcher(delivery.DispatcherConfig{
 			Channel:     ch,
 			BatchSize:   cfg.DispatchBatchSize,
@@ -133,6 +140,20 @@ func run() error {
 		serveErr = fmt.Errorf("shutdown: %w", err)
 	}
 	return serveErr
+}
+
+// checkLease rejects a DELIVERY_LEASE that a claimed batch could outlive: the last job of a
+// batch starts up to BatchSize permits later and its request may take PROVIDER_TIMEOUT; a lease
+// shorter than that would let another claim resend a delivery whose request is still in flight
+// (the provider dedups it, but the fenced store write of the old claim would then be dropped).
+func checkLease(cfg config.Config) error {
+	interval := time.Second / time.Duration(cfg.DispatchRatePerSecond)
+	need := time.Duration(cfg.DispatchBatchSize)*interval + cfg.ProviderTimeout
+	if cfg.DeliveryLease <= need {
+		return fmt.Errorf("%w: DELIVERY_LEASE must exceed DISPATCH_BATCH_SIZE/DISPATCH_RATE_PER_SECOND + PROVIDER_TIMEOUT (%s)",
+			config.ErrInvalidValue, need)
+	}
+	return nil
 }
 
 // randSeed returns WORKER_RAND_SEED, or a random seed when it is 0.
