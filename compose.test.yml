@@ -75,6 +75,8 @@ services:
     environment:
       MOCK_PROVIDER_ADDR: ":8090"
       MOCK_PROVIDER_ADMIN: "true"
+      # No random 429s: an E2E 429 then means the dispatcher broke 100/s (REQ-SND-02).
+      MOCK_PROVIDER_RATE_LIMIT_RATE: "0"
 
   # Vitest for web/tests (docs/contracts/ui.md §0): Node image of web/Dockerfile, no services.
   web-test:
