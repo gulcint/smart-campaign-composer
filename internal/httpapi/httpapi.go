@@ -308,6 +308,11 @@ func (a *api) middleware(next http.Handler) http.Handler {
 				}
 				a.deps.Logger.Error("http handler panic", slog.String("request_id", id),
 					slog.String("method", r.Method), slog.String("path", r.URL.Path))
+				if w.streaming {
+					// An open event stream cannot take a JSON error body or a second status; the
+					// SSE handler reports its own failures as a terminal event.
+					return
+				}
 				writeError(w, r, http.StatusInternalServerError, "internal_error", "internal error")
 			}
 		}()

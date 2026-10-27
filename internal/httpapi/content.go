@@ -56,6 +56,10 @@ func (a *api) generateContent(w http.ResponseWriter, r *http.Request) {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
+	defer func() {
+		close(done)
+		wg.Wait()
+	}()
 	go func() {
 		defer wg.Done()
 		for {
@@ -73,6 +77,28 @@ func (a *api) generateContent(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	attempt, terminal := 1, false
+	// internalError ends the stream with the terminal internal_error event: after HTTP 200 a
+	// failure is reported only through events (sse-events.md §0), never as a JSON error body.
+	internalError := func(cause string) {
+		a.deps.Logger.Error("content stream failed", slog.String("request_id", r.Header.Get("X-Request-ID")),
+			slog.String("campaign_id", id), slog.String("error", cause))
+		if terminal || ctx.Err() != nil {
+			return
+		}
+		_ = sw.Event("invalid", composer.InvalidEvent{Attempt: attempt, Final: true, Errors: []validation.FieldError{{
+			Path: "", Code: validation.CodeInternalError, Message: "internal error",
+		}}})
+	}
+	defer func() {
+		rec := recover()
+		if rec == nil {
+			return
+		}
+		if e, ok := rec.(error); ok && errors.Is(e, http.ErrAbortHandler) {
+			panic(rec)
+		}
+		internalError("panic during the content stream")
+	}()
 	err = run.Stream(ctx, func(ev composer.Event) error {
 		switch e := ev.(type) {
 		case composer.DeltaEvent:
@@ -85,15 +111,8 @@ func (a *api) generateContent(w http.ResponseWriter, r *http.Request) {
 		return sw.Event(ev.Name(), ev)
 	})
 	if err != nil && !terminal && ctx.Err() == nil {
-		// A server-side failure after HTTP 200 ends the stream with the internal_error event.
-		a.deps.Logger.Error("content stream failed", slog.String("request_id", r.Header.Get("X-Request-ID")),
-			slog.String("campaign_id", id), slog.String("error", err.Error()))
-		_ = sw.Event("invalid", composer.InvalidEvent{Attempt: attempt, Final: true, Errors: []validation.FieldError{{
-			Path: "", Code: validation.CodeInternalError, Message: "internal error",
-		}}})
+		internalError(err.Error())
 	}
-	close(done)
-	wg.Wait()
 }
 
 // ---- GET /api/campaigns/{campaign_id}/content-versions ----
