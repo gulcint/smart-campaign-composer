@@ -8,16 +8,16 @@ Bu README `origin/main` (`p2-done` etiketi, commit `21fd076`) durumuna göre yaz
 
 Durum yalnızca koddan, git geçmişinden veya PR'lardan doğrulananlara göre yazıldı. Faz kapsamları ve kapı koşulları: [`docs/PLAN.md`](docs/PLAN.md) §1.1. Gereksinimler: [`docs/requirements.md`](docs/requirements.md).
 
-| Faz | Durum | Kapsam | REQ | Kanıt |
-|---|---|---|---|---|
-| P0 Kurulum | ✅ bitti | Repo, hook'lar, CI iskeleti, plan | - | PR #1, #2; `p0-done` |
-| P1 Sözleşmeler | ✅ bitti | Gereksinim kataloğu, OpenAPI, şemalar, Go arayüz imzaları, UI sözleşmesi, `DECISIONS.md` | tümü (katalog) | PR #3-#8; `docs/contracts/` |
-| P2 Seed + altyapı | ✅ bitti | Seed + manifest, migration'lar, compose, health/metrics, LLM fabrikası (auto/real/mock), mock LLM, gerçek Claude istemcisi, mock provider, `make test` altyapısı | REQ-DLV-01/02, REQ-AI-02/03/04/05, REQ-TRK-03, REQ-SEC-02, REQ-SEED-01/02 | PR #9-#14 (`feat/p2-foundation` #9, testler #11, slice #14); `p2-done`; testler `internal/seed`, `internal/llm`, `internal/config`, `internal/health`, `internal/postgres`, `test/e2e` |
-| P3 Kitle | 🟡 kısmen | Segment kuralı üretimi, doğrulama, parametreli sorgu, kanal bazında kişi sayısı, brief ve kitle ekranları | REQ-AUD-00..05, REQ-AI-01 (segment) | `main`'de yok. `slice/p3-audience` içinde backend PR #19 (`internal/segment` Parse/Validate/Compile, `internal/postgres/audience.go`, `POST /api/campaigns`, `POST /api/campaigns/{id}/segment`, `POST /api/segments/count`) ve web PR #20 (Vue uygulaması `web/`, `web` compose servisi, CI) merge edildi. Eksik: bu faza ait testler yazılıyor (slice'ta segment/composer/web testi yok), `internal/composer` içinde segment üretimi ve tek repair denemesi (`GenerateSegment`) yazılı; içerik akışı P4'te, faz kapısı ve `main`'e merge yok |
-| P4 İçerik + onay | ⬜ başlamadı | SMS/email üretimi (SSE stream), limitler, kişiselleştirme, düzenleme, sürümlü onay | REQ-CNT-01..05, REQ-APR-01..03, REQ-UI-01 | `internal/content`, `internal/sse` yalnızca iskelet; `/content`, `/approve` uçları yok |
-| P5 Gönderim + takip | ⬜ başlamadı | `deliveries` dispatcher'ı, hız sınırı, retry, idempotency, canlı durum SSE, dashboard | REQ-SND-01..05, REQ-TRK-01/02, REQ-SEC-01 | `cmd/worker` yok; `internal/delivery` yalnızca `RetryConfig`; `internal/provider` yalnızca hata sabitleri |
-| P6 Sertleştirme + teslim | ⬜ başlamadı | Uçtan uca test, güvenlik taraması, README/DECISIONS son hali, session export'ları | REQ-DLV-03/04 | Bu README ilk taslaktır; `ai-sessions/` P0-P2 için dolu |
-| Bonus | ⬜ başlamadı | Zamanlanmış gönderim, A/B varyantları, dile göre içerik | - | Yazılmadı. CI pipeline'ı çalışıyor: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| Faz | Durum | Kapsam |
+|---|---|---|
+| P0 Kurulum | ✅ bitti | Repo, hook'lar, CI, plan |
+| P1 Sözleşmeler | ✅ bitti | Gereksinimler, OpenAPI, şemalar, arayüz ve Go sözleşmeleri |
+| P2 Seed + altyapı | ✅ bitti | Seed, migration'lar, compose, LLM fabrikası ve sahte LLM, mock provider, `make test` |
+| P3 Kitle | 🟡 kısmen | Segment kuralı, kişi sayıları, brief ve kitle ekranları (`slice/p3-audience`'ta, `main`'e girmedi) |
+| P4 İçerik + onay | ⬜ başlamadı | SMS/email üretimi (SSE), limitler, düzenleme, onay |
+| P5 Gönderim + takip | ⬜ başlamadı | Kuyruk, hız sınırı, retry, canlı durum, dashboard |
+| P6 Sertleştirme + teslim | ⬜ başlamadı | Uçtan uca test, güvenlik taraması, son README ve DECISIONS |
+| Bonus | ⬜ başlamadı | Zamanlanmış gönderim, A/B varyantları, dile göre içerik |
 
 Mock provider (`cmd/mockprovider`, `internal/mockprovider`) kataloğa göre P5 işi ama P2'ye çekildi ve `main`'de çalışıyor (DECISIONS D25). Bağlı olduğu `REQ-MOCK-01/02` testleri ve dispatcher P5'te gelecek.
 
