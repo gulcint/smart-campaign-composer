@@ -76,6 +76,13 @@ services:
       MOCK_PROVIDER_ADDR: ":8090"
       MOCK_PROVIDER_ADMIN: "true"
 
+  # Vitest for web/tests (docs/contracts/ui.md §0): Node image of web/Dockerfile, no services.
+  web-test:
+    build:
+      context: ./web
+      target: test
+    image: scc-web:test
+
   test:
     build:
       context: .

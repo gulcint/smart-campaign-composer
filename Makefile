@@ -6,7 +6,7 @@ export PATH := $(GOBIN):$(PATH)
 
 TEST_COMPOSE := docker compose -f compose.test.yml
 
-.PHONY: help hooks test test-hooks test-unit test-integration db-roundtrip seed-manifest lint check-tool-schemas secrets sanitize-sessions check-sessions
+.PHONY: help hooks test test-hooks test-unit test-integration test-web db-roundtrip seed-manifest lint check-tool-schemas secrets sanitize-sessions check-sessions web-lint web-build
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -17,6 +17,11 @@ hooks: ## Install git hooks and the commit message template
 
 test: ## Run every test in containers, without ANTHROPIC_API_KEY (needs only Docker + make)
 	@status=0; $(TEST_COMPOSE) run --rm --build test || status=$$?; \
+	$(TEST_COMPOSE) run --rm --build web-test || status=$$?; \
+	$(TEST_COMPOSE) down -v --remove-orphans; exit $$status
+
+test-web: ## Vitest (web/tests) in the Node test container
+	@status=0; $(TEST_COMPOSE) run --rm --build web-test || status=$$?; \
 	$(TEST_COMPOSE) down -v --remove-orphans; exit $$status
 
 test-hooks: ## Behaviour tests for the agent guards and scripts/worktree-remove.sh
@@ -46,6 +51,16 @@ check-tool-schemas: ## The embedded LLM tool schemas must equal the contract cop
 	  cmp -s docs/contracts/schemas/llm/$$f.tool.json internal/llm/schemas/$$f.tool.json \
 	  || { echo "internal/llm/schemas/$$f.tool.json differs from docs/contracts/schemas/llm/$$f.tool.json"; exit 1; }; \
 	done
+
+web/node_modules: web/package.json web/package-lock.json
+	cd web && npm ci
+	@touch web/node_modules
+
+web-lint: web/node_modules ## ESLint (vue/no-v-html: error) + Prettier + vue-tsc for web/
+	cd web && npm run lint && npm run typecheck
+
+web-build: web/node_modules ## Type-check and build the web bundle into web/dist
+	cd web && npm run build
 
 secrets: ## Scan the full git history for secrets
 	gitleaks git --redact --no-banner -c .gitleaks.toml
