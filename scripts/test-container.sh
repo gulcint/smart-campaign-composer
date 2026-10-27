@@ -30,4 +30,5 @@ wait_for "the mock provider at $E2E_MOCKPROVIDER_URL" curl -fsS "$E2E_MOCKPROVID
 
 pkgs=("$@")
 if [[ ${#pkgs[@]} -eq 0 ]]; then pkgs=(./...); fi
-exec go test -race -count=1 -shuffle=on "${pkgs[@]}"
+# -p 1: packages sharing the integration database never run in parallel (internal/campaign mutates a customer row, internal/seed reloads the canonical data).
+exec go test -p 1 -race -count=1 -shuffle=on "${pkgs[@]}"
