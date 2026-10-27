@@ -2,11 +2,12 @@
 # PreToolUse hook scoped to the test-writer agent (.claude/agents/test-writer.md).
 # Enforces docs/PLAN.md §3.1: the test writer never sees implementation and
 # only writes test files. Layered with the sparse worktree, CI role-paths and review.
-#   Read / Grep         : no implementation paths; Grep must be scoped to allowed roots or *_test.go
-#   Glob                : allowed (file names only, no contents)
+#   Read / Grep         : no implementation paths and no non-requirement sources (docs/contracts/**,
+#                         DECISIONS.md, the case HTML); Grep must be scoped to allowed roots or *_test.go
+#   Glob                : allowed (file names only), except patterns naming the blocked sources
 #   Write / Edit        : test paths only
 #   Bash                : allowlist of git / file-listing commands that cannot print implementation;
-#                         grep/rg only with explicit test/docs targets; no substitution or redirection
+#                         grep/rg only with explicit test targets, docs/requirements.md or docs/PLAN.md; no substitution or redirection
 # Exit 2 = block; stderr is shown to the agent.
 set -euo pipefail
 set -f
@@ -18,6 +19,11 @@ block() { echo "blocked by scripts/claude/test-writer-guard.sh: $1 (docs/PLAN.md
 impl_re='(^|/)(cmd|internal|migrations)(/|$)|(^|/)web/src(/|$)'
 test_re='(_test\.go$|(^|/)testdata(/|$)|(^|/)test/|(^|/)web/tests(/|$)|\.spec\.ts$)'
 
+# docs/requirements.md is the only source of test cases (docs/PLAN.md §3.1 item 7): contracts,
+# DECISIONS.md and the case document are not readable by the test writer, with no exceptions.
+src_re='(^|/)docs/contracts(/|$)|DECISIONS\.md|Smart[ %20]*Campaign[ %20]*Composer[ %20]*Case|Case\.html'
+
+is_src() { [[ "$1" =~ $src_re ]]; }
 is_impl() { [[ "$1" =~ $impl_re ]] && ! [[ "$1" =~ $test_re ]]; }
 is_test() { [[ "$1" =~ $test_re ]]; }
 
@@ -25,20 +31,26 @@ case "$tool" in
   Read)
     p=$(jq -r '.tool_input.file_path // empty' <<<"$input")
     is_impl "$p" && block "reading implementation file '$p'"
+    is_src "$p" && block "'$p' is not a test source: tests come only from docs/requirements.md (REQ eksik -> owner)"
     ;;
 
   Grep)
     p=$(jq -r '.tool_input.path // empty' <<<"$input")
     g=$(jq -r '.tool_input.glob // empty' <<<"$input")
     [[ -n "$p" ]] && is_impl "$p" && block "searching implementation path '$p'"
-    # Unscoped or root-level searches would read implementation contents.
-    allowed_root='(^|/)(docs|test|testdata|web/tests|\.claude)(/|$)|\.html$|\.md$'
+    [[ -n "$p" ]] && is_src "$p" && block "'$p' is not a test source: tests come only from docs/requirements.md"
+    [[ -n "$g" ]] && is_src "$g" && block "glob '$g' targets a non-test source"
+    # Unscoped or root-level searches would read implementation contents; docs/ itself would include contracts.
+    allowed_root='(^|/)(docs/requirements\.md|docs/PLAN\.md|test|testdata|web/tests|\.claude)(/|$)'
     if ! { [[ -n "$p" && "$p" =~ $allowed_root ]] || [[ "$g" == *_test.go || "$g" == *.spec.ts ]]; }; then
-      block "Grep must target docs/, test/, testdata/, web/tests/, .claude/ or use glob '*_test.go'"
+      block "Grep must target docs/requirements.md, docs/PLAN.md, test/, testdata/, web/tests/, .claude/ or use glob '*_test.go'"
     fi
     ;;
 
-  Glob) ;;
+  Glob)
+    gp=$(jq -r '(.tool_input.pattern // "") + " " + (.tool_input.path // "")' <<<"$input")
+    is_src "$gp" && block "glob '$gp' targets a non-test source: tests come only from docs/requirements.md"
+    ;;
 
   Write|Edit|MultiEdit|NotebookEdit)
     p=$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$input")
@@ -61,7 +73,7 @@ case "$tool" in
       case "${w[0]}" in
         ls|pwd|mkdir|gofmt|echo|wc) ;;
         grep|rg)
-          # Only test paths and docs (docs/PLAN.md §3.1): every target must be named, relative,
+          # Only test paths, docs/requirements.md and docs/PLAN.md (docs/PLAN.md §3.1): every target must be named, relative,
           # without '..', and inside a test root; no target means stdin or the whole tree.
           [[ "$seg" == *'$'* ]] && block "variables are not allowed in ${w[0]} targets"
           targets=() pattern_given=0 opts_done=0 skip=0
@@ -82,14 +94,14 @@ case "$tool" in
             if (( ! pattern_given )); then pattern_given=1; continue; fi
             targets+=("$a")
           done
-          (( ${#targets[@]} )) || block "${w[0]} needs explicit test paths (test, testdata, web/tests, docs, *_test.go); stdin and the working directory are not allowed"
+          (( ${#targets[@]} )) || block "${w[0]} needs explicit test paths (test, testdata, web/tests, *_test.go, docs/requirements.md); stdin and the working directory are not allowed"
           for t in "${targets[@]}"; do
             t="${t//\"/}"; t="${t//\'/}"; t="${t#./}"
             [[ "$t" == /* || "$t" == '~'* || "/$t/" == */../* || "/$t" =~ /\.env ]] \
               && block "${w[0]} target '$t' is outside the test paths"
-            [[ "$t" =~ ^(test|testdata|web/tests|docs)(/.*)?$ || "$t" =~ (^|/)testdata(/|$) \
-               || "$t" == *_test.go || "$t" == DECISIONS.md ]] \
-              || block "${w[0]} may only search test paths and docs (test, testdata, web/tests, docs, *_test.go, DECISIONS.md), not '$t'"
+            [[ "$t" =~ ^(test|testdata|web/tests)(/.*)?$ || "$t" =~ (^|/)testdata(/|$) \
+               || "$t" == *_test.go || "$t" == docs/requirements.md || "$t" == docs/PLAN.md ]] \
+              || block "${w[0]} may only search test paths, docs/requirements.md and docs/PLAN.md, not '$t' (contracts, DECISIONS.md and the case document are not test sources)"
           done
           ;;
         git)

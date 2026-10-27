@@ -93,7 +93,7 @@ done
 
 # Shell grep/rg: test paths and docs only (owner decision, docs/PLAN.md §3.1).
 for c in 'grep -rn REQ-CNT-01 test web/tests' 'grep -rn REQ-CNT-01 internal/content/validate_test.go' \
-         'rg -n REQ-AUD-04 test testdata docs' 'grep -rn -e REQ-SND-03 test' 'grep -c REQ-AI-01 DECISIONS.md' \
+         'rg -n REQ-AUD-04 test testdata docs/requirements.md' 'grep -rn -e REQ-SND-03 test' 'grep -c REQ-AI-01 docs/PLAN.md' \
          'grep -rln REQ-CNT-01 ./test/e2e' 'grep -rn x internal/seed/testdata' \
          'grep -rn REQ-CNT-01 test | wc -l'; do
   tw_expect allow "$c"
@@ -103,6 +103,8 @@ for c in 'grep -rn x internal' 'grep -rn x .' 'grep -rn x' 'grep x' 'grep x web/
          'grep -f internal/a.go test' 'grep -rnf internal/a.go test' 'rg --pre cat x test' 'rg x test --pre=cat' \
          'grep -rn x test $HOME' 'grep x test $(echo internal)' 'grep x - < internal/a.go' 'grep x test | grep y' \
          'grep -e x -- internal' 'rg x *' 'git grep x' \
+         'grep -rn x docs/contracts/openapi.yaml' 'grep -rn x docs/contracts' 'grep -rn x docs' 'grep -c x DECISIONS.md' \
+         'rg x docs/contracts/ui.md test' 'grep x Smart\ Campaign\ Composer\ Case.html' 'grep x ../Case.html' \
          'cat internal/a.go' 'python3 -c 1' 'echo $(cat internal/a.go)' 'echo `cat internal/a.go`' 'echo x > internal/a.go'; do
   tw_expect block "$c"
 done
@@ -117,7 +119,33 @@ tw_tool allow '{"pattern":"REQ-CNT-01","glob":"*_test.go"}'
 tw_tool allow '{"pattern":"REQ-CNT-01","path":"web/tests"}'
 tw_tool allow '{"pattern":"REQ-CNT-01","path":"test"}'
 tw_tool allow '{"pattern":"REQ-CNT-01","glob":"*.spec.ts"}'
+tw_tool allow '{"pattern":"REQ-CNT-01","path":"docs/requirements.md"}'
+tw_tool block '{"pattern":"x","path":"docs/contracts/openapi.yaml"}'
+tw_tool block '{"pattern":"x","path":"docs/contracts"}'
+tw_tool block '{"pattern":"x","path":"docs"}'
+tw_tool block '{"pattern":"x","path":"DECISIONS.md"}'
+tw_tool block '{"pattern":"x","path":"/repo/Smart Campaign Composer Case.html"}'
 tw_tool block '{"pattern":"REQ-CNT-01"}'
+
+# Read and Glob: requirements.md and test files only; contracts, DECISIONS.md and the case HTML are blocked.
+tw_other() { # <block|allow> <tool> <tool_input json>
+  local got=block
+  if "$root/scripts/claude/test-writer-guard.sh" <<<"{\"tool_name\":\"$2\",\"tool_input\":$3}" >/dev/null 2>&1; then got=allow; fi
+  if [[ "$got" == "$1" ]]; then echo "PASS: test-writer $2 $1  $3"; else echo "FAIL: test-writer $2 expected $1, got $got: $3"; fails=$((fails + 1)); fi
+}
+tw_other allow Read '{"file_path":"/repo/docs/requirements.md"}'
+tw_other allow Read '{"file_path":"/repo/docs/PLAN.md"}'
+tw_other allow Read '{"file_path":"/repo/internal/content/validate_test.go"}'
+tw_other allow Read '{"file_path":"/repo/test/e2e/content_test.go"}'
+tw_other block Read '{"file_path":"/repo/docs/contracts/openapi.yaml"}'
+tw_other block Read '{"file_path":"/repo/docs/contracts/ui.md"}'
+tw_other block Read '{"file_path":"/repo/DECISIONS.md"}'
+tw_other block Read '{"file_path":"/repo/Smart Campaign Composer Case.html"}'
+tw_other block Read '{"file_path":"/repo/internal/content/validate.go"}'
+tw_other allow Glob '{"pattern":"**/*_test.go"}'
+tw_other block Glob '{"pattern":"docs/contracts/**"}'
+tw_other block Glob '{"pattern":"DECISIONS.md"}'
+tw_other block Glob '{"pattern":"*Case.html"}'
 tw_tool block '{"pattern":"x","path":"internal/content"}'
 tw_tool block '{"pattern":"x","path":"internal","glob":"*_test.go"}'
 

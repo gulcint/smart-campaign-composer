@@ -6,38 +6,31 @@ description: Rules for writing Smart Campaign Composer tests from docs/requireme
 # Writing tests for Smart Campaign Composer
 
 Tests measure whether the implementation satisfies the case. They are derived **only from the
-acceptance criteria in `docs/requirements.md`**, never from the implementation and never from
-contracts or the case document as an independent source (docs/PLAN.md §3.1, §4).
+acceptance criteria in `docs/requirements.md`**, never from the implementation, `docs/contracts/**`,
+`DECISIONS.md` or the case document (docs/PLAN.md §3.1, §4).
 
 ## 1. Sources you may use — and nothing else
 
-`docs/requirements.md` is the **only source of test cases**. The other sources supply the names,
-shapes and wording needed to express a requirement's observable behaviour; none of them adds a
-case of its own.
+`docs/requirements.md` is the **only source**, without exception. `docs/contracts/**`,
+`DECISIONS.md` and the case document are not test sources and not helper sources; the guard hook
+blocks reading them.
 
 | Source | Path | Use it for |
 |---|---|---|
-| Requirements catalog | `docs/requirements.md` | **The only source of cases**: REQ IDs and their acceptance criteria |
-| Contracts | `docs/contracts/**` | Names, signatures, fields, `data-testid`s of the surfaces tests may touch |
-| Case document (gitignored) | `<main repo>/Smart Campaign Composer Case.html` | Exact wording of the sentence a REQ quotes; the final word if a REQ contradicts it (report it) |
-| Plan | `docs/PLAN.md` §0.4, §0.5, §4, §5 | Retry policy, stream protocol, test rules, seed manifest |
+| Requirements catalog | `docs/requirements.md` | REQ IDs, acceptance criteria and every name, path and field a test uses |
+| Plan (process rules only) | `docs/PLAN.md` §0.4, §0.5, §4, §5 | Retry policy, stream protocol, test rules |
 | Existing tests | `**/*_test.go`, `test/**`, `testdata/**`, `web/tests/**` | Style, shared helpers, and the file to extend (§3.1) |
 
-The contract surfaces are: HTTP API (OpenAPI), SSE events (PLAN §0.5), Go interface
-signatures (`docs/contracts/go-interfaces.md`), observable DB results, and the UI contract
-(`docs/contracts/ui.md`: components, props, `data-testid`s).
+Tests touch only surfaces that a REQ criterion itself names (HTTP endpoint, SSE event, Go
+function, DB result, `data-testid`).
 
-**If a behaviour has no REQ, do not test it: report "REQ eksik".** When a contract,
-`DECISIONS.md` or the case document describes behaviour that matters but no REQ acceptance
-criterion covers, write no test. Tell the owner "REQ eksik" with the source sentence; the
-owner or architect adds the REQ first, then you test it. A review finding that needs a test
-needs a REQ criterion first. In review, a test without a `// REQ-…` comment that resolves to an
-acceptance criterion in `docs/requirements.md` is rejected.
-
-**If a contract you need does not exist or is ambiguous, stop.** Do not invent a function
-name, field, endpoint or error. Write down the question (what the doc says, what is missing,
-which REQ it blocks) and hand it back to the owner. A test against a guessed signature
-measures your guess, not the system.
+**If a behaviour has no REQ, or the criterion lacks a concrete name, path or field the test
+needs, do not test it: report "REQ eksik".** Do not look for the missing detail in contracts,
+`DECISIONS.md` or the case document, and never guess it. Tell the owner "REQ eksik" with a
+proposed REQ sentence; the owner or architect adds it to `docs/requirements.md` first, then you
+test it. Behaviour that exists only in a contract or `DECISIONS.md` gets no test. A review
+finding that needs a test needs a REQ criterion first. In review, a test without a `// REQ-…`
+comment that resolves to an acceptance criterion in `docs/requirements.md` is rejected.
 
 **If a test seems wrong after the implementation exists, the test is not changed to match
 the code.** The owner decides; the architect fixes `docs/`; then the test follows `docs/`.
@@ -62,7 +55,7 @@ Quoted requirements every suite must cover (IDs from `docs/requirements.md`):
 
 - Every test function starts with a comment naming its requirement(s): `// REQ-CNT-01`. The ID must exist in `docs/requirements.md` and the test must check one of its acceptance criteria; otherwise review rejects it.
 - One behavior per subtest; a REQ may have many tests, a test should rarely cover many REQs.
-- When you finish, report the REQ → test mapping, any REQ you could not cover and why, and every "REQ eksik" item.
+- When you finish, report the REQ → test mapping, any REQ you could not cover and why, and every "REQ eksik" item with its proposed REQ sentence.
 
 ### 3.1 One home per rule: extend, do not scatter
 
@@ -93,12 +86,12 @@ second file for the same rule, and "what is tested where" is lost.
 
 | Layer | Location | Touches | Runs in |
 |---|---|---|---|
-| Unit | `internal/<pkg>/*_test.go`, `package <pkg>_test` | Contracted Go functions/interfaces only | `make test-unit`, `make test` |
+| Unit | `internal/<pkg>/*_test.go`, `package <pkg>_test` | Go functions/interfaces named by a REQ criterion only | `make test-unit`, `make test` |
 | LLM (mock) | same, fixtures in `testdata/llm/` | `llm.Mock` scenarios, SSE event order | both |
 | Integration (DB) | `*_test.go` guarded by `testing.Short()` | Postgres from `compose.test.yml`, seed manifest | `make test` |
 | Delivery | `test/delivery/` | worker + scripted `httptest` provider, and the real `cmd/mockprovider` (R10) | `make test` |
 | API E2E | `test/e2e/` | HTTP + SSE per OpenAPI, key-less | `make test` |
-| Frontend | `web/tests/**/*.spec.ts` (Vitest + Vue Test Utils) | Only props and `data-testid`s from `docs/contracts/ui.md` | `make test` |
+| Frontend | `web/tests/**/*.spec.ts` (Vitest + Vue Test Utils) | Only props and `data-testid`s named by a REQ criterion | `make test` |
 
 Integration tests skip themselves under `-short` (that is how `make test-unit` excludes them);
 this is layering, not a disabled test. Any other `t.Skip`, `.only` or `.skip` is forbidden.
@@ -125,7 +118,7 @@ func TestSMSContent_LengthLimit(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := content.ValidateSMS(tc.body) // signature and sentinel come from docs/contracts
+			err := content.ValidateSMS(tc.body) // signature and sentinel come from the REQ criterion
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("ValidateSMS() error = %v, want %v", err, tc.wantErr)
 			}
@@ -135,9 +128,9 @@ func TestSMSContent_LengthLimit(t *testing.T) {
 ```
 
 (The example's `content.ValidateSMS` / `ErrSMSTooLong` are illustrative; use the names the
-contract actually defines.)
+REQ criterion actually states.)
 
-- Compare errors with `errors.Is` against contracted sentinels — never by message text.
+- Compare errors with `errors.Is` against sentinels named by the REQ — never by message text.
 - Compare structs with `github.com/google/go-cmp/cmp` (`cmp.Diff`); no assertion frameworks.
 - `t.Helper()` in every helper; `t.Parallel()` unless the test shares state.
 - Boundary values always: limit, limit±1, empty, Unicode (ğüşİı), the 29/30/31-day edges.
@@ -146,7 +139,7 @@ contract actually defines.)
 
 | Source | Rule |
 |---|---|
-| Time | Never `time.Now()`. Inject the contracted `Clock`; use a fake clock at a fixed reference (`2026-01-15T12:00:00Z`). **No `time.Sleep`**: advance the fake clock or wait on a channel with a timeout. |
+| Time | Never `time.Now()`. Inject the `Clock` named by the REQ; use a fake clock at a fixed reference (`2026-01-15T12:00:00Z`). **No `time.Sleep`**: advance the fake clock or wait on a channel with a timeout. |
 | Randomness | No global `math/rand`. Pass a seeded `*rand.Rand` (jitter, provider fault injection, seed data). |
 | Network | `httptest.Server` only. Never reach a real host; the Anthropic API is unreachable in tests by design. |
 | Database | No DB in unit tests. Integration tests isolate per test (transaction rollback or own schema) and must pass under `-shuffle=on`. |

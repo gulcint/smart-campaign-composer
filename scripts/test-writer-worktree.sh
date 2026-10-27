@@ -32,5 +32,6 @@ if [[ -n "$leaked" ]]; then
 fi
 
 echo "test worktree ready: $dir"
-echo "case document (gitignored, not in the worktree): $root/Smart Campaign Composer Case.html"
+echo "sole test source: docs/requirements.md (the case document, docs/contracts/** and DECISIONS.md are not test sources and the guard blocks them)"
+echo "missing behaviour: report \"REQ eksik\" to the owner instead of writing a test"
 echo "next: cd \"$dir\" && claude --agent test-writer"
