@@ -57,13 +57,6 @@ Git kuralları (ayrıntı `docs/PLAN.md` §1–2):
 - Yeni migration'ı olan faz `make db-roundtrip` hedefini eklemek zorunda; pre-push bunu çağırır.
 - Her Docker build context'i (ör. `web/`) kökteki `.dockerignore`'un sır kurallarını kendi `.dockerignore`'unda tekrarlamalı; Docker yalnızca context kökündeki dosyayı okur.
 
-## API dokümanı (Swagger)
-
-- Kaynak: elle yazılmış `docs/contracts/openapi.yaml` (tek doğruluk kaynağı, D30). `internal/httpapi/openapi/` altındaki kopya birebir aynı olmalı (`make check-contract-copies`); doküman ayrıca üretilmez.
-- API bu rotaları sunar: `GET /docs`, `GET /docs/{asset}`, `GET /openapi.yaml`, `GET /schemas/{schema}` (kod: `internal/httpapi/docs.go`, vendored `swagger-ui-dist` `internal/httpapi/docs/`, CDN ve inline script yok). nginx (`web/nginx.conf`) bu yolları API'ye iletir; yeni bir docs rotası eklenirse nginx `location` ifadesi, `docs/contracts/README.md` §7 ve `compose.test.yml` birlikte güncellenir.
-- Sapma kapıları: `make api-routes` (`Routes()` ↔ openapi), `make api-lint` (Redocly), `make api-breaking` (oasdiff; bilinçli kırıcı değişiklikte PR etiketi `api-breaking-ok`), `make api-types-check` (`web/src/api/schema.gen.ts`), E2E'nin strict doğrulaması (`OPENAPI_VALIDATE=strict`) ve `test/contract/allowlist.go` (`NotImplemented`: uygulanan işlem listeden çıkarılır).
-- Sözleşme değişince `docs/API.md` (Türkçe kullanım rehberi) ve README'deki "API dokümanı" bölümü güncel tutulur.
-
 ## Test yazarı
 
 Testleri yalnızca `test-writer` ajanı yazar (`.claude/agents/test-writer.md`, kuralları `.claude/skills/writing-tests/SKILL.md`). Kaynakları: case dokümanı, `docs/requirements.md`, `docs/contracts/**` — implementasyon asla.
