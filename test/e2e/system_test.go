@@ -156,13 +156,20 @@ func TestE2E_APIMetricsEndpoint(t *testing.T) {
 	}
 }
 
-// REQ-DLV-01
-// The mock provider is part of the stack and answers its health check (metrics.md §3).
+// REQ-DLV-01, REQ-MOCK-01
+// The mock provider is part of the stack and answers its health check with {"status":"ok"}.
 func TestE2E_MockProviderIsUp(t *testing.T) {
 	t.Parallel()
 	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
 	status, _, body := get(t, mp+"/healthz")
 	if status != http.StatusOK {
 		t.Fatalf("GET mockprovider /healthz status = %d, want 200; body: %s", status, body)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("GET mockprovider /healthz body is not JSON (%v): %s", err, body)
+	}
+	if diff := cmp.Diff(map[string]any{"status": "ok"}, got); diff != "" {
+		t.Fatalf("GET mockprovider /healthz body mismatch (-want +got):\n%s", diff)
 	}
 }

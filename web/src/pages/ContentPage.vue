@@ -40,10 +40,12 @@ import { invalidVariables } from '@/lib/variables'
 import { campaignIdOf } from '@/router'
 import { injectApiClient, reportError } from '@/stores/api'
 import { useCampaignStore } from '@/stores/campaign'
+import { useConfigStore } from '@/stores/config'
 
 const route = useRoute()
 const router = useRouter()
 const store = useCampaignStore()
+const config = useConfigStore()
 const client = injectApiClient()
 const { notify } = useNotify()
 const gen = useContentGeneration()
@@ -501,6 +503,7 @@ onMounted(() => {
                 :text="gen.fields[f].text"
                 :phase="gen.fields[f].phase"
                 :errors="gen.fields[f].errors"
+                :provider="config.provider"
                 @regenerate="onRegenerate"
               />
             </div>
