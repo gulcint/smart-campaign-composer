@@ -91,6 +91,36 @@ for c in 'git worktree list' 'git branch' 'git branch --list' 'git switch main' 
   tw_expect allow "$c"
 done
 
+# Shell grep/rg: test paths and docs only (owner decision, docs/PLAN.md §3.1).
+for c in 'grep -rn REQ-CNT-01 test web/tests' 'grep -rn REQ-CNT-01 internal/content/validate_test.go' \
+         'rg -n REQ-AUD-04 test testdata docs' 'grep -rn -e REQ-SND-03 test' 'grep -c REQ-AI-01 DECISIONS.md' \
+         'grep -rln REQ-CNT-01 ./test/e2e' 'grep -rn x internal/seed/testdata' \
+         'grep -rn REQ-CNT-01 test | wc -l'; do
+  tw_expect allow "$c"
+done
+for c in 'grep -rn x internal' 'grep -rn x .' 'grep -rn x' 'grep x' 'grep x web/src/a.ts' 'grep x test ../internal' \
+         'grep x test/../internal' 'grep -rn x cmd migrations' 'grep x /etc/passwd' 'grep x .env' 'grep x docs/.env.local' \
+         'grep -f internal/a.go test' 'grep -rnf internal/a.go test' 'rg --pre cat x test' 'rg x test --pre=cat' \
+         'grep -rn x test $HOME' 'grep x test $(echo internal)' 'grep x - < internal/a.go' 'grep x test | grep y' \
+         'grep -e x -- internal' 'rg x *' 'git grep x' \
+         'cat internal/a.go' 'python3 -c 1' 'echo $(cat internal/a.go)' 'echo `cat internal/a.go`' 'echo x > internal/a.go'; do
+  tw_expect block "$c"
+done
+
+# Grep tool: only test paths, test globs or docs.
+tw_tool() { # <block|allow> <tool_input json>
+  local got=block
+  if "$root/scripts/claude/test-writer-guard.sh" <<<"{\"tool_name\":\"Grep\",\"tool_input\":$2}" >/dev/null 2>&1; then got=allow; fi
+  if [[ "$got" == "$1" ]]; then echo "PASS: test-writer Grep $1  $2"; else echo "FAIL: test-writer Grep expected $1, got $got: $2"; fails=$((fails + 1)); fi
+}
+tw_tool allow '{"pattern":"REQ-CNT-01","glob":"*_test.go"}'
+tw_tool allow '{"pattern":"REQ-CNT-01","path":"web/tests"}'
+tw_tool allow '{"pattern":"REQ-CNT-01","path":"test"}'
+tw_tool allow '{"pattern":"REQ-CNT-01","glob":"*.spec.ts"}'
+tw_tool block '{"pattern":"REQ-CNT-01"}'
+tw_tool block '{"pattern":"x","path":"internal/content"}'
+tw_tool block '{"pattern":"x","path":"internal","glob":"*_test.go"}'
+
 # --- scripts/worktree-remove.sh against a scratch repo ---
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

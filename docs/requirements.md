@@ -352,8 +352,47 @@ Test yazarı bu adları tahmin edemez; hepsi `docs/contracts/**` içinde tanıml
 
 ## İzlenebilirlik
 
-Her test fonksiyonu `// REQ-XXX-NN` yorumu taşır. Faz kapılarında testsiz REQ listesi boş olmalıdır (`docs/PLAN.md` §4.1). Bu tablo test yazarı tarafından faz içinde doldurulur.
+Her test fonksiyonu `// REQ-XXX-NN` yorumu taşır. Faz kapılarında testsiz REQ listesi boş olmalıdır (`docs/PLAN.md` §4.1). Yeni test yazmadan önce REQ ID'si test yollarında aranır; test varsa o dosya genişletilir, yeni dosya yalnızca yeni katman veya alan için açılır ve buraya yazılır (`docs/PLAN.md` §4.5).
 
-| REQ | Test dosyası | Test adı |
-|---|---|---|
-| _(P2'den itibaren)_ | | |
+`Test katmanı` değerleri sözleşmelerden (`docs/contracts/README.md` §8, `go-interfaces.md` paket tablosu, `llm-tools.md`) ve `docs/PLAN.md` §4.4'ten alınmıştır: `unit` (Go, `-short`), `integration` (Go + Postgres), `delivery` (`test/delivery/`), `e2e` (`test/e2e/`), `web-unit` (`web/tests/`, Vitest), `contract` (süreç/araç denetimi: `make test-hooks`, `make check-sessions`, key'siz `make test`); `—` = henüz belirlenmedi. Test dosyası ve adı sütunlarını test yazarının raporundan sahip/mimar doldurur.
+
+| REQ | Test katmanı | Test dosyası | Test adı |
+|---|---|---|---|
+| REQ-AUD-00 | unit, integration, e2e | | |
+| REQ-AUD-01 | unit, e2e | | |
+| REQ-AUD-02 | unit, integration, e2e | | |
+| REQ-AUD-03 | integration, e2e, web-unit | | |
+| REQ-AUD-04 | integration, delivery, e2e | | |
+| REQ-AUD-05 | unit, e2e, web-unit | | |
+| REQ-CNT-01 | unit, e2e, web-unit | | |
+| REQ-CNT-02 | unit, web-unit | | |
+| REQ-CNT-03 | unit, e2e, web-unit | | |
+| REQ-CNT-04 | unit, integration, e2e, web-unit | | |
+| REQ-CNT-05 | unit, integration, delivery | | |
+| REQ-APR-01 | e2e, web-unit | | |
+| REQ-APR-02 | unit, e2e, web-unit | | |
+| REQ-APR-03 | unit, integration, e2e, web-unit | | |
+| REQ-SND-01 | integration, e2e | | |
+| REQ-SND-02 | unit, integration, delivery | | |
+| REQ-SND-03 | integration, delivery | | |
+| REQ-SND-04 | unit, delivery | | |
+| REQ-SND-05 | — | | |
+| REQ-TRK-01 | e2e, web-unit | | |
+| REQ-TRK-02 | e2e | | |
+| REQ-TRK-03 | unit, e2e | | |
+| REQ-AI-01 | unit, e2e | | |
+| REQ-AI-02 | unit, contract | | |
+| REQ-AI-03 | unit, e2e, web-unit | | |
+| REQ-AI-04 | unit | | |
+| REQ-AI-05 | unit | | |
+| REQ-MOCK-01 | delivery | | |
+| REQ-MOCK-02 | delivery | | |
+| REQ-UI-01 | unit, e2e, web-unit | | |
+| REQ-SEC-01 | unit | | |
+| REQ-SEC-02 | integration | | |
+| REQ-SEED-01 | unit, integration | | |
+| REQ-SEED-02 | unit, integration | | |
+| REQ-DLV-01 | — | | |
+| REQ-DLV-02 | unit, contract | | |
+| REQ-DLV-03 | contract | | |
+| REQ-DLV-04 | — | | |

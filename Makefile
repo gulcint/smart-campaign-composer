@@ -24,8 +24,9 @@ test-web: ## Vitest (web/tests) in the Node test container
 	@status=0; $(TEST_COMPOSE) run --rm --build web-test || status=$$?; \
 	$(TEST_COMPOSE) down -v --remove-orphans; exit $$status
 
-test-hooks: ## Behaviour tests for the agent guards, worktree-remove and the session sanitizer
+test-hooks: ## Behaviour tests for the agent guards, worktree-remove, test-file names and the session sanitizer
 	scripts/tests/guard-destructive-git.sh
+	scripts/tests/check-test-files.sh
 	scripts/tests/sanitize-sessions.sh
 
 test-unit: ## Go unit tests on the host, no DB, mock LLM
