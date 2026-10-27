@@ -72,7 +72,8 @@ flowchart LR
   mock["mockprovider"]
 
   web --> api
-  api -. "canlı akış, P4/P5" .-> web
+  api -- "içerik akışı (SSE)" --> web
+  api -. "canlı durum akışı, P5" .-> web
   api --> llm
   api --> db
   seed --> db
@@ -98,7 +99,7 @@ Faz kapsamları: [`docs/PLAN.md`](docs/PLAN.md). Durum yalnızca koddan, git ge�
 | P1 Sözleşmeler | ✅ bitti | Gereksinimler, OpenAPI, şemalar, arayüz ve Go sözleşmeleri |
 | P2 Seed + altyapı | ✅ bitti | Seed, migration'lar, compose, LLM fabrikası ve sahte LLM, mock provider, `make test` |
 | P3 Kitle | ✅ bitti | Segment kuralı, kişi sayıları, brief ve kitle ekranları, API'nin sözleşmeden sapmaması için koruma |
-| P4 İçerik + onay | ⬜ başlamadı | SMS/email üretimi (SSE), limitler, düzenleme, onay |
+| P4 İçerik + onay | ✅ bitti | SMS/email üretimi (SSE akışı), karakter limitleri, kişiselleştirme, düzenleme (sürümlü), onay, önizleme; içerik ve onay ekranları |
 | P5 Gönderim + takip | ⬜ başlamadı | Kuyruk, hız sınırı, retry, canlı durum, dashboard |
 | P6 Sertleştirme + teslim | ⬜ başlamadı | Uçtan uca test, güvenlik taraması, son README ve DECISIONS |
 | Bonus | ⬜ başlamadı | Zamanlanmış gönderim, A/B varyantları, dile göre içerik |
@@ -115,7 +116,7 @@ make help           # diğer komutlar
 
 Yerelde `.env` dosyasına Claude anahtarı koyarsanız sistem gerçek Claude'u kullanır, koymazsanız sahte LLM çalışır. Örnek: [`.env.example`](.env.example).
 
-Bugün denenebilecek olan: `docker compose up` bitince tarayıcıda <http://127.0.0.1:8081> adresini açın (bu port başka bir programda doluysa `.env` dosyasına `WEB_PORT=8082` gibi boş bir port yazın; API için `API_PORT` aynı şekilde çalışır; hangi portun açıldığını `docker compose ps` gösterir) ve örnek brief'i yazın ("Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder"); sistem segment kuralını ve kanal başına kaç kişiye ulaşılacağını gösterir. Anahtar yoksa cevabı sahte LLM verir, `.env`'ye anahtar koyarsanız gerçek Claude cevaplar. Henüz yapılamayanlar: mesaj içeriği üretimi ve onay (P4), gönderim ve canlı takip (P5).
+Bugün denenebilecek olan: `docker compose up` bitince tarayıcıda <http://127.0.0.1:8081> adresini açın (bu port başka bir programda doluysa `.env` dosyasına `WEB_PORT=8082` gibi boş bir port yazın; API için `API_PORT` aynı şekilde çalışır; hangi portun açıldığını `docker compose ps` gösterir) ve örnek brief'i yazın ("Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder"); sistem segment kuralını ve kanal başına kaç kişiye ulaşılacağını gösterir. Anahtar yoksa cevabı sahte LLM verir, `.env`'ye anahtar koyarsanız gerçek Claude cevaplar. Ardından aynı kampanya için SMS ve email içeriğinin akarak üretildiğini görür, metni düzenler ve onaylarsınız. Henüz yapılamayanlar: gönderim ve canlı takip (P5).
 
 ## Nereden okunur
 
@@ -134,5 +135,14 @@ Bugün denenebilecek olan: `docker compose up` bitince tarayıcıda <http://127.
 - Kanal izni olmayan kişiye o kanaldan mesaj gitmez.
 - API ile dokümanı CI aynı tutar: OpenAPI sözleşmedir, testler her istek ve cevabı ona göre doğrular.
 - Kimlik doğrulama yoktur; sistem yerel demo olarak yalnızca `127.0.0.1`'e açılır.
-- Henüz yok: mesaj üretimi ve onay (P4), gönderim ve canlı panel (P5), uçtan uca test ve güvenlik taraması (P6).
+- Henüz yok: gönderim ve canlı panel (P5), uçtan uca test ve güvenlik taraması (P6).
 - Bonuslar (zamanlanmış gönderim, A/B varyantları, dile göre içerik) başlamadı. Gerçek Claude istemcisi için otomatik test yoktur, elle doğrulandı ([`DECISIONS.md`](DECISIONS.md)).
+
+## Bilinen sınırlar
+
+- Arayüzde gönder düğmesi görünür, ama `/send` ucu P5'e kadar kayıtlı değildir; düğme 404 uyarısı verir.
+- İçerik üretim kilidi süreç başınadır. P5'te `Send` yazılmadan önce veritabanı düzeyinde bir üretim işaretçisi gerekir ([`DECISIONS.md`](DECISIONS.md) D47).
+- Swagger UI gibi etkileşimli API dokümanı yoktur (sahip kararıyla kaldırıldı, D36). API başvurusu: [`docs/contracts/openapi.yaml`](docs/contracts/openapi.yaml).
+- Otomatik testler yalnızca `docs/requirements.md`'den türetilir (D50); yalnız sözleşmede yazan birçok davranış testsizdir.
+- Gerçek Claude istemcisinin otomatik testi yoktur; şehir yazımı ve SMS uzunluğu gibi davranışlar elle doğrulanmalıdır.
+- CI artık `web-image`, `compose-ports` ve `actionlint` kontrollerini çalıştırmaz (D27, D51).
