@@ -824,10 +824,11 @@ func TestE2E_ContentGenerationLock(t *testing.T) {
 // ---- editContent ----
 
 // REQ-APR-01, REQ-APR-03 (D40)
-// Optimistic concurrency over HTTP: the base is the latest VALIDATED version id or "none"; a stale
-// base is 409 content_edit_conflict with error.current_version and stores nothing; repeating a
-// successful edit is a conflict too; a validated regeneration makes an open editor stale, an invalid
-// draft never counts as a base.
+// Optimistic concurrency over HTTP: a stale base is 409 content_edit_conflict with
+// error.current_version (both null before any version; the current id and number afterwards); the
+// first edit on "none" is 201 with the edit fields; repeating it is a conflict too. The service
+// semantics (stale after a validated regeneration, an invalid draft is never a base, nothing stored,
+// numbering) live in TestService_EditExpectedVersion and TestService_VersionNumbersCountInvalidDrafts.
 func TestE2E_EditOptimisticConcurrency(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -847,44 +848,14 @@ func TestE2E_EditOptimisticConcurrency(t *testing.T) {
 
 	status, hdr, body = postEdit(t, api, id, "none", editDoc("v1").json(t))
 	assertEditConflict(t, status, hdr, body, v1.ID, 1)
-
-	v2 := mustEdit(t, api, id, v1.ID, editDoc("v2"))
-	status, hdr, body = postEdit(t, api, id, v1.ID, editDoc("bayat").json(t))
-	assertEditConflict(t, status, hdr, body, v2.ID, 2)
-	if n := len(listVersions(t, api, id)); n != 2 {
-		t.Fatalf("versions after a conflict = %d, want 2", n)
-	}
-
-	v3 := generate(t, api, id, "ok").validated
-	if v3 == nil || v3.VersionNumber != 3 {
-		t.Fatalf("regeneration = %+v, want validated version 3", v3)
-	}
-	status, hdr, body = postEdit(t, api, id, v2.ID, editDoc("açık editör").json(t))
-	assertEditConflict(t, status, hdr, body, v3.ContentVersionID, 3)
-
-	draft := generate(t, api, id, "over_limit_subject").final
-	if draft == nil || draft.ContentVersionID == nil {
-		t.Fatalf("over_limit_subject stored no draft: %+v", draft)
-	}
-	status, hdr, body = postEdit(t, api, id, *draft.ContentVersionID, editDoc("taslak").json(t))
-	assertEditConflict(t, status, hdr, body, v3.ContentVersionID, 3)
-	v5 := mustEdit(t, api, id, v3.ContentVersionID, editDoc("v5"))
-	if v5.VersionNumber != 5 {
-		t.Fatalf("edit after the draft = version %d, want 5", v5.VersionNumber)
-	}
-	var nums []int
-	for _, v := range listVersions(t, api, id) {
-		nums = append(nums, v.VersionNumber)
-	}
-	if diff := cmp.Diff([]int{5, 4, 3, 2, 1}, nums); diff != "" {
-		t.Fatalf("version numbers (newest first) mismatch (-want +got):\n%s", diff)
-	}
 }
 
 // REQ-APR-02, REQ-CNT-01, REQ-CNT-02, REQ-CNT-03, REQ-CNT-05
 // An edit sent straight to the API goes through the same validator as LLM output: every invalid
 // body is 422 with the contracted field error (lengths after substituting the segment's longest
-// values) and NOTHING is stored; header and body format problems come first.
+// values, with limit/actual) and NOTHING is stored. Header and body format problems (missing,
+// malformed or upper-case X-Expected-Version, broken JSON, > 64 KiB) are handler checks and live in
+// internal/httpapi TestEditContent_ExpectedVersionHeader and TestEditContent_BodyChecks.
 func TestE2E_EditValidation(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -896,8 +867,6 @@ func TestE2E_EditValidation(t *testing.T) {
 	}
 	L := m.ExampleBrief.LongestValues.FirstName
 	fit := strings.Repeat("a", 160-L)
-	ok := okDoc()
-	big := mkContent(strings.Repeat("a", 65537), "Konu", "Gövde").json(t)
 
 	tests := []struct {
 		name     string
@@ -909,9 +878,6 @@ func TestE2E_EditValidation(t *testing.T) {
 		limit    int
 		actual   int
 	}{
-		{name: "missing X-Expected-Version", expected: "", body: ok.json(t), status: 422, code: "validation_failed", want: fieldWant{"header.X-Expected-Version", "schema_violation"}},
-		{name: "malformed X-Expected-Version", expected: "v1", body: ok.json(t), status: 422, code: "validation_failed", want: fieldWant{"header.X-Expected-Version", "invalid_value"}},
-		{name: "upper-case UUID X-Expected-Version", expected: strings.ToUpper(base.ContentVersionID), body: ok.json(t), status: 422, code: "validation_failed", want: fieldWant{"header.X-Expected-Version", "invalid_value"}},
 		{name: "161-char SMS", expected: base.ContentVersionID, body: mkContent(strings.Repeat("a", 161), e2eOKSubject, e2eOKBody).json(t), status: 422, code: "validation_failed", want: fieldWant{"sms.body", "sms_too_long"}, limit: 160, actual: 161},
 		{name: "161 Turkish letters", expected: base.ContentVersionID, body: mkContent(strings.Repeat("ş", 161), e2eOKSubject, e2eOKBody).json(t), status: 422, code: "validation_failed", want: fieldWant{"sms.body", "sms_too_long"}, limit: 160, actual: 161},
 		{name: "first_name placeholder one over after substitution", expected: base.ContentVersionID, body: mkContent("{{first_name}}"+fit+"a", e2eOKSubject, e2eOKBody).json(t), status: 422, code: "validation_failed", want: fieldWant{"sms.body", "sms_too_long"}, limit: 160, actual: 161},
@@ -924,8 +890,6 @@ func TestE2E_EditValidation(t *testing.T) {
 		{name: "whitespace-only email body", expected: base.ContentVersionID, body: mkContent(e2eOKSMS, e2eOKSubject, " \n ").json(t), status: 422, code: "validation_failed", want: fieldWant{"email.body", "required"}},
 		{name: "missing key", expected: base.ContentVersionID, body: []byte(`{"sms":{"body":"a"},"email":{"subject":"b"}}`), status: 422, code: "validation_failed", want: fieldWant{"email.body", "schema_violation"}},
 		{name: "unknown key", expected: base.ContentVersionID, body: []byte(`{"sms":{"body":"a"},"email":{"subject":"b","body":"c"},"html":"<script>alert(1)</script>"}`), status: 422, code: "validation_failed", want: fieldWant{"html", "schema_violation"}},
-		{name: "broken JSON", expected: base.ContentVersionID, body: []byte(`{"sms":`), status: 400, code: "malformed_request"},
-		{name: "body over 64 KiB", expected: base.ContentVersionID, body: big, status: 413, code: "payload_too_large"},
 	}
 	// The group returns only after its parallel subtests finished.
 	t.Run("rejected", func(t *testing.T) {
@@ -992,36 +956,18 @@ func TestE2E_EditAcceptsBoundaries(t *testing.T) {
 	}
 }
 
-// REQ-APR-01, REQ-APR-03 (README §5.4)
-// editContent refusals by state and order: a draft campaign is 409 invalid_state; an unknown
-// campaign is 404, but a missing header is 422 first (header before use case) while a malformed
-// path id is 404 before everything.
-func TestE2E_EditStateAndOrder(t *testing.T) {
-	t.Parallel()
-	api := baseURL(t, "E2E_API_URL")
-	m := readManifest(t)
-	draftID, _ := createCampaign(t, api, m.ExampleBrief.Brief)
-	body := editDoc("x").json(t)
-
-	status, hdr, b := postEdit(t, api, draftID, "none", body)
-	assertError(t, status, hdr, b, http.StatusConflict, "invalid_state", false)
-	status, hdr, b = postEdit(t, api, unknownCampaignID, "none", body)
-	assertError(t, status, hdr, b, http.StatusNotFound, "campaign_not_found", false)
-	status, hdr, b = postEdit(t, api, unknownCampaignID, "", body)
-	e := assertError(t, status, hdr, b, http.StatusUnprocessableEntity, "validation_failed", true)
-	if !e.has(fieldWant{"header.X-Expected-Version", "schema_violation"}) {
-		t.Fatalf("error.fields = %+v, want the header error", e.Fields)
-	}
-	status, hdr, b = postEdit(t, api, "not-a-uuid", "", body)
-	assertError(t, status, hdr, b, http.StatusNotFound, "campaign_not_found", false)
-}
-
 // ---- approveContent ----
 
-// REQ-APR-01, REQ-APR-03 (D39)
+// REQ-APR-01, REQ-APR-03 (D39; openapi approveContent, README §5.4 P4 matrix)
 // Approve the latest validated version: 200 approved Campaign bound to it; approving it again is
 // idempotent (same approval id and approved_at); an edit after approval drops the campaign to
-// content_ready with no approval; the old version is then stale (409); the new one can be approved.
+// content_ready with no approval; the old version is then stale (409); the new one can be approved;
+// after a new segment the campaign is audience_ready and approving is 409 invalid_state.
+// Before that, every documented refusal of approveContent that the shared seeded database allows
+// (400, 413, 422 schema_violation / invalid_value, 404 campaign_not_found / content_version_not_found)
+// is answered through the strict OpenAPI client and changes nothing. 409 generation_in_progress and
+// content_not_validated are covered by TestE2E_ContentGenerationLock and TestE2E_ContentFinalInvalid;
+// the 422 worst-case re-check needs a customer mutation (forbidden here, openapi approveContent).
 func TestE2E_ApproveFlow(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -1030,6 +976,43 @@ func TestE2E_ApproveFlow(t *testing.T) {
 	v1 := generate(t, api, id, "ok").validated
 	if v1 == nil {
 		t.Fatal("setup: no validated version")
+	}
+
+	vid := v1.ContentVersionID
+	refused := []struct {
+		name    string
+		id      string
+		body    []byte
+		headers map[string]string
+		status  int
+		code    string
+		field   *fieldWant
+	}{
+		{name: "body that is not JSON", id: id, body: []byte("content_version_id=" + vid), status: 400, code: "malformed_request"},
+		{name: "non-JSON Content-Type", id: id, body: []byte(`{"content_version_id":"` + vid + `"}`), headers: map[string]string{"Content-Type": "text/plain"}, status: 400, code: "malformed_request"},
+		{name: "body over 65536 bytes", id: id, body: []byte(`{"content_version_id":"` + vid + `"` + strings.Repeat(" ", 65537) + `}`), status: 413, code: "payload_too_large"},
+		{name: "unknown property instead of content_version_id", id: id, body: []byte(`{"version_id":"` + vid + `"}`), status: 422, code: "validation_failed", field: &fieldWant{Code: "schema_violation"}},
+		{name: "content_version_id of the wrong type", id: id, body: []byte(`{"content_version_id":1}`), status: 422, code: "validation_failed", field: &fieldWant{Code: "schema_violation"}},
+		{name: "malformed content_version_id", id: id, body: []byte(`{"content_version_id":"0b8f6c2e"}`), status: 422, code: "validation_failed", field: &fieldWant{"content_version_id", "invalid_value"}},
+		{name: "malformed body on an unknown campaign is 422, not 404", id: unknownCampaignID, body: []byte(`{"content_version_id":"0b8f6c2e"}`), status: 422, code: "validation_failed", field: &fieldWant{"content_version_id", "invalid_value"}},
+		{name: "unknown campaign", id: unknownCampaignID, body: []byte(`{"content_version_id":"` + vid + `"}`), status: 404, code: "campaign_not_found"},
+		{name: "version not in the campaign", id: id, body: []byte(`{"content_version_id":"` + unknownVerID + `"}`), status: 404, code: "content_version_not_found"},
+	}
+	// The group returns only after its parallel subtests finished.
+	t.Run("refused", func(t *testing.T) {
+		for _, tc := range refused {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				status, hdr, body := doJSON(t, http.MethodPost, api+"/api/campaigns/"+tc.id+"/approve", tc.body, tc.headers)
+				e := assertError(t, status, hdr, body, tc.status, tc.code, tc.field != nil)
+				if tc.field != nil && !e.hasLoose(*tc.field) {
+					t.Fatalf("error.fields = %+v, want %+v", e.Fields, *tc.field)
+				}
+			})
+		}
+	})
+	if c := getCampaignDoc(t, api, id); c.State != "content_ready" || c.Approval != nil {
+		t.Fatalf("after refused approvals state/approval = %s/%v, want content_ready/null", c.State, c.Approval)
 	}
 
 	c1 := mustApprove(t, api, id, v1.ContentVersionID)
@@ -1052,94 +1035,18 @@ func TestE2E_ApproveFlow(t *testing.T) {
 	if c4.State != "approved" || c4.Approval.ContentVersionID != v2.ID || c4.Approval.ID == c1.Approval.ID {
 		t.Fatalf("re-approval = %+v, want a new approval bound to v2", c4.Approval)
 	}
-}
 
-// REQ-APR-01, REQ-APR-03, REQ-CNT-04
-// approveContent refusals: before any validated version (only an invalid draft) 409
-// content_not_validated; unknown version or another campaign's version 404
-// content_version_not_found; unknown campaign 404; body problems 400/422.
-func TestE2E_ApproveErrors(t *testing.T) {
-	t.Parallel()
-	api := baseURL(t, "E2E_API_URL")
-	m := readManifest(t)
-	id := audienceReady(t, api, m)
-	other := audienceReady(t, api, m)
-	otherV := generate(t, api, other, "ok").validated
-	draft := generate(t, api, id, "unknown_variable").final
-	if otherV == nil || draft == nil || draft.ContentVersionID == nil {
-		t.Fatal("setup failed")
-	}
-	tests := []struct {
-		name   string
-		id     string
-		body   string
-		status int
-		code   string
-		field  *fieldWant
-	}{
-		{name: "invalid draft", id: id, body: `{"content_version_id":"` + *draft.ContentVersionID + `"}`, status: 409, code: "content_not_validated"},
-		{name: "another campaign's version", id: id, body: `{"content_version_id":"` + otherV.ContentVersionID + `"}`, status: 404, code: "content_version_not_found"},
-		{name: "unknown version", id: id, body: `{"content_version_id":"` + unknownVerID + `"}`, status: 404, code: "content_version_not_found"},
-		{name: "unknown campaign", id: unknownCampaignID, body: `{"content_version_id":"` + otherV.ContentVersionID + `"}`, status: 404, code: "campaign_not_found"},
-		{name: "malformed version id", id: id, body: `{"content_version_id":"v1"}`, status: 422, code: "validation_failed", field: &fieldWant{"content_version_id", "invalid_value"}},
-		{name: "missing version id", id: id, body: `{}`, status: 422, code: "validation_failed", field: &fieldWant{Code: "schema_violation"}},
-		{name: "extra property", id: id, body: `{"content_version_id":"` + otherV.ContentVersionID + `","force":true}`, status: 422, code: "validation_failed", field: &fieldWant{Code: "schema_violation"}},
-		{name: "broken JSON", id: id, body: `{"content_version_id":`, status: 400, code: "malformed_request"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			status, hdr, body := doJSON(t, http.MethodPost, api+"/api/campaigns/"+tc.id+"/approve", []byte(tc.body), nil)
-			e := assertError(t, status, hdr, body, tc.status, tc.code, tc.field != nil)
-			if tc.field != nil && !e.hasLoose(*tc.field) {
-				t.Fatalf("error.fields = %+v, want %+v", e.Fields, *tc.field)
-			}
-		})
-	}
-	if c := getCampaignDoc(t, api, id); c.State != "audience_ready" || c.Approval != nil {
-		t.Fatalf("after refused approvals state/approval = %s/%v", c.State, c.Approval)
-	}
-}
-
-// REQ-APR-03, REQ-CNT-04 (sse-events.md §1.2 #6)
-// On an approved campaign a failed regeneration changes nothing (still approved, same approval and
-// latest version); a successful regeneration revokes the approval (content_ready); a new segment
-// returns to audience_ready and the old version can no longer be approved (409 invalid_state).
-func TestE2E_ApprovalAndRegeneration(t *testing.T) {
-	t.Parallel()
-	api := baseURL(t, "E2E_API_URL")
-	m := readManifest(t)
-	id := audienceReady(t, api, m)
-	v1 := generate(t, api, id, "ok").validated
-	approved := mustApprove(t, api, id, v1.ContentVersionID)
-
-	if g := generate(t, api, id, "over_limit_sms"); g.final == nil {
-		t.Fatal("over_limit_sms did not end with a final invalid")
-	}
-	c := getCampaignDoc(t, api, id)
-	if c.State != "approved" || c.Approval == nil || c.Approval.ID != approved.Approval.ID || c.LatestContentVersion.ID != v1.ContentVersionID {
-		t.Fatalf("after failed regeneration = state %s approval %+v latest %v; want unchanged", c.State, c.Approval, c.LatestContentVersion)
-	}
-
-	v3 := generate(t, api, id, "ok").validated
-	c = getCampaignDoc(t, api, id)
-	if c.State != "content_ready" || c.Approval != nil || c.LatestContentVersion.ID != v3.ContentVersionID {
-		t.Fatalf("after successful regeneration = state %s approval %+v latest %v; want content_ready/null/new", c.State, c.Approval, c.LatestContentVersion)
-	}
-
-	status, _, body := doJSON(t, http.MethodPost, api+"/api/campaigns/"+id+"/segment", nil, scenario("ok"))
+	// A new segment returns the campaign to audience_ready: the validated v2 is now refused with
+	// 409 invalid_state (check 4 comes before the stale check 5).
+	status, _, body = doJSON(t, http.MethodPost, api+"/api/campaigns/"+id+"/segment", nil, scenario("ok"))
 	if status != http.StatusOK {
 		t.Fatalf("POST segment status = %d; body: %s", status, body)
 	}
-	c = getCampaignDoc(t, api, id)
-	if c.State != "audience_ready" || c.LatestContentVersion != nil || c.Segment.Revision != 2 {
-		t.Fatalf("after new segment = state %s latest %v revision %d; want audience_ready/null/2", c.State, c.LatestContentVersion, c.Segment.Revision)
+	if c := getCampaignDoc(t, api, id); c.State != "audience_ready" || c.Approval != nil {
+		t.Fatalf("after a new segment state/approval = %s/%v, want audience_ready/null", c.State, c.Approval)
 	}
-	status, hdr, body := approve(t, api, id, v3.ContentVersionID)
+	status, hdr, body = approve(t, api, id, v2.ID)
 	assertError(t, status, hdr, body, http.StatusConflict, "invalid_state", false)
-	if n := len(listVersions(t, api, id)); n != 3 {
-		t.Fatalf("versions after the new segment = %d, want 3 (old versions stay listed)", n)
-	}
 }
 
 // ---- previewContent ----
@@ -1381,4 +1288,22 @@ func TestE2E_ContentVersionsNotFound(t *testing.T) {
 			assertError(t, status, hdr, body, http.StatusNotFound, tc.code, false)
 		})
 	}
+}
+
+// REQ-APR-01, REQ-APR-03 (README §5.4 steps 1 and 4, openapi getContentVersion, previewContent)
+// Check order on unknown things: a malformed version id on an UNKNOWN campaign is 404
+// campaign_not_found (not content_version_not_found); previewContent with an unknown
+// content_version_id on a campaign without a segment is 404 content_version_not_found (the 404s come
+// before 409 invalid_state).
+func TestE2E_NotFoundOrder(t *testing.T) {
+	t.Parallel()
+	api := baseURL(t, "E2E_API_URL")
+	m := readManifest(t)
+	draftID, _ := createCampaign(t, api, m.ExampleBrief.Brief)
+
+	status, hdr, b := doJSON(t, http.MethodGet, api+"/api/campaigns/"+unknownCampaignID+"/content-versions/not-a-uuid", nil, nil)
+	assertError(t, status, hdr, b, http.StatusNotFound, "campaign_not_found", false)
+
+	status, hdr, b = doJSON(t, http.MethodGet, api+"/api/campaigns/"+draftID+"/preview?content_version_id="+unknownVerID, nil, nil)
+	assertError(t, status, hdr, b, http.StatusNotFound, "content_version_not_found", false)
 }

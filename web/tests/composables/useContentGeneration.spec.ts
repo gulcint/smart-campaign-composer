@@ -223,19 +223,18 @@ describe('useContentGeneration interruptions (REQ-CNT-04, sse-events.md §1.3.1)
     expect(gen.error.value).toBeNull()
   })
 
-  it('data that is not JSON or does not follow the event schema is treated as interrupted', async () => {
-    for (const bad of ['event: delta\ndata: {not json\n\n', frame('validated', { attempt: 1 })]) {
-      const { gen, s } = streaming()
-      const done = gen.start(CAMPAIGN_ID)
-      s.push(bad)
-      s.push(validated(content()))
-      s.close()
-      await done
-      expect(gen.versionStatus.value).toBe('interrupted')
-      expect(gen.error.value).toBeNull()
-      wrapper?.unmount()
-      wrapper = undefined
-    }
+  it.each([
+    { name: 'data that is not JSON', bad: 'event: delta\ndata: {not json\n\n' },
+    { name: 'data that does not follow the event schema', bad: frame('validated', { attempt: 1 }) },
+  ])('$name is treated as interrupted', async ({ bad }) => {
+    const { gen, s } = streaming()
+    const done = gen.start(CAMPAIGN_ID)
+    s.push(bad)
+    s.push(validated(content()))
+    s.close()
+    await done
+    expect(gen.versionStatus.value).toBe('interrupted')
+    expect(gen.error.value).toBeNull()
   })
 
   it('abort() aborts the request and marks the fields interrupted', async () => {
