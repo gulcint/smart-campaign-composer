@@ -13,7 +13,13 @@
     "typecheck": "vue-tsc --build",
     "lint": "eslint --max-warnings=0 . && prettier --check .",
     "format": "prettier --write .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "api-types": "node scripts/api-types.mjs"
+  },
+  "overrides": {
+    "openapi-typescript": {
+      "typescript": "$typescript"
+    }
   },
   "dependencies": {
     "@fontsource-variable/figtree": "5.3.0",
@@ -40,6 +46,7 @@
     "eslint-plugin-vue": "10.12.0",
     "globals": "17.13.0",
     "jsdom": "30.1.3",
+    "openapi-typescript": "7.13.0",
     "prettier": "3.9.10",
     "tailwindcss": "4.3.3",
     "tw-animate-css": "1.4.0",

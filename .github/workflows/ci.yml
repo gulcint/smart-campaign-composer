@@ -138,6 +138,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci --no-audit --no-fund
+      # contracts README §11 `api-types-check` (same as `make api-types-check`; the image has no make).
+      # The full checkout provides ../docs/contracts, and the job has no path filter, so spec-only
+      # PRs run it too.
+      - name: API types match docs/contracts/openapi.yaml
+        run: |
+          node scripts/api-types.mjs "$RUNNER_TEMP/schema.gen.ts"
+          diff -u src/api/schema.gen.ts "$RUNNER_TEMP/schema.gen.ts" \
+            || { echo "web/src/api/schema.gen.ts is stale: run 'make api-types' and commit it"; exit 1; }
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
