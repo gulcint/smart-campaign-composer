@@ -327,6 +327,8 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | Bileşen (çalışma adı) | Amaç | Base | Varyantlar | Durumlar | REQ |
 |---|---|---|---|---|---|
 | `Button` | Eylemler | shadcn `Button` + cva | `primary` (pill, `--gradient-cta`, beyaz 600 metin, `--shadow-cta`, sağda isteğe bağlı `ArrowUpRight` ↗ — referans dili) · `secondary` (pill, `--orange-50` zemin, `--orange-700` metin, 1 px `--orange-200`) · `ghost` (zeminsiz, `--text-accent`) · `danger-ghost` (`--error`). Boy: `sm` 32 / `md` 40 / `lg` 48 px; yatay 16/20/24 | default, hover (gradient-hover, gölge büyür), active (scale .98), focus-visible (`--shadow-focus`), disabled (opaklık .45, gölge yok, `cursor:not-allowed`, `aria-disabled`), loading (etiket kalır, solda `Spinner`, tıklama kilitli) | — |
+| `StepHeader` | Adım başlığı: "ADIM 3/5 · rol" overline (`--text-accent`), tek `h1`, tek satır amaç, adım durum rozeti (`StatusBadge`), "Sıradaki: …" pill'i | custom | İçerik / Onay | durum rozeti yoksa gizli; adım numarası <768'de gizli (kompakt stepper gösterir) | REQ-UI-01 |
+| `LimitChip` | Onay özetinde salt okunur uzunluk durumu ("Şablon 135/160", "Kişiselleştirme sonrası 130/160") | custom | — | `normal` (success, `CircleCheck`), `near-limit` (warning, `TriangleAlert`), `over-limit` (error, `CircleAlert`); eşikler `CharCounter` ile aynı; sayı mono tabular | REQ-CNT-01/02/05 |
 | `AppHeader` | Wordmark, sağlayıcı rozeti, kampanya durumu | custom | desktop / mobil (wordmark kısalır: "SCC") | — | REQ-AI-03 |
 | `ProviderBadge` | "Mock LLM" / "Claude" | shadcn `Badge` | `mock`: `--warning` zemin+metin, `FlaskConical` ikon, metin "Mock LLM" · `claude`: nötr, `Sparkles` ikon | yükleniyor (skeleton pill 88×24), bilinmiyor (gizli değil: "Sağlayıcı ?" nötr) | REQ-AI-03 |
 | `CampaignStepper` | Brief → Kitle → İçerik → Onay → Takip | shadcn `Stepper` (Reka) | yatay (≥768) / kompakt ("Adım 3/5 · İçerik" + 5 segmentli mini çubuk) | adım: `completed` (`--orange-600` dolu daire + `Check`), `active` (2 px `--orange-600` halka, etiket `--text-accent` 600), `upcoming` (`--ink-300`), `locked` (kampanya durumu izin vermiyor; tıklanamaz, tooltip nedenini söyler) | durum makinesi |
@@ -373,7 +375,7 @@ Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu 
 |---|---|---|
 | 1 Brief | her zaman (`sending`/`completed`'de salt okunur) | "Kitleyi çıkar" |
 | 2 Kitle | `audience_ready` ve sonrası | "İçeriği üret" |
-| 3 İçerik | `audience_ready` ve sonrası (içerik burada üretilir) | "Önizle ve onayla" |
+| 3 İçerik | `audience_ready` ve sonrası (içerik burada üretilir) | "İçeriği üret / Yeniden üret" → "Onaya geç" |
 | 4 Onay | `content_ready`, `approved` (ve sonrası salt okunur) | "Onayla" → "Gönder" |
 | 5 Takip | `sending`, `completed` | — (salt okunur) |
 
@@ -412,6 +414,21 @@ Durumlar: boş, yazıyor, gönderiliyor (balon + 3 nokta), 422/413 field hatası
 ```
 Durumlar: skeleton (sayı bloğu + 2 çubuk), hazır, 0 kişi (uyarı + "İçeriği üret" pasif), 502. Yeniden üretim içerik varken `ConfirmDialog regenerate` (REQ-APR-03: içerik ve onay geçersiz olur).
 
+### 8.3a İçerik ve Onay neden farklı görünür
+
+İki ekran aynı veriyi (SMS + email metni, önizleme) gösterdiği için önceki sürümde birbirine çok benziyordu. Rol ayrımı:
+
+| | İçerik (Adım 3 · "Üret ve düzenle") | Onay (Adım 4 · "Son kontrol ve karar") |
+|---|---|---|
+| Soru | "Metin iyi mi?" | "Bunu, bu kişilere gönderiyor muyum?" |
+| Kart rolü | Çalışma tezgâhı: editör kartı (`--surface-card`) + kesik çizgili, `--surface-sunken` zeminli **çalışma önizlemesi** | Tek **gönderim özeti** kartı (`--surface-raised`, `--shadow-raised`, üstte 4 px `--gradient-brand-vivid` şerit, logo rozeti): kanal başına alıcı sayısı, `LimitChip`'ler, gidecek metin bir kez |
+| Kanal geçişi | `ChannelTabs` (bir kanal düzenlenir) | Sekme yok: iki kanal yan yana (≥768) / alt alta |
+| Durum | `step-header-status` içerik rozeti (Taslak / Doğrulandı / Geçersiz / Akış kesildi) | kampanya rozeti (İçerik hazır / Onaylandı / Gönderiliyor) + "1 Onayla → 2 Gönder" karar listesi |
+| Birincil eylem | "Onaya geç" (eylem şeridinde, tek); `editor-save` yalnız kaydedilebilirken birincil | `ApprovalBar`: "Onayla", onaydan sonra "Gönder" |
+| İkincil | "Yeniden üret", "Taslağı düzenle" (invalid) | "Taslağı düzenle" (ghost, kart altı; onaylıysa "onay düşer" uyarısı) |
+
+Kaldırılan tekrarlar: Onay'daki ayrı "Kitle · SMS · Email" satırı (sayılar artık kanal sütun başlığında), "Sürüm"ün ortada yalnız başına durduğu satır (sürüm + kaynak kart başlığında), İçerik'teki "Önizle ve onayla" etiketi (onay İçerik'te verilmez → "Onaya geç").
+
 ### 8.3 İçerik (iki sütun ≥1024; solda editör/akış, sağda önizleme)
 
 ```
@@ -422,22 +439,29 @@ Durumlar: skeleton (sayı bloğu + 2 çubuk), hazır, 0 kişi (uyarı + "İçeri
 │ │ [+ first_name][+ last_name][+ city]│ │   │ seni bekliyor…       │  │ │
 │ │                        142/160    │ │   ╰──────────────────────╯  │ │
 │ └───────────────────────────────────┘ └─────────────────────────────┘ │
-│  [Yeniden üret]                        ( Önizle ve onayla ↗ ) (pasif) │
+│ ┌ eylem şeridi ──────────────────────────────────────────────────────┐│
+│ │ [Yeniden üret]          ✓ İki kanal doğrulandı   ( Onaya geç ↗ )   ││
+│ └────────────────────────────────────────────────────────────────────┘│
 ```
+Üstte `StepHeader`: "ADIM 3/5 · ÜRET VE DÜZENLE", h1 "Mesajları hazırla", amaç cümlesi, sağda içerik rozeti, altında "→ Sıradaki: Onaya geç" pill'i.
 Email sekmesinde: konu `Input` + sayaç `/80`, gövde `Textarea`; sağda `EmailPreview` (konu satırı + iframe). Akış sırasında editör `readonly`, caret görünür; her iki kanal `validated` olunca rozetler yeşile döner ve ana eylem aktifleşir. `interrupted` ve son `invalid` durumunda "Yeniden üret" birincil olur.
 
 ### 8.4 Onay
 
 ```
-│ ┌ Onay özeti ──────────────────────────────────────────────────┐ │
-│ │ Kitle  SMS 1.204 · Email 987                                  │ │
-│ │ SMS    [Doğrulandı] 142/160   [Düzenle]                       │ │
-│ │ Email  [Doğrulandı] konu 54/80 [Düzenle]                      │ │
-│ │ ┌ SmsPreview ┐  ┌ EmailPreview (sandbox) ┐                    │ │
-│ └──────────────────────────────────────────────────────────────┘ │
+│ ADIM 4/5 · SON KONTROL VE KARAR                       [İçerik hazır] │
+│ Gönderimi onayla                                                    │
+│ Bu adımda düzenleme yapılmaz: …        (1 Onayla) ── (2 Gönder)     │
+│ ┌▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┐ │
+│ │ [logo] Gönderim özeti                    Sürüm 4 · Elle düzenlendi │ │
+│ │ ● SMS                    342 alıcı │ ● Email               361 alıcı│ │
+│ │ [✓ Şablon 135/160] [✓ … 130/160]   │ [✓ Konu 42/80] [✓ … 42/80]     │ │
+│ │ GİDECEK METİN  SmsPreview          │ GİDECEK METİN  EmailPreview    │ │
+│ │ Metinde değişiklik mi gerekiyor?  ✎ Taslağı düzenle               │ │
+│ └──────────────────────────────────────────────────────────────────┘ │
 │ ═ ApprovalBar ══ ✓ İki kanal doğrulandı      ( Onayla ↗ ) ═══════ │
 ```
-Onay sonrası bar: "Onaylandı" + ( Gönder ↗ ) → `ConfirmDialog send`. 422 (REQ-CNT-05 kişiselleştirme sonrası aşım) diyalog içinde ilgili kanal satırına bağlı hata olarak gösterilir. Düzenle → İçerik adımına döner; onaylıyken düzenleme onayı düşürür (`stale`).
+Onay sonrası bar: "Onaylandı" + ( Gönder ↗ ) → `ConfirmDialog send`. 422 (REQ-CNT-05 kişiselleştirme sonrası aşım) diyalog içinde ilgili kanal satırına bağlı hata olarak gösterilir. "Taslağı düzenle" → İçerik adımına döner; onaylıyken düzenleme onayı düşürür (`stale`), kart altındaki not bunu baştan söyler. Onay ekranında düzenleme arayüzü (sekme, editör, sayaç, chip) yoktur.
 
 ### 8.5 Takip / Dashboard
 
