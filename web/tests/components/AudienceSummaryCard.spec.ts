@@ -80,6 +80,7 @@ describe('AudienceSummaryCard (REQ-AUD-03, REQ-AUD-04)', () => {
       message: 'llm output invalid',
       fields: [],
       requestId: 'r-1',
+      currentVersion: null,
     }
     const w = mountCard({ error })
     expect(w.get(sel('audience-card')).attributes('data-state')).toBe('error')

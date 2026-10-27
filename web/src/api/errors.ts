@@ -9,6 +9,8 @@ export interface ApiError {
   message: string
   fields: FieldError[]
   requestId: string | null
+  /** Only for content_edit_conflict (409): the campaign's current latest validated version. */
+  currentVersion: { id: string | null; version_number: number | null } | null
 }
 
 export type Display = 'page' | 'toast' | 'inline' | 'card' | 'banner'
@@ -28,6 +30,7 @@ const RULES: Record<ApiError['code'], Rule> = {
   invalid_state: { display: 'toast', variant: 'warning' },
   content_not_validated: { display: 'toast', variant: 'warning' },
   stale_content_version: { display: 'toast', variant: 'warning' },
+  content_edit_conflict: { display: 'inline', variant: 'warning' },
   generation_in_progress: { display: 'toast', variant: 'warning' },
   payload_too_large: { display: 'inline', variant: 'error' },
   validation_failed: { display: 'inline', variant: 'error' },
@@ -70,6 +73,7 @@ export function networkError(cause: unknown): ApiError {
     message: cause instanceof Error ? cause.message : 'network error',
     fields: [],
     requestId: null,
+    currentVersion: null,
   }
 }
 
@@ -87,6 +91,7 @@ export function apiErrorFromBody(
       message: typeof err.message === 'string' ? err.message : '',
       fields: Array.isArray(err.fields) ? err.fields : [],
       requestId: typeof err.request_id === 'string' ? err.request_id : requestId,
+      currentVersion: currentVersionOf(err.current_version),
     }
   }
   return {
@@ -95,6 +100,16 @@ export function apiErrorFromBody(
     message: `HTTP ${status}`,
     fields: [],
     requestId,
+    currentVersion: null,
+  }
+}
+
+function currentVersionOf(v: unknown): ApiError['currentVersion'] {
+  if (typeof v !== 'object' || v === null) return null
+  const { id, version_number: n } = v as { id?: unknown; version_number?: unknown }
+  return {
+    id: typeof id === 'string' ? id : null,
+    version_number: typeof n === 'number' ? n : null,
   }
 }
 
