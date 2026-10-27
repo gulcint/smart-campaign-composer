@@ -2,7 +2,7 @@
 
 Önemli kararlar ve nedenleri. Her faz kapısında güncellenir (`docs/PLAN.md` §3.2). Her karar: **bağlam → karar → neden → alternatifler/bedel**. "Doküman" case dokümanıdır; dokümanda olmayan her şey VARSAYIM olarak işaretlidir. Ayrıntılı gereksinimler `docs/requirements.md`, ad sözleşmeleri `docs/contracts/`.
 
-Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir.
+Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D36–D45).
 
 ---
 
@@ -148,6 +148,46 @@ Bağımsız review, 72 KB'lık iç içe `{"not":…}` gövdesinin eski `Parse`'t
 
 ---
 
+## 6. P4 sözleşme sertleştirmesi (içerik + onay)
+
+P4 başlamadan önce üç rolün (test yazarı, Go, Vue) birbirine sormadan çalışabilmesi için sözleşmeler tarandı; boşluklar `docs/contracts/` ve `docs/requirements.md`'de kapatıldı. Burada yalnız davranışı belirleyen kararlar var.
+
+### D36 — Tek içerik doğrulayıcısı: `Parse` yapıyı, `Validate` içeriği denetler
+- **Bağlam:** `content.schema.json` `minLength: 1` taşıyor, ama `required` (alan var, değeri boş) ile `schema_violation` (anahtar eksik/fazla/yanlış tip) ayrı kodlar; Parse'ı "şemaya göre" yazan biri boş dizeyi `schema_violation` yapardı ve boş-değerli LLM taslağı hiç saklanamazdı.
+- **Karar:** `Parse` yalnız yapı ve tip denetler (`minLength` uygulamaz); boş/yalnız boşluk değer `Validate`'te `required` olur. Alan başına en çok bir hata (öncelik `required` › `malformed_variable` › `unknown_variable` › uzunluk); hatalı alanda uzunluk denetlenmez. Değişken söz dizimi tablosu `go-interfaces.md` §content'te. Email gövdesi sınırı 5000 rune (dokümanda yok, VARSAYIM); yalnız doğrulama anında denetlenir, onayda yalnız SMS ve konu yeniden denetlenir.
+- **Neden:** Aynı doğrulayıcı LLM çıktısı ve elle düzenleme için (REQ-APR-02); kodlar testlerin ve arayüzün tek anlaşma noktası.
+- **Bedel:** Şema dosyasındaki `minLength` yalnız belge işlevi görür; sapma riski yorumla ve go-interfaces'le sınırlandı. Email gövdesi doldurma sonrası 5000'i onay anında yeniden denetlenmez (verinin sonradan değişmesi ve 5000'e dayanması gerekir; kabul).
+
+### D37 — En kötü durum kümesi: eşleşen tüm müşteriler, kanal bazlı değil
+Sahibin P1 kararı (README §9 #5) REQ-CNT-05'e açıkça yazıldı: değişken başına en uzun değer, kural eşleşmesinden sonra izin süzgecinden **önce** hesaplanır; SMS ve email aynı kümeyi kullanır. Neden: kanal bazlı küme daha dar olurdu ama izin sonradan değişince onaylanmış içerik limiti aşabilirdi; eşleşen küme izinden bağımsız bir üst sınırdır. Bedel: yalnız SMS izinlilerde olmayan uzun bir ad nedeniyle gereksiz yere kısa içerik istenebilir. Doğrulama anında stored `longest_values`, onay anında canlı müşteri verisi kullanılır; onayda yalnız `*_worst_case` kodları 422 üretir.
+
+### D38 — Sürümler değişmez; numara tüm sürümler üzerinden artar
+`version_number` = kampanyanın tüm satırlarında `MAX + 1` (saklanan `invalid` taslaklar dahil), yeniden kullanılmaz, segment revizyonuyla sıfırlanmaz; "en son sürüm" güncel revizyondaki en yüksek **validated** numaradır. Neden: `UNIQUE (campaign_id, version_number)` tek satırlık, kanıtlanabilir bir kural; `invalid` taslaklar da kimlik taşıdığı için (SSE `content_version_id`) numara tüketir. Bedel: doğrulanmış sürümlerde numara boşlukları (v1, v3) olabilir; arayüz yalnız en son sürümü gösterir, bu önemsiz.
+
+### D39 — Aynı sürümü tekrar onaylamak idempotenttir ve denetimi tekrarlamaz
+`approveContent`, durum zaten `approved` ve sürüm hâlâ en son ise 200 ve değişmemiş kampanyayı döner; yeni `approvals` satırı yok, `approved_at` sabit, onay-anı en kötü durum denetimi yeniden çalışmaz. Neden: çift tıklama/yeniden deneme güvenli olmalı, ama bu denetim müşteri verisi değiştiyse bir onayı sessizce 422'ye çevirirdi. Bedel: onaydan sonra veri değişimi ancak onay-anında (ilk onay) yakalanır; gönderim anındaki alıcı bazlı denetim (REQ-CNT-05) ikinci güvencedir.
+
+### D40 — Düzenlemede iyimser eşzamanlılık belirteci yok; kilitle sıralanır
+- **Bağlam:** İki düzenleme veya düzenleme-onay yarışı olabilir.
+- **Karar:** Tüm yazmalar `campaigns` satırı `FOR UPDATE` altında tek transaction'dır; iki düzenleme sırayla başarılı olur (ardışık numara, sonuncusu en son), onay-düzenleme yarışı ya onay-sonra-düşer ya düzenleme-sonra-onay-409'dur. Kimlik yoktur, 500 üretilmez. `expected_version` alanı eklenmedi.
+- **Neden:** Gövde şeması LLM aracıyla paylaşılan kapalı bir şema (`content.schema.json`); ona alan eklemek model şemasını ve doğrulamayı karıştırırdı. Geri alınamaz eylemi (onay) zaten sürüm kimliğine bağlıyız (`stale_content_version`); sürümler değişmez olduğundan "kayıp güncelleme" veri kaybı değil, geçmişte kalan bir sürümdür. Tek kullanıcılı yerel demo.
+- **Bedel:** Eski bir sekmedeki düzenleme başka sekmedeki yeni sürümün üstüne yazılabilir (eskisi geçmişte durur). Gerçek çok kullanıcılı üründe `If-Match`/`expected_version` gerekir.
+
+### D41 — Üretim kilidi `sendCampaign`'i de kapsar
+`approved` bir kampanyada yeniden üretim akarken başka bir istemci gönderimi başlatırsa durum `sending` olurdu ve akış sonunda `content_validated` geçişi (yalnız `audience_ready|content_ready|approved`'dan geçerli) başarısız olurdu. Karar: kilit tutulurken gönderim de 409 `generation_in_progress` alır (openapi `SendConflict`'e eklendi; `oasdiff` yalnız `response-property-enum-value-added` uyarısı verir, kırıcı değildir). Bedel: takılı bir akış gönderimi en çok 120 sn engeller.
+
+### D42 — SSE olay şemaları openapi bileşeni; tek kontrol sırası; bağlantıyı yeniden kurmama
+Olay `data` gövdeleri `ContentDeltaEvent`/`ContentInvalidEvent`/`ContentValidatedEvent` bileşenleridir (ve durum akışı için `CampaignStatus`), eşleme `x-sse-events.schemas`; frontend tipleri `schema.gen.ts`'ten gelir, test yazarı her olayı bu şemalara karşı doğrular (D30'un "P4'te olay şemaları" sözü yerine getirildi). Kontrol sırası bütün işlemlerde aynıdır: biçimsiz path → senaryo başlığı → gövde (400/413/422) → servis (404, sonra işlemin sırası); yani bilinmeyen kampanyaya bozuk gövde 404 değil 400/413/422 döner (P3'te böyle uygulandı). İstemci terminal olay almadan koparsa **yeniden bağlanmaz**: her üretim bir LLM maliyeti ve yeni sürümdür, karar kullanıcıda. Kayıt transaction'ı başladıysa istemci kopması onu iptal etmez; görmediği sürüm `GET /api/campaigns/{id}` ile görünür (bu dar pencere testlerde iddia edilmez).
+
+### D43 — İçerik akışı sonuçları iki katmanda test edilir; yeni mock senaryosu eklenmedi
+14 senaryo E2E'de (HTTP + SSE + DB) yeter; senaryosu olmayan sonuçlar (200 sonrası erişim kaybı, 120 sn aşımı, boş değerli/bozuk-değişkenli LLM çıktısı, `internal_error`) için `llm.Client`/`ContentStream`/`ContentRun` genel arayüzlerinin test içi sahteleri kullanılır (`llm-tools.md` §3.5). Neden: kapalı senaryo listesi spec, TS tipleri, `/api/config` ve testlerde kopyalıdır; her ekleme dört yeri değiştirir. Bedel: bu sonuçlar E2E'de değil unit/servis entegrasyonunda kapsanır.
+
+### D44 — Onarım turu biçimi sözleşmede; `no_tool_call` varyantı doğrulanmadı
+D32'de gerçek API ile doğrulanan biçim (sahte `tool_use` + `is_error` `tool_result`, geçersiz JSON için `{}`) `llm-tools.md` §1.2'ye alındı. Önceki yanıt yalnız metinse (`no_tool_call`) tool_use olmadığından düz bir `user` metni gönderilir; bu varyant elle denenmedi. Gerçek istemci test edilmediğinden sözleşme davranışı bundan etkilenmez.
+
+### D45 — Sayfa kompozisyonları: geçersiz taslak düzenlenebilir; hep en son sürüm onaylanır
+PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `invalid` sonrası `content-edit-draft` taslak metinlerini editöre alır (hatalar satır içi, `dirty`), kaydet doğrulayıcıdan geçerek yeni `validated` sürüm üretir. `ApprovalPage` her zaman `latest_content_version`'ı onaylar/gönderir; `stale` yalnız 409 sonrası görünür (canlı bildirim yok). Bedel: ek iki testid (`content-edit-draft`, `content-empty`) ve sayfa durum tablosu (ui.md §3.23–3.24).
+
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |
@@ -160,5 +200,7 @@ Bağımsız review, 72 KB'lık iç içe `{"not":…}` gövdesinin eski `Parse`'t
 | Gerçek Claude istemcisi için otomatik test yok | Sözleşme gerçek istemciyi test binary'sinde yasaklar; strict araçlar ve onarım turu elle doğrulandı (D23, D32) |
 | `seed.Generate` 9999'dan fazla kullanıcıyı kabul eder | Yalnız komut satırı reddeder (telefon bloğu 4 hane); mimar `go-interfaces.md`'ye hata ekleyebilir |
 | Manifest sayıları `segment.Match` ile değil el yazısı değerlendirmeyle | P3'te `segment.Match`'e geçilecek, manifest aynı kalmalı |
+| Düzenlemede iyimser eşzamanlılık yok (D40) | Eski sekmeden kaydedilen düzenleme yeni sürümün üstüne yazılabilir; sürümler değişmez, geçmişte kalır. Çok kullanıcılı üründe `expected_version` gerekir |
+| Email gövdesi 5000 sınırı onayda yeniden denetlenmez (D36) | Doğrulama anında denetlenir; yalnız SMS ve konu için onay-anı denetimi var |
 | Kampanya kilidi tek süreç içinde çalışır | `generateSegment` kilidi süreç içidir; birden fazla API kopyası planlanırsa veritabanı kilidine (`SaveSegment`'in `FOR UPDATE`'i zaten korur) taşınmalı |
 | Kitle taraması eşleşen satırları Go'ya çeker | Seed ölçeğinde (5000) yeterli; üç en uzun değer SQL'de toplanarak ölçeklenebilir |
