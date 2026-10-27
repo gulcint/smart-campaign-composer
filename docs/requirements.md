@@ -181,6 +181,7 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 
 - Onaylı kampanyada gönderim isteği, onaylanan içerik sürümü için **tüm teslimat kayıtlarını tek işlemde** (ya hepsi ya hiçbiri) oluşturur, kampanyayı `sending` yapar ve **hemen döner**; mesajlar arka planda işlenir.
 - Teslimatlar durumlarını (`queued` → `sending` → `sent` | `failed`) kalıcı olarak taşır.
+- Aynı kampanyada içerik üretimi sürerken `POST /api/campaigns/{campaign_id}/send` 409 `generation_in_progress` döner ve hiçbir teslimat kaydı oluşturmaz. Kural, aynı veritabanını kullanan birden fazla API sürecinde de geçerlidir (üretim işareti veritabanında tutulur). Üretim başlatma ile gönderim aynı anda gelirse ikisinden yalnızca biri kabul edilir.
 
 ### REQ-SND-02 — Kanal başına saniyede en fazla 100 mesaj · Faz P5 · [DOK] + [DOK çıkarımı]
 > "Asenkron kuyruk, kanal başına saniyede en fazla 100 mesaj."
