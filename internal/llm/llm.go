@@ -67,6 +67,15 @@ func Select(mode Mode, apiKey string) (Provider, error) {
 	return "", fmt.Errorf("%w: %q", ErrInvalidMode, string(mode))
 }
 
+// ProviderOf reports which provider a client talks to (metrics label): ProviderMock for *Mock,
+// ProviderClaude otherwise.
+func ProviderOf(c Client) Provider {
+	if _, ok := c.(*Mock); ok {
+		return ProviderMock
+	}
+	return ProviderClaude
+}
+
 // ToolName values.
 const (
 	ToolEmitSegmentRule     = "emit_segment_rule"

@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gulcint/smart-campaign-composer/internal/campaign"
 	"github.com/gulcint/smart-campaign-composer/internal/clock"
 	"github.com/gulcint/smart-campaign-composer/internal/config"
 	"github.com/gulcint/smart-campaign-composer/internal/httpapi"
@@ -69,7 +70,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	_ = client // used by the campaign service from P3 on
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -80,7 +80,16 @@ func run() error {
 	}
 	defer pool.Close()
 
+	service := campaign.NewService(campaign.Deps{
+		Store:                postgres.NewCampaignStore(pool),
+		Audience:             postgres.NewAudience(pool),
+		LLM:                  client,
+		Clock:                clk,
+		SegmentReferenceTime: cfg.SegmentReferenceTime,
+		Logger:               logger,
+	})
 	handler := httpapi.New(httpapi.Deps{
+		Service:     service,
 		LLMProvider: provider,
 		DB:          pool,
 		Metrics:     metrics.NewAPIHandler(postgres.NewMetricsSource(pool)),

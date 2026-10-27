@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/gulcint/smart-campaign-composer/internal/segment"
 )
 
 const MinUsers = 200
@@ -102,8 +104,14 @@ func Generate(opts Options) (*Dataset, error) {
 	for len(g.customers) < opts.Users {
 		g.randomCustomer()
 	}
+	rule, err := segment.Parse([]byte(`{"rule":` + exampleRule + `}`))
+	if err != nil {
+		return nil, fmt.Errorf("seed: example rule: %w", err)
+	}
 	for i := range g.customers {
-		evaluate(&g.customers[i], opts.RefTime)
+		if err := evaluate(&g.customers[i], rule, opts.RefTime); err != nil {
+			return nil, fmt.Errorf("seed: example rule: %w", err)
+		}
 	}
 
 	d := &Dataset{opts: opts, customers: g.customers}
@@ -361,42 +369,52 @@ func (g *generator) randomCustomer() {
 	g.customers = append(g.customers, c)
 }
 
-// facts are the DSL-visible statistics of one customer at ref (customer_stats_at semantics).
-type facts struct {
-	lastCartAddAt *time.Time
-	orders30d     int
-}
-
-func factsAt(c *customer, ref time.Time) facts {
-	var f facts
+// factsAt returns the DSL-visible attributes of one customer at ref, with customer_stats_at
+// semantics (db-schema.md §3.3): only events at or before ref count, the 30-day window
+// [ref − 30 days, ref] includes its lower bound.
+func factsAt(c *customer, ref time.Time) segment.Facts {
+	f := segment.Facts{City: c.city, Language: c.language, LoyaltyTier: c.loyaltyTier}
 	windowStart := ref.Add(-30 * day)
+	var spentCents int64
 	for _, e := range c.events {
 		if e.occurredAt.After(ref) {
 			continue
 		}
+		inWindow := !e.occurredAt.Before(windowStart)
 		switch e.typ {
 		case "cart_add":
-			if f.lastCartAddAt == nil || e.occurredAt.After(*f.lastCartAddAt) {
-				f.lastCartAddAt = ptr(e.occurredAt)
+			if f.LastCartAddAt == nil || e.occurredAt.After(*f.LastCartAddAt) {
+				f.LastCartAddAt = ptr(e.occurredAt)
+			}
+			if inWindow {
+				f.CartAdds30d++
 			}
 		case "purchase":
-			if !e.occurredAt.Before(windowStart) {
-				f.orders30d++
+			if f.LastPurchaseAt == nil || e.occurredAt.After(*f.LastPurchaseAt) {
+				f.LastPurchaseAt = ptr(e.occurredAt)
 			}
+			if inWindow {
+				f.Orders30d++
+			}
+			f.TotalOrders++
+			spentCents += e.amountCents
 		}
 	}
+	f.TotalSpent = float64(spentCents) / 100
 	return f
 }
 
-// evaluate applies the canonical example-brief rule (segment-dsl.md §7.1) and the channel
-// consent filter (segment-dsl.md §6). It mirrors the SQL path (customer_stats_at + the compiled
-// rule), so the manifest is an independent cross-check of the database counts.
-func evaluate(c *customer, ref time.Time) {
-	f := factsAt(c, ref)
-	c.matchesBrief = c.city == istanbul &&
-		f.lastCartAddAt != nil &&
-		!f.lastCartAddAt.Before(ref.Add(-30*day)) && !f.lastCartAddAt.After(ref) &&
-		f.orders30d == 0
+// evaluate applies the canonical example-brief rule (segment-dsl.md §7.1) through segment.Match,
+// plus the channel consent filter (segment-dsl.md §6). Match has the same semantics as the SQL
+// path (customer_stats_at + segment.Compile), so the manifest is an independent cross-check of
+// the database counts.
+func evaluate(c *customer, rule segment.Rule, ref time.Time) error {
+	matched, err := segment.Match(rule, factsAt(c, ref), ref)
+	if err != nil {
+		return err
+	}
+	c.matchesBrief = matched
 	c.inSMSAudience = c.matchesBrief && c.smsOptIn && c.phone != nil
 	c.inEmailAud = c.matchesBrief && c.emailOptIn && c.email != nil
+	return nil
 }
