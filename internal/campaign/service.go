@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,9 +71,23 @@ type Store interface {
 	// EndGeneration clears the campaign's lease only while it still carries token, so a holder
 	// whose lease expired and was taken over never frees the new holder's lease.
 	EndGeneration(ctx context.Context, id, token string) error
-	// InspectLocked passes the campaign read under its row lock to check and writes nothing.
-	// Errors: ErrCampaignNotFound, check's error.
-	InspectLocked(ctx context.Context, id string, check func(LockedCampaign) error) error
+
+	// CreateDeliveries accepts a send in ONE transaction under the campaign row lock: it passes the
+	// locked campaign to check and, when check returns nil, reads at := now() (after the lock is
+	// held, so updated_at never moves backwards behind a concurrent write) and inserts one queued
+	// delivery (next_attempt_at = at) per (channel, customer) of the channel audiences of the stored rule at
+	// the stored reference time with the CURRENT consent and contact data (segment-dsl.md §6,
+	// REQ-AUD-04), moves the campaign to sending (sending_started_at = at) and, when no delivery was
+	// created, on to completed. It returns the created counts and the resulting state. Errors:
+	// ErrCampaignNotFound, check's error; nothing is written on any error.
+	CreateDeliveries(ctx context.Context, id, versionID string, now func() time.Time, check func(LockedCampaign) error) (DeliveryTotals, State, error)
+	// DeliveryStatus returns the campaign's state, timestamps and delivery counters per channel and
+	// status, all read in one snapshot. Unknown campaign => ErrCampaignNotFound.
+	DeliveryStatus(ctx context.Context, id string) (CampaignStatus, error)
+	// ListDeliveries returns one page of the campaign's deliveries matching f (already validated;
+	// Order "customer" or "recent") and the filtered total, both from one snapshot. Unknown
+	// campaign => ErrCampaignNotFound.
+	ListDeliveries(ctx context.Context, id string, f DeliveryFilter) ([]Delivery, int, error)
 }
 
 // GenerationLease is the per-campaign generation marker kept on the campaign row (D52): at most
@@ -187,10 +203,6 @@ const (
 	DefaultPageLimit = 50
 	MaxPageLimit     = 200
 )
-
-// errNotInSlice is returned by the use cases that the P5 slice implements (accepting a send,
-// status, deliveries). Their HTTP routes are not registered yet, so it is unreachable over HTTP.
-var errNotInSlice = errors.New("campaign: operation not implemented in this slice")
 
 // NewService returns the Service implementation.
 func NewService(d Deps) Service {
@@ -360,14 +372,87 @@ func (s *service) CountRule(ctx context.Context, raw []byte) (SegmentCount, erro
 	return SegmentCount{Audience: aud, ReferenceTime: ref}, nil
 }
 
-// ---- P5 slice ----
+// ---- delivery tracking ----
 
-func (s *service) Status(context.Context, string) (CampaignStatus, error) {
-	return CampaignStatus{}, errNotInSlice
+// Delivery filter values (openapi listDeliveries): the single source for the HTTP handler and the
+// service.
+const (
+	DeliveryOrderCustomer = "customer"
+	DeliveryOrderRecent   = "recent"
+)
+
+var (
+	deliveryStatuses = []string{"queued", "sending", "sent", "failed"}
+	deliveryChannels = []string{"sms", "email"}
+	deliveryOrders   = []string{DeliveryOrderCustomer, DeliveryOrderRecent}
+)
+
+func (s *service) Status(ctx context.Context, id string) (CampaignStatus, error) {
+	id, ok := canonicalID(id)
+	if !ok {
+		return CampaignStatus{}, ErrCampaignNotFound
+	}
+	return s.d.Store.DeliveryStatus(ctx, id)
 }
 
-func (s *service) ListDeliveries(context.Context, string, DeliveryFilter) (DeliveryPage, error) {
-	return DeliveryPage{}, errNotInSlice
+// ListDeliveries validates the filter (422 invalid_value, paths query.<name>) before looking the
+// campaign up (README §5.4: query before use case). Zero Limit and empty Order take the defaults.
+func (s *service) ListDeliveries(ctx context.Context, id string, f DeliveryFilter) (DeliveryPage, error) {
+	id, ok := canonicalID(id)
+	if !ok {
+		return DeliveryPage{}, ErrCampaignNotFound
+	}
+	if f.Order == "" {
+		f.Order = DeliveryOrderCustomer
+	}
+	if f.Limit == 0 {
+		f.Limit = DefaultPageLimit
+	}
+	if fields := DeliveryFilterErrors(&f); len(fields) > 0 {
+		return DeliveryPage{}, &validation.Error{Fields: fields}
+	}
+	items, total, err := s.d.Store.ListDeliveries(ctx, id, f)
+	if err != nil {
+		return DeliveryPage{}, err
+	}
+	if items == nil {
+		items = []Delivery{}
+	}
+	return DeliveryPage{Items: items, Total: total, Limit: f.Limit, Offset: f.Offset}, nil
+}
+
+// DeliveryFilterErrors checks f against openapi listDeliveries (empty Status, Channel, CustomerID
+// = no filter; Order must be set; Limit 1..MaxPageLimit; Offset >= 0) and canonicalizes
+// f.CustomerID (D47a). Errors are invalid_value with paths query.<name>, in parameter order.
+func DeliveryFilterErrors(f *DeliveryFilter) []validation.FieldError {
+	var fields []validation.FieldError
+	invalid := func(name, msg string) {
+		fields = append(fields, validation.FieldError{Path: "query." + name, Code: validation.CodeInvalidValue,
+			Message: msg, Err: validation.ErrInvalidValue})
+	}
+	if f.Status != "" && !slices.Contains(deliveryStatuses, f.Status) {
+		invalid("status", "status must be one of "+strings.Join(deliveryStatuses, ", "))
+	}
+	if f.Channel != "" && !slices.Contains(deliveryChannels, f.Channel) {
+		invalid("channel", "channel must be one of "+strings.Join(deliveryChannels, ", "))
+	}
+	if !slices.Contains(deliveryOrders, f.Order) {
+		invalid("order", "order must be one of "+strings.Join(deliveryOrders, ", "))
+	}
+	if f.CustomerID != "" {
+		cid, ok := canonicalID(f.CustomerID)
+		if !ok {
+			invalid("customer_id", "customer_id must be a UUID")
+		}
+		f.CustomerID = cid
+	}
+	if f.Limit < 1 || f.Limit > MaxPageLimit {
+		invalid("limit", "limit must be an integer between 1 and "+strconv.Itoa(MaxPageLimit))
+	}
+	if f.Offset < 0 {
+		invalid("offset", "offset must be a non-negative integer")
+	}
+	return fields
 }
 
 // ---- per-campaign generation lease ----
