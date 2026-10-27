@@ -1,11 +1,23 @@
-// REQ-AUD-05, REQ-AUD-01, REQ-AI-01 (UI): error code -> presentation -> i18n id
+// REQ-AUD-05, REQ-AUD-01, REQ-AI-01, REQ-APR-03 (UI): error code -> presentation -> i18n id
 // (docs/contracts/ui.md §4) and the presence of every mandatory message id.
 import { describe, expect, it } from 'vitest'
 import { errorPresentation, type ApiError } from '@/api/errors'
 import { messages } from '@/i18n/index'
 
-function apiError(status: number, code: string, fields: ApiError['fields'] = []): ApiError {
-  return { status, code: code as ApiError['code'], message: 'x', fields, requestId: 'req-1' }
+function apiError(
+  status: number,
+  code: string,
+  fields: ApiError['fields'] = [],
+  currentVersion: ApiError['currentVersion'] = null,
+): ApiError {
+  return {
+    status,
+    code: code as ApiError['code'],
+    message: 'x',
+    fields,
+    requestId: 'req-1',
+    currentVersion,
+  }
 }
 
 describe('errorPresentation (ui.md §4)', () => {
@@ -30,6 +42,26 @@ describe('errorPresentation (ui.md §4)', () => {
     expect(p.messageId).toBe(`error.${code}`)
     expect(p.display).toBe(display)
     if (variant) expect(p.variant).toBe(variant)
+  })
+
+  // REQ-APR-03 (D40): an edit conflict is shown inline in the editor and carries the current version.
+  it('content_edit_conflict (409) => error.content_edit_conflict, inline, currentVersion kept', () => {
+    const e = apiError(409, 'content_edit_conflict', [], {
+      id: '5c1d7e3a-2b4f-4c6d-8e9f-0a1b2c3d4e5f',
+      version_number: 4,
+    })
+    const p = errorPresentation(e, 'content')
+    expect(p.messageId).toBe('error.content_edit_conflict')
+    expect(p.display).toBe('inline')
+    expect(e.currentVersion).toEqual({
+      id: '5c1d7e3a-2b4f-4c6d-8e9f-0a1b2c3d4e5f',
+      version_number: 4,
+    })
+  })
+
+  it('stale_content_version keeps its message id in the approval context', () => {
+    const p = errorPresentation(apiError(409, 'stale_content_version'), 'approval')
+    expect(p.messageId).toBe('error.stale_content_version')
   })
 
   it('network_error => error.network shown as a banner', () => {
@@ -65,6 +97,7 @@ const ERROR_CODES = [
   'invalid_state',
   'content_not_validated',
   'stale_content_version',
+  'content_edit_conflict',
   'generation_in_progress',
   'payload_too_large',
   'validation_failed',
@@ -147,6 +180,25 @@ const OTHER_IDS = [
   'delivery.completedTitle',
   'error.network',
   'field_error.unknown',
+  // P4 (ui.md §4 "Diğer zorunlu MessageId'ler")
+  'editor.conflict.title',
+  'editor.conflict.reload',
+  'editor.conflict.keepMine',
+  'editor.conflict.keepMineWarning',
+  'tabs.channels',
+  'content.generate',
+  'content.regenerate',
+  'content.editDraft',
+  'content.empty',
+  'content.live.streaming',
+  'content.live.retrying',
+  'content.live.validated',
+  'content.live.invalid',
+  'content.live.interrupted',
+  'approval.version',
+  'approval.edit',
+  'toast.contentSaved',
+  'toast.approved',
 ]
 
 describe('i18n message ids (ui.md §4)', () => {
