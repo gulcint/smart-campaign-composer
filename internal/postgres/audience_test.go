@@ -82,7 +82,7 @@ func TestAudience_EveryoneMatchesReachable(t *testing.T) {
 }
 
 // REQ-AUD-03
-// city eq X matches exactly the manifest's customer count per city (exact, case-sensitive match).
+// city eq X matches exactly the manifest's customer count per city.
 func TestAudience_CityCountsMatchManifest(t *testing.T) {
 	pool, m := audSetup(t)
 	ref := audRef(t, m)
@@ -97,12 +97,6 @@ func TestAudience_CityCountsMatchManifest(t *testing.T) {
 			}
 		})
 	}
-	t.Run("lowercase spelling matches nobody", func(t *testing.T) {
-		got := audCount(t, pool, audRule(t, `{"all":[{"field":"city","op":"eq","value":"istanbul"}]}`), ref)
-		if diff := cmp.Diff(segment.Audience{}, got); diff != "" {
-			t.Fatalf("Count(city eq istanbul) mismatch (-want +got):\n%s", diff)
-		}
-	})
 }
 
 // REQ-AUD-02

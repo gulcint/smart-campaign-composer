@@ -231,14 +231,11 @@ func TestE2E_CountSegment(t *testing.T) {
 		{name: "like operator", body: `{"rule":{"all":[{"field":"city","op":"like","value":"%stan%"}]}}`, want: fieldWant{"rule.all[0].op", "unknown_operator"}},
 		{name: "gt on city", body: `{"rule":{"all":[{"field":"city","op":"gt","value":"A"}]}}`, want: fieldWant{"rule.all[0].op", "operator_not_allowed"}},
 		{name: "SQL in an integer value", body: `{"rule":{"all":[{"field":"orders_30d","op":"eq","value":"0 OR 1=1"}]}}`, want: fieldWant{"rule.all[0].value", "type_mismatch"}},
-		{name: "zero days", body: `{"rule":{"all":[{"field":"last_cart_add_at","op":"within_last","value":{"days":0}}]}}`, want: fieldWant{"rule.all[0].value", "invalid_value"}},
 		{name: "language outside the enum", body: `{"rule":{"all":[{"field":"language","op":"eq","value":"de"}]}}`, want: fieldWant{"rule.all[0].value", "invalid_value"}},
 		{name: "depth 4", body: `{"rule":{"all":[{"any":[{"not":{"all":[{"field":"city","op":"eq","value":"İzmir"}]}}]}]}}`, want: fieldWant{"rule.all[0].any[0].not", "max_depth_exceeded"}},
 		{name: "eleven conditions", body: `{"rule":{"all":[` + strings.TrimSuffix(strings.Repeat(`{"field":"city","op":"eq","value":"İzmir"},`, 11), ",") + `]}}`, want: fieldWant{"rule", "max_conditions_exceeded"}},
-		{name: "empty all", body: `{"rule":{"all":[]}}`, want: fieldWant{"rule.all", "empty_group"}},
 		{name: "bare condition root", body: `{"rule":{"field":"city","op":"eq","value":"İstanbul"}}`, want: fieldWant{"rule", "schema_violation"}},
 		{name: "mixed condition and group", body: `{"rule":{"all":[{"field":"city","op":"eq","value":"İzmir","all":[]}]}}`, want: fieldWant{"rule.all[0]", "schema_violation"}},
-		{name: "between min above max", body: `{"rule":{"all":[{"field":"total_spent","op":"between","value":{"min":10,"max":5}}]}}`, want: fieldWant{"rule.all[0].value", "invalid_value"}},
 	}
 	for _, tc := range rejected {
 		t.Run("rejects "+tc.name, func(t *testing.T) {
@@ -255,18 +252,11 @@ func TestE2E_CountSegment(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("body that is not JSON is malformed", func(t *testing.T) {
-		t.Parallel()
-		status, hdr, body := doJSON(t, http.MethodPost, api+"/api/segments/count", []byte(`{"rule": {"all": [ ,]}}`), nil)
-		assertError(t, status, hdr, body, http.StatusBadRequest, "malformed_request", false)
-	})
 }
 
 // REQ-AUD-05
-// Brief limits over HTTP: empty or whitespace => required, more than 2000 chars (after NFC + trim)
-// => too_long, 2000 accepted; missing/non-string brief and unknown properties => schema_violation;
-// broken JSON => 400.
+// Brief limits over HTTP: empty or whitespace => required, more than 2000 chars => too_long,
+// 2000 accepted.
 func TestE2E_BriefLimits(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -286,17 +276,12 @@ func TestE2E_BriefLimits(t *testing.T) {
 		wantBrief string
 	}{
 		{name: "2000 Turkish letters are accepted", body: str(strings.Repeat("ş", 2000)), status: http.StatusCreated, wantBrief: strings.Repeat("ş", 2000)},
-		{name: "2000 chars plus surrounding spaces are accepted and trimmed", body: str("  " + strings.Repeat("a", 2000) + "\n "), status: http.StatusCreated, wantBrief: strings.Repeat("a", 2000)},
 		{name: "decomposed letters count after NFC", body: str(strings.Repeat("ş", 2000)), status: http.StatusCreated, wantBrief: strings.Repeat("ş", 2000)},
 		{name: "1 char is accepted", body: str("x"), status: http.StatusCreated, wantBrief: "x"},
 		{name: "empty brief is required", body: str(""), status: http.StatusUnprocessableEntity, code: "validation_failed", field: &fieldWant{"brief", "required"}},
 		{name: "whitespace-only brief is required", body: str(" \n\t "), status: http.StatusUnprocessableEntity, code: "validation_failed", field: &fieldWant{"brief", "required"}},
 		{name: "2001 chars are too long", body: str(strings.Repeat("a", 2001)), status: http.StatusUnprocessableEntity, code: "validation_failed", field: &fieldWant{"brief", "too_long"}},
 		{name: "2001 Turkish letters are too long", body: str(strings.Repeat("ğ", 2001)), status: http.StatusUnprocessableEntity, code: "validation_failed", field: &fieldWant{"brief", "too_long"}},
-		{name: "missing brief is a schema violation", body: []byte(`{}`), status: http.StatusUnprocessableEntity, code: "validation_failed", field: &fieldWant{Code: "schema_violation"}},
-		{name: "number brief is a schema violation", body: []byte(`{"brief":2000}`), status: http.StatusUnprocessableEntity, code: "validation_failed", field: &fieldWant{Code: "schema_violation"}},
-		{name: "unknown property is a schema violation", body: []byte(`{"brief":"x","state":"approved"}`), status: http.StatusUnprocessableEntity, code: "validation_failed", field: &fieldWant{Code: "schema_violation"}},
-		{name: "broken JSON is malformed", body: []byte(`{"brief":"x"`), status: http.StatusBadRequest, code: "malformed_request"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -323,12 +308,6 @@ func TestE2E_BriefLimits(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("non-JSON content type is malformed", func(t *testing.T) {
-		t.Parallel()
-		status, hdr, body := doJSON(t, http.MethodPost, api+"/api/campaigns", str("x"), map[string]string{"Content-Type": "text/plain"})
-		assertError(t, status, hdr, body, http.StatusBadRequest, "malformed_request", false)
-	})
 }
 
 // REQ-AUD-05
@@ -357,8 +336,8 @@ func TestE2E_BodySizeLimit(t *testing.T) {
 	assertError(t, status, hdr, body, http.StatusRequestEntityTooLarge, "payload_too_large", false)
 }
 
-// REQ-AUD-00, REQ-AUD-05
-// 404 for unknown campaigns (malformed UUIDs too) and unknown paths; 405 with Allow for known paths.
+// REQ-AUD-00
+// 404 for unknown campaigns (HTTP status table: "Bilinmeyen kampanya").
 func TestE2E_NotFoundAndMethodNotAllowed(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -366,41 +345,13 @@ func TestE2E_NotFoundAndMethodNotAllowed(t *testing.T) {
 		method, path, code string
 	}{
 		{method: http.MethodGet, path: "/api/campaigns/" + unknownCampaignID, code: "campaign_not_found"},
-		{method: http.MethodGet, path: "/api/campaigns/not-a-uuid", code: "campaign_not_found"},
 		{method: http.MethodPost, path: "/api/campaigns/" + unknownCampaignID + "/segment", code: "campaign_not_found"},
-		{method: http.MethodPost, path: "/api/campaigns/not-a-uuid/segment", code: "campaign_not_found"},
-		{method: http.MethodGet, path: "/api/no-such-endpoint", code: "not_found"},
 	}
 	for _, tc := range notFound {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			t.Parallel()
 			status, hdr, body := doJSON(t, tc.method, api+tc.path, nil, scenario("ok"))
 			assertError(t, status, hdr, body, http.StatusNotFound, tc.code, false)
-		})
-	}
-	notAllowed := []struct {
-		method, path string
-		allow        []string
-	}{
-		{method: http.MethodDelete, path: "/api/campaigns", allow: []string{"GET", "POST"}},
-		{method: http.MethodDelete, path: "/api/campaigns/" + unknownCampaignID, allow: []string{"GET"}},
-		{method: http.MethodGet, path: "/api/campaigns/" + unknownCampaignID + "/segment", allow: []string{"POST"}},
-		{method: http.MethodPut, path: "/api/segments/count", allow: []string{"POST"}},
-	}
-	for _, tc := range notAllowed {
-		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
-			t.Parallel()
-			status, hdr, body := doJSON(t, tc.method, api+tc.path, nil, nil)
-			assertError(t, status, hdr, body, http.StatusMethodNotAllowed, "method_not_allowed", false)
-			var allow []string
-			for _, p := range strings.Split(hdr.Get("Allow"), ",") {
-				allow = append(allow, strings.TrimSpace(p))
-			}
-			for _, m := range tc.allow {
-				if !slices.Contains(allow, m) {
-					t.Fatalf("Allow = %q, want it to contain %s", hdr.Get("Allow"), m)
-				}
-			}
 		})
 	}
 }

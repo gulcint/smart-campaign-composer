@@ -25,7 +25,7 @@ func lines(t *testing.T, name string) []string {
 	return out
 }
 
-// REQ-AI-05
+// REQ-AI-05, REQ-AI-03
 // "Uygulama key'i .env dosyasındaki ANTHROPIC_API_KEY değişkeninden okumalı; repoya bir
 // .env.example ekle." The example declares an empty ANTHROPIC_API_KEY and holds no real key.
 func TestEnvExample_DeclaresEmptyAnthropicKey(t *testing.T) {

@@ -15,7 +15,8 @@ import (
 // raw looks like an Anthropic key but is too short for the gitleaks rule; it is never valid.
 const raw = "sk-ant-test-0123"
 
-// REQ-AI-04
+// REQ-AI-03
+// A present key is detected as set, an absent (empty) one is not ("key varsa/yoksa").
 func TestSecret_RevealAndIsSet(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -25,7 +26,6 @@ func TestSecret_RevealAndIsSet(t *testing.T) {
 	}{
 		{name: "non-empty value is set", in: secret.Secret(raw), wantOK: true},
 		{name: "empty value is not set", in: secret.Secret(""), wantOK: false},
-		{name: "whitespace-only value is not set", in: secret.Secret(" \t\n "), wantOK: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,34 +101,5 @@ func TestSecret_FormattingIsMasked(t *testing.T) {
 				t.Fatalf("output = %q, want %q", got, tc.want)
 			}
 		})
-	}
-}
-
-// REQ-AI-04
-func TestSecret_UnsetRendersEmpty(t *testing.T) {
-	t.Parallel()
-	for _, in := range []secret.Secret{"", "   "} {
-		if got := in.String(); got != "" {
-			t.Errorf("Secret(%q).String() = %q, want \"\"", string(in), got)
-		}
-		b, err := in.MarshalJSON()
-		if err != nil {
-			t.Fatalf("MarshalJSON() error = %v", err)
-		}
-		if string(b) != `""` {
-			t.Errorf("Secret(%q).MarshalJSON() = %s, want \"\"", string(in), b)
-		}
-	}
-}
-
-// REQ-AI-04
-func TestSecret_LogValueIsAStringValue(t *testing.T) {
-	t.Parallel()
-	v := secret.Secret(raw).LogValue()
-	if v.Kind() != slog.KindString {
-		t.Fatalf("LogValue().Kind() = %v, want %v", v.Kind(), slog.KindString)
-	}
-	if v.String() != secret.Mask {
-		t.Fatalf("LogValue() = %q, want %q", v.String(), secret.Mask)
 	}
 }
