@@ -159,7 +159,9 @@ describe('i18n message ids (ui.md §4)', () => {
   it.each(required)('%s has a non-empty message', (id) => {
     const table = messages as Record<string, string>
     expect(Object.prototype.hasOwnProperty.call(table, id)).toBe(true)
-    expect(typeof table[id]).toBe('string')
-    expect(table[id].trim()).not.toBe('')
+    const value = table[id]
+    expect(typeof value).toBe('string')
+    // `?? ''` only narrows the type: a missing id already failed the line above and '' fails below.
+    expect((value ?? '').trim()).not.toBe('')
   })
 })

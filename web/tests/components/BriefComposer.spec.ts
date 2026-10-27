@@ -64,7 +64,9 @@ describe('BriefComposer submit (REQ-AUD-05)', () => {
     await btn.trigger('click')
     const emitted = w.emitted('submit')
     expect(emitted).toHaveLength(1)
-    expect(String(emitted![0][0]).normalize('NFC').trim()).toBe(value.normalize('NFC').trim())
+    const payload = emitted?.[0]?.[0]
+    expect(typeof payload).toBe('string')
+    expect(String(payload).normalize('NFC').trim()).toBe(value.normalize('NFC').trim())
   })
 
   it('Ctrl+Enter and Cmd+Enter submit; plain Enter does not', async () => {
@@ -85,7 +87,8 @@ describe('BriefComposer input (REQ-AUD-05)', () => {
     await w.get(sel('brief-input')).setValue('Merhaba')
     const ev = w.emitted('update:modelValue')
     expect(ev).toBeDefined()
-    expect(ev![ev!.length - 1][0]).toBe('Merhaba')
+    const last = ev ? ev[ev.length - 1] : undefined
+    expect(last?.[0]).toBe('Merhaba')
   })
 
   it.each([

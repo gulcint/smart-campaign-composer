@@ -6,6 +6,16 @@ import { t } from '@/i18n/index'
 
 const sel = (id: string) => `[data-testid="${id}"]`
 
+// Campaign states from docs/contracts/ui.md §1 (CampaignState).
+const CAMPAIGN_STATES = [
+  'draft',
+  'audience_ready',
+  'content_ready',
+  'approved',
+  'sending',
+  'completed',
+] as const
+
 describe('AppHeader', () => {
   it('shows the provider badge and the campaign state badge', () => {
     const w = mount(AppHeader, { props: { provider: 'mock', campaignState: 'audience_ready' } })
@@ -17,13 +27,10 @@ describe('AppHeader', () => {
     expect(state.text()).toContain(t('status.campaign.audience_ready'))
   })
 
-  it.each(['draft', 'audience_ready', 'content_ready', 'approved', 'sending', 'completed'])(
-    'campaign state %s is shown',
-    (s) => {
-      const w = mount(AppHeader, { props: { provider: 'claude', campaignState: s } })
-      expect(w.get(sel('app-header-campaign-state')).attributes('data-status')).toBe(s)
-    },
-  )
+  it.each(CAMPAIGN_STATES)('campaign state %s is shown', (s) => {
+    const w = mount(AppHeader, { props: { provider: 'claude', campaignState: s } })
+    expect(w.get(sel('app-header-campaign-state')).attributes('data-status')).toBe(s)
+  })
 
   it('has no campaign state badge without a campaign', () => {
     const w = mount(AppHeader, { props: { provider: null, campaignState: null } })

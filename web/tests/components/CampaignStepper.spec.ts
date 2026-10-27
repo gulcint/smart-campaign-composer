@@ -7,9 +7,12 @@ const sel = (id: string) => `[data-testid="${id}"]`
 const STEPS = ['brief', 'audience', 'content', 'approval', 'tracking'] as const
 type Step = (typeof STEPS)[number]
 type Status = 'completed' | 'active' | 'upcoming' | 'locked'
+// Campaign states from docs/contracts/ui.md §1 (CampaignState).
+type CampaignState =
+  'draft' | 'audience_ready' | 'content_ready' | 'approved' | 'sending' | 'completed'
 
 describe('CampaignStepper', () => {
-  it.each<{ state: string; current: Step; want: Record<Step, Status> }>([
+  it.each<{ state: CampaignState; current: Step; want: Record<Step, Status> }>([
     {
       state: 'draft',
       current: 'brief',
