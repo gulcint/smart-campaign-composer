@@ -5,6 +5,7 @@ export const tr = {
   'app.wordmark': 'Smart Campaign',
   'app.wordmarkAccent': 'Composer',
   'app.wordmarkShort': 'SCC',
+  'app.logoAlt': 'Insider One',
   'app.skipToContent': 'İçeriğe geç',
   'app.seedNote': 'Gerçek kimseye mesaj gitmez; alıcılar sahte seed verisidir.',
   'app.campaignState': 'Kampanya durumu',
