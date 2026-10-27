@@ -60,6 +60,24 @@ type Store interface {
 	// customerID when non-empty, otherwise the index-th one. Not matched / out of range =>
 	// ErrCustomerNotFound.
 	PreviewSample(ctx context.Context, r segment.Rule, ref time.Time, customerID string, index int) (SampleCustomer, error)
+
+	// BeginGeneration runs ONE transaction under the campaign row lock: it passes the locked
+	// campaign to check and, when check returns nil, stores the lease (campaigns.generation_token,
+	// generation_expires_at), replacing an expired one. Errors: ErrCampaignNotFound, check's error.
+	BeginGeneration(ctx context.Context, id string, lease GenerationLease, check func(LockedCampaign) error) error
+	// EndGeneration clears the campaign's lease only while it still carries token, so a holder
+	// whose lease expired and was taken over never frees the new holder's lease.
+	EndGeneration(ctx context.Context, id, token string) error
+	// InspectLocked passes the campaign read under its row lock to check and writes nothing.
+	// Errors: ErrCampaignNotFound, check's error.
+	InspectLocked(ctx context.Context, id string, check func(LockedCampaign) error) error
+}
+
+// GenerationLease is the per-campaign generation marker kept on the campaign row (D52): at most
+// one segment/content generation per campaign across every API process sharing the database.
+type GenerationLease struct {
+	Token     string
+	ExpiresAt time.Time
 }
 
 // VersionRef identifies a content version by id and number.
@@ -76,6 +94,18 @@ type LockedCampaign struct {
 	Longest           content.Longest
 	Latest            *VersionRef // latest VALIDATED version of the current segment revision
 	ApprovedVersionID *string
+	Generation        *GenerationLease // nil: no lease on the row
+}
+
+// CheckNoGeneration returns ErrGenerationInProgress while the row carries a lease that has not
+// expired at now. Every write that must not overlap a generation (segment/content generation
+// start, edit, approve, send) calls it on the row it holds locked, inside its own transaction, so
+// the check and the write are atomic across API processes (D47 b, D52).
+func (lc LockedCampaign) CheckNoGeneration(now time.Time) error {
+	if lc.Generation != nil && now.Before(lc.Generation.ExpiresAt) {
+		return ErrGenerationInProgress
+	}
+	return nil
 }
 
 // ContentWrite is one new, immutable content version.
@@ -152,12 +182,11 @@ func NewService(d Deps) Service {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	return &service{d: d, locks: &generationLocks{held: map[string]time.Time{}}}
+	return &service{d: d}
 }
 
 type service struct {
-	d     Deps
-	locks *generationLocks
+	d Deps
 }
 
 // now is the service time, truncated to the database's microsecond precision so that a value
@@ -172,8 +201,7 @@ func (s *service) referenceTime() time.Time {
 }
 
 // canonicalID accepts the 36-character UUID form in any letter case and returns its lower-case
-// canonical spelling (D47a): the in-memory generation lock is keyed by it and version ids are
-// compared with it, so an upper-case id behaves exactly like the stored (Postgres) one.
+// canonical spelling (D47a): version ids are compared with it, so an upper-case id behaves exactly like the stored (Postgres) one.
 func canonicalID(id string) (string, bool) {
 	u, err := uuid.Parse(id)
 	if err != nil || len(id) != 36 {
@@ -226,24 +254,28 @@ func (s *service) List(ctx context.Context, limit, offset int) (CampaignPage, er
 	return CampaignPage{Items: items, Total: total, Limit: limit, Offset: offset}, nil
 }
 
-// GenerateSegment: 404 -> generation lock (409 generation_in_progress) -> state (409
-// invalid_state) -> LLM + validation with one repair -> audience count + longest values at the
+// GenerateSegment: 404 -> generation lease (409 generation_in_progress) -> state (409
+// invalid_state), both under the campaign row lock -> LLM + validation with one repair -> audience count + longest values at the
 // reference time -> store (audience_ready). On any error the campaign is unchanged.
 func (s *service) GenerateSegment(ctx context.Context, id string) (SegmentResult, error) {
 	id, ok := canonicalID(id)
 	if !ok {
 		return SegmentResult{}, ErrCampaignNotFound
 	}
-	c, err := s.d.Store.GetCampaign(ctx, id)
+	// The lease and the state are checked together under the campaign row lock (D52).
+	release, err := s.beginGeneration(ctx, id, func(lc LockedCampaign) error {
+		if err := lc.CheckNoGeneration(s.d.Clock.Now()); err != nil {
+			return err
+		}
+		_, err := Transition(lc.State, EventSegmentGenerated)
+		return err
+	})
 	if err != nil {
 		return SegmentResult{}, err
 	}
-	release, ok := s.locks.acquire(id, s.d.Clock.Now())
-	if !ok {
-		return SegmentResult{}, ErrGenerationInProgress
-	}
 	defer release()
-	if _, err := Transition(c.State, EventSegmentGenerated); err != nil {
+	c, err := s.d.Store.GetCampaign(ctx, id)
+	if err != nil {
 		return SegmentResult{}, err
 	}
 
@@ -310,39 +342,29 @@ func (s *service) ListDeliveries(context.Context, string, DeliveryFilter) (Deliv
 	return DeliveryPage{}, errNotInSlice
 }
 
-// ---- per-campaign generation lock ----
+// ---- per-campaign generation lease ----
 
-// generationLocks allows one segment/content generation per campaign in this process. A lock is
-// released by the holder, and a lock older than MaxGenerationDuration is considered stale.
-type generationLocks struct {
-	mu   sync.Mutex
-	held map[string]time.Time // campaign id -> acquired at
-}
-
-// acquire takes the campaign's lock; release is idempotent.
-func (l *generationLocks) acquire(id string, now time.Time) (release func(), ok bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if at, busy := l.held[id]; busy && now.Sub(at) < MaxGenerationDuration {
-		return nil, false
+// beginGeneration takes the campaign's generation lease under the row lock after check accepted
+// the locked row. The lease expires MaxGenerationDuration after now on the injected clock, rounded
+// up to the database's microsecond precision so it never ends early. release is idempotent, safe
+// for concurrent use, and frees only this lease even after ctx is cancelled.
+func (s *service) beginGeneration(ctx context.Context, id string, check func(LockedCampaign) error) (release func(), err error) {
+	expires := s.d.Clock.Now().UTC().Add(MaxGenerationDuration)
+	if t := expires.Truncate(time.Microsecond); !t.Equal(expires) {
+		expires = t.Add(time.Microsecond)
 	}
-	l.held[id] = now
+	lease := GenerationLease{Token: uuid.NewString(), ExpiresAt: expires}
+	if err := s.d.Store.BeginGeneration(ctx, id, lease, check); err != nil {
+		return nil, err
+	}
+	bg := context.WithoutCancel(ctx)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			l.mu.Lock()
-			defer l.mu.Unlock()
-			if at, busy := l.held[id]; busy && at.Equal(now) {
-				delete(l.held, id)
+			if err := s.d.Store.EndGeneration(bg, id, lease.Token); err != nil {
+				// The lease still expires at lease.ExpiresAt.
+				s.d.Logger.Error("generation lease not released", slog.String("campaign_id", id), slog.String("error", err.Error()))
 			}
 		})
-	}, true
-}
-
-// busy reports whether a generation currently holds the campaign's lock.
-func (l *generationLocks) busy(id string, now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	at, held := l.held[id]
-	return held && now.Sub(at) < MaxGenerationDuration
+	}, nil
 }

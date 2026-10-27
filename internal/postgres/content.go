@@ -120,12 +120,16 @@ func lockCampaign(ctx context.Context, tx pgx.Tx, id string) (lockedCampaign, er
 		lc                            lockedCampaign
 		state                         string
 		longFirst, longLast, longCity *int
+		genToken                      *string
+		genExpires                    *time.Time
 	)
 	err := tx.QueryRow(ctx, `
 		SELECT state, segment_rule, segment_reference_time, segment_revision,
-			longest_first_name, longest_last_name, longest_city, approved_content_version_id::text
+			longest_first_name, longest_last_name, longest_city, approved_content_version_id::text,
+			generation_token::text, generation_expires_at
 		FROM campaigns WHERE id = $1 FOR UPDATE`, id).
-		Scan(&state, &lc.rule, &lc.refTime, &lc.SegmentRevision, &longFirst, &longLast, &longCity, &lc.ApprovedVersionID)
+		Scan(&state, &lc.rule, &lc.refTime, &lc.SegmentRevision, &longFirst, &longLast, &longCity, &lc.ApprovedVersionID,
+			&genToken, &genExpires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return lockedCampaign{}, campaign.ErrCampaignNotFound
 	}
@@ -135,6 +139,9 @@ func lockCampaign(ctx context.Context, tx pgx.Tx, id string) (lockedCampaign, er
 	lc.State = campaign.State(state)
 	lc.HasSegment = lc.rule != nil && lc.refTime != nil
 	lc.Longest = content.Longest{FirstName: deref(longFirst), LastName: deref(longLast), City: deref(longCity)}
+	if genToken != nil && genExpires != nil {
+		lc.Generation = &campaign.GenerationLease{Token: *genToken, ExpiresAt: genExpires.UTC()}
+	}
 
 	var ref campaign.VersionRef
 	err = tx.QueryRow(ctx, `
@@ -149,6 +156,58 @@ func lockCampaign(ctx context.Context, tx pgx.Tx, id string) (lockedCampaign, er
 		lc.Latest = &ref
 	}
 	return lc, nil
+}
+
+// BeginGeneration stores the generation lease when check accepts the row read under its lock
+// (db-schema.md §3.9, D52).
+func (s *CampaignStore) BeginGeneration(ctx context.Context, id string, lease campaign.GenerationLease, check func(campaign.LockedCampaign) error) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: begin generation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
+
+	lc, err := lockCampaign(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if err := check(lc.LockedCampaign); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE campaigns SET generation_token = $2, generation_expires_at = $3 WHERE id = $1`,
+		id, lease.Token, lease.ExpiresAt); err != nil {
+		return fmt.Errorf("postgres: begin generation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres: begin generation: %w", err)
+	}
+	return nil
+}
+
+// EndGeneration clears the lease only while it is still the caller's (same token).
+func (s *CampaignStore) EndGeneration(ctx context.Context, id, token string) error {
+	if _, err := s.db.Exec(ctx, `
+		UPDATE campaigns SET generation_token = NULL, generation_expires_at = NULL
+		WHERE id = $1 AND generation_token = $2`, id, token); err != nil {
+		return fmt.Errorf("postgres: end generation: %w", err)
+	}
+	return nil
+}
+
+// InspectLocked runs check on the campaign row under its lock and writes nothing.
+func (s *CampaignStore) InspectLocked(ctx context.Context, id string, check func(campaign.LockedCampaign) error) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: inspect campaign: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	lc, err := lockCampaign(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	return check(lc.LockedCampaign)
 }
 
 // errRetryVersionNumber marks the one retry of a content_versions_campaign_version_key violation.

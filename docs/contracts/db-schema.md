@@ -95,6 +95,8 @@ Her müşteri için tam bir satır döner (olayı olmayanlar dahil; sayılar 0, 
 | `approved_content_version_id` | uuid | NULL, FK → `content_versions(id)` |
 | `sending_started_at` | timestamptz | NULL |
 | `completed_at` | timestamptz | NULL |
+| `generation_token` | uuid | NULL; süren segment/içerik üretiminin kira jetonu (D52) |
+| `generation_expires_at` | timestamptz | NULL; kiranın bitişi = başlangıç + `MaxGenerationDuration` (servis saati, mikrosaniyeye yukarı yuvarlanır); bu andan sonra kira boş sayılır |
 | `created_at`, `updated_at` | timestamptz | NOT NULL |
 
 Durum tutarlılık kısıtları:
@@ -103,6 +105,7 @@ Durum tutarlılık kısıtları:
 - `campaigns_approval_present_check`: `(state IN ('approved','sending','completed')) = (approved_content_version_id IS NOT NULL)`
 - `campaigns_sending_started_check`: `(state IN ('sending','completed')) = (sending_started_at IS NOT NULL)`
 - `campaigns_completed_check`: `(state = 'completed') = (completed_at IS NOT NULL)`
+- `campaigns_generation_lease_check`: `(generation_token IS NULL) = (generation_expires_at IS NULL)`
 
 Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state): izinli olmayan geçiş `SQLSTATE 23514` (`check_violation`) ile reddedilir. İzinli geçişler (aynı durumda kalmak her zaman serbest):
 
@@ -218,7 +221,11 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 | Diğer son `invalid` sonuçları, kopan akış, 422 ile reddedilen düzenleme | hiçbir yazma yok |
 | Onay | yeni `approvals` satırı (`content_status = 'validated'`), `approved_content_version_id` = sürüm, durum `approved` |
 | Aynı sürümün tekrar onayı (idempotent) | hiçbir yazma yok (`approved_at` değişmez) |
+| Üretim başlangıcı (segment veya içerik) | Durum ve kira aynı kilit altında denetlenir; süresi geçmemiş kira varsa 409 `generation_in_progress`, yoksa `generation_token`/`generation_expires_at` yazılır (süresi geçmiş kiranın üzerine). `updated_at` değişmez |
+| Üretim sonu (başarı, hata, istemci kopması) | `generation_token = NULL, generation_expires_at = NULL WHERE generation_token = <kendi jetonu>` (tek ifade; başkasının kirasına dokunmaz) |
 | Gönderim (P5) | §3.7 / README ve openapi `sendCampaign` |
+
+Düzenleme, onay ve gönderim, kendi transaction'larında satırı kilitledikten sonra ilk iş olarak süresi geçmemiş bir kira olup olmadığına bakar (`LockedCampaign.CheckNoGeneration`); varsa hiçbir yazma yapmadan 409 `generation_in_progress` döner. Böylece aynı veritabanını kullanan birden fazla API sürecinde de üretim başlangıcı ile gönderimden yalnız biri kabul edilir (REQ-SND-01).
 
 ## 4. Kuyruk mekanikleri (gözlemlenebilir)
 
