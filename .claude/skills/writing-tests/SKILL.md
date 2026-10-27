@@ -16,7 +16,7 @@ Tests measure whether the implementation satisfies the case. They are derived fr
 | Requirements catalog | `docs/requirements.md` | REQ IDs, one per behavior |
 | Contracts | `docs/contracts/**` | The only surfaces tests may touch |
 | Plan | `docs/PLAN.md` §0.4, §0.5, §4, §5 | Retry policy, stream protocol, test rules, seed manifest |
-| Existing tests | `**/*_test.go`, `test/**`, `testdata/**`, `web/tests/**` | Style and shared helpers |
+| Existing tests | `**/*_test.go`, `test/**`, `testdata/**`, `web/tests/**` | Style, shared helpers, and the file to extend (§3.1) |
 
 The contract surfaces are: HTTP API (OpenAPI), SSE events (PLAN §0.5), Go interface
 signatures (`docs/contracts/go-interfaces.md`), observable DB results, and the UI contract
@@ -51,6 +51,31 @@ Quoted requirements every suite must cover (IDs from `docs/requirements.md`):
 - Every test function starts with a comment naming its requirement(s): `// REQ-CNT-01`.
 - One behavior per subtest; a REQ may have many tests, a test should rarely cover many REQs.
 - When you finish, report the REQ → test mapping and any REQ you could not cover and why.
+
+### 3.1 One home per rule: extend, do not scatter
+
+Every session starts from zero; a test writer who does not find the existing test opens a
+second file for the same rule, and "what is tested where" is lost.
+
+- **Check existing tests before writing.** Before writing a test for a requirement, search for
+  that requirement's ID. You cannot read implementation, so search test paths only:
+  - Grep tool: `pattern: "REQ-CNT-01"` with `glob: "*_test.go"` (all Go tests, `internal/**`
+    included), then with `path: "web/tests"`.
+  - Or shell: `grep -rn "REQ-CNT-01" test testdata web/tests docs` — targets must be test
+    paths or docs; `.`, `internal/`, `cmd/`, `migrations/`, `web/src/` and stdin are blocked.
+  - Read the REQ's row in `docs/requirements.md` §İzlenebilirlik (`Test katmanı`, file).
+
+  If a test already exists, do not open a new file; extend the existing test.
+- **Review-driven tests are new lines (cases) in the existing file, not new files.** A review
+  finding becomes a new table-driven row or a new subtest in the file that already covers that
+  REQ and layer.
+- **File names follow the feature/REQ area, never the review round.** `round2`, `fix`,
+  `review` tokens in a test file name are forbidden (`scripts/hooks/check-test-files.sh`
+  rejects them in pre-commit).
+- **Test names keep the REQ ID findable:** the `// REQ-…` comment on every test function stays,
+  and a subtest added for a finding names the behavior, not the round.
+- **A new file is allowed only for a new test layer (§4) or a new area** with no file yet; list
+  it in your report so the `docs/requirements.md` §İzlenebilirlik table gets the file.
 
 ## 4. Layers and where tests live
 
