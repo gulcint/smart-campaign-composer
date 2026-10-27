@@ -20,10 +20,6 @@ import (
 // MaxGenerationDuration.
 var errGenerationTimeout = errors.New("campaign: generation exceeded the maximum duration")
 
-// errSendNotInSlice: Send passed every pre-check of this slice; accepting the send (creating the
-// deliveries) is the P5 slice. go-interfaces.md names no sentinel for it, so it maps to 500.
-var errSendNotInSlice = fmt.Errorf("%w: accepting a send", errNotInSlice)
-
 // StartContentGeneration: 404 -> invalid_state (draft, sending, completed) -> generation lease,
 // all under the campaign row lock (D52) -> LLM attempt 1 connected (llm.ErrUnavailable otherwise).
 // The lease is held by the returned run.
@@ -334,17 +330,17 @@ func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, 
 	})
 }
 
-// Send performs the pre-checks of sendCampaign (README §5.4): 404 campaign -> 404 version ->
-// (under the row lock) generation lease -> invalid_state (not approved) -> stale (not the approved
-// version). Accepting the send is the P5 slice: its transaction must run the same checks on the
-// row it locks before creating deliveries (D52), so a send and a generation start never both win.
+// Send follows openapi sendCampaign (README §5.4): 404 campaign -> 404 version -> (under the row
+// lock) generation lease -> invalid_state (not approved, second send) -> stale (not the approved
+// version). The checks and the delivery rows share ONE transaction on the locked row (D52), so a
+// send and a generation start never both win and a refused send writes nothing.
 func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, error) {
 	v, err := s.GetContentVersion(ctx, id, versionID)
 	if err != nil {
 		return SendResult{}, err
 	}
 	id, versionID = v.CampaignID, v.ID // canonical (D47a)
-	err = s.d.Store.InspectLocked(ctx, id, func(lc LockedCampaign) error {
+	totals, state, err := s.d.Store.CreateDeliveries(ctx, id, versionID, s.now(), func(lc LockedCampaign) error {
 		if err := lc.CheckNoGeneration(s.d.Clock.Now()); err != nil {
 			return err
 		}
@@ -359,7 +355,9 @@ func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, e
 	if err != nil {
 		return SendResult{}, err
 	}
-	return SendResult{}, errSendNotInSlice
+	s.d.Logger.Info("send accepted", slog.String("campaign_id", id), slog.String("state", string(state)),
+		slog.Int("sms", totals.SMS), slog.Int("email", totals.Email))
+	return SendResult{CampaignID: id, State: state, ContentVersionID: versionID, Deliveries: totals}, nil
 }
 
 // Preview renders a validated version (default: the latest) for one sample customer matched by
