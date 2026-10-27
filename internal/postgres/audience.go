@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gulcint/smart-campaign-composer/internal/content"
@@ -43,9 +44,14 @@ func (a audience) Count(ctx context.Context, r segment.Rule, ref time.Time) (seg
 	return out, nil
 }
 
+// queryer is the read side shared by *pgxpool.Pool and pgx.Tx.
+type queryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // longestValues computes content.Longest over the customers matched by r at ref (before consent),
 // with the same rune counting as the content validator.
-func longestValues(ctx context.Context, db *pgxpool.Pool, r segment.Rule, ref time.Time) (content.Longest, error) {
+func longestValues(ctx context.Context, db queryer, r segment.Rule, ref time.Time) (content.Longest, error) {
 	comp, err := segment.Compile(r, ref)
 	if err != nil {
 		return content.Longest{}, err

@@ -36,6 +36,82 @@ type Store interface {
 	// active approval (segment_changed) and moves the campaign to audience_ready.
 	// Errors: ErrCampaignNotFound, ErrInvalidState.
 	SaveSegment(ctx context.Context, id string, w SegmentWrite) (Campaign, error)
+
+	// ListContentVersions returns every version of the campaign, highest version_number first.
+	// Unknown campaign => ErrCampaignNotFound.
+	ListContentVersions(ctx context.Context, id string) ([]ContentVersion, error)
+	// GetContentVersion returns one version of the campaign. Errors: ErrCampaignNotFound,
+	// ErrContentVersionNotFound (missing or another campaign's).
+	GetContentVersion(ctx context.Context, id, versionID string) (ContentVersion, error)
+	// WriteContentVersion runs ONE transaction under the campaign row lock (SELECT ... FOR UPDATE):
+	// it passes the locked campaign to decide and stores the version decide returns with the next
+	// version_number (highest of ANY status + 1) and the current segment revision. A non-empty
+	// ContentWrite.NextState also moves the campaign to that state, clears the approved version and
+	// revokes the active approval ("content_changed"). An error from decide aborts with nothing
+	// written. Errors: ErrCampaignNotFound, decide's error.
+	WriteContentVersion(ctx context.Context, id string, decide func(LockedCampaign) (ContentWrite, error)) (ContentVersion, error)
+	// ApproveVersion runs ONE transaction under the campaign row lock: decide sees the locked
+	// campaign and the version and returns whether to write; true inserts the approval row, sets the
+	// approved version and the state approved. It returns the campaign after the transaction.
+	// Errors: ErrCampaignNotFound, ErrContentVersionNotFound, decide's error.
+	ApproveVersion(ctx context.Context, id, versionID string, a ApprovalWrite, decide func(ApprovalCheck) (bool, error)) (Campaign, error)
+	// PreviewSample returns one customer matched by r at ref (before consent) with its 0-based index
+	// in the matched set ordered by customer id, and the matched count: the customer with id
+	// customerID when non-empty, otherwise the index-th one. Not matched / out of range =>
+	// ErrCustomerNotFound.
+	PreviewSample(ctx context.Context, r segment.Rule, ref time.Time, customerID string, index int) (SampleCustomer, error)
+}
+
+// VersionRef identifies a content version by id and number.
+type VersionRef struct {
+	ID     string
+	Number int
+}
+
+// LockedCampaign is the campaign row as read under its row lock.
+type LockedCampaign struct {
+	State             State
+	HasSegment        bool
+	SegmentRevision   int
+	Longest           content.Longest
+	Latest            *VersionRef // latest VALIDATED version of the current segment revision
+	ApprovedVersionID *string
+}
+
+// ContentWrite is one new, immutable content version.
+type ContentWrite struct {
+	ID               string
+	Status           ContentStatus
+	Source           ContentSource
+	Content          content.Content
+	WorstCase        *content.WorstCase
+	ValidationErrors []validation.FieldError
+	LLMAttempts      *int
+	CreatedAt        time.Time
+	// NextState: "" leaves the campaign row untouched (stored invalid draft).
+	NextState State
+}
+
+// ApprovalCheck is what the approval decision sees under the row lock.
+type ApprovalCheck struct {
+	Campaign LockedCampaign
+	Version  ContentVersion
+	// Longest recomputes the longest values of the customers matched by the stored rule at the
+	// campaign's reference time, inside the transaction.
+	Longest func() (content.Longest, error)
+}
+
+// ApprovalWrite is the approval row to insert.
+type ApprovalWrite struct {
+	ID         string
+	ApprovedAt time.Time
+}
+
+// SampleCustomer is one preview recipient.
+type SampleCustomer struct {
+	Customer PreviewCustomer
+	Index    int
+	Count    int
 }
 
 // SegmentWrite is a validated, counted segment ready to be stored.
@@ -64,8 +140,8 @@ const (
 	MaxPageLimit     = 200
 )
 
-// errNotInSlice is returned by the use cases that later slices implement (content: P4,
-// approval/delivery: P5). Their HTTP routes are not registered yet, so it is unreachable over HTTP.
+// errNotInSlice is returned by the use cases that the P5 slice implements (accepting a send,
+// status, deliveries). Their HTTP routes are not registered yet, so it is unreachable over HTTP.
 var errNotInSlice = errors.New("campaign: operation not implemented in this slice")
 
 // NewService returns the Service implementation.
@@ -216,38 +292,10 @@ func (s *service) CountRule(ctx context.Context, raw []byte) (SegmentCount, erro
 	return SegmentCount{Audience: aud, ReferenceTime: ref}, nil
 }
 
-// ---- later slices ----
-
-func (s *service) StartContentGeneration(context.Context, string) (ContentRun, error) {
-	return nil, errNotInSlice
-}
-
-func (s *service) EditContent(context.Context, string, []byte) (ContentVersion, error) {
-	return ContentVersion{}, errNotInSlice
-}
-
-func (s *service) ListContentVersions(context.Context, string) ([]ContentVersion, error) {
-	return nil, errNotInSlice
-}
-
-func (s *service) GetContentVersion(context.Context, string, string) (ContentVersion, error) {
-	return ContentVersion{}, errNotInSlice
-}
-
-func (s *service) Approve(context.Context, string, string) (Campaign, error) {
-	return Campaign{}, errNotInSlice
-}
-
-func (s *service) Send(context.Context, string, string) (SendResult, error) {
-	return SendResult{}, errNotInSlice
-}
+// ---- P5 slice ----
 
 func (s *service) Status(context.Context, string) (CampaignStatus, error) {
 	return CampaignStatus{}, errNotInSlice
-}
-
-func (s *service) Preview(context.Context, string, PreviewQuery) (Preview, error) {
-	return Preview{}, errNotInSlice
 }
 
 func (s *service) ListDeliveries(context.Context, string, DeliveryFilter) (DeliveryPage, error) {
@@ -263,6 +311,7 @@ type generationLocks struct {
 	held map[string]time.Time // campaign id -> acquired at
 }
 
+// acquire takes the campaign's lock; release is idempotent.
 func (l *generationLocks) acquire(id string, now time.Time) (release func(), ok bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -270,11 +319,22 @@ func (l *generationLocks) acquire(id string, now time.Time) (release func(), ok 
 		return nil, false
 	}
 	l.held[id] = now
+	var once sync.Once
 	return func() {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-		if l.held[id].Equal(now) {
-			delete(l.held, id)
-		}
+		once.Do(func() {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			if at, busy := l.held[id]; busy && at.Equal(now) {
+				delete(l.held, id)
+			}
+		})
 	}, true
+}
+
+// busy reports whether a generation currently holds the campaign's lock.
+func (l *generationLocks) busy(id string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	at, held := l.held[id]
+	return held && now.Sub(at) < MaxGenerationDuration
 }
