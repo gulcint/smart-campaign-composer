@@ -1,10 +1,10 @@
 # Gereksinimler
 
-Test yazarının ve mimarın tek gereksinim kaynağı. Case dokümanının (`Smart Campaign Composer Case.html`, repoda yok) ilgili cümleleri her gereksinimin altına **birebir** alıntılandı; test yazarı dokümanı görmeden bu dosyayla çalışabilir.
+Test yazarının ve mimarın tek gereksinim kaynağı. **Test vakaları ve testte kullanılan her ad/yol/alan yalnızca buradan gelir (istisnasız; sözleşmeler, `DECISIONS.md` ve case dokümanı test yazarına kapalıdır); önemli olup burada olmayan davranış önce sahip/mimar tarafından REQ olarak eklenir, sonra test edilir.** Case dokümanının (`Smart Campaign Composer Case.html`, repoda yok) ilgili cümleleri her gereksinimin altına **birebir** alıntılandı; test yazarı dokümanı görmeden bu dosyayla çalışabilir.
 
 **Etiketler:** **[DOK]** dokümanda yazan · **[DOK çıkarımı]** dokümandan doğrudan çıkan, ayrıntısı bizim yorumumuz · **VARSAYIM** dokümanda olmayan, projenin kararı (`DECISIONS.md`'ye taşınır).
 
-**Kural:** Bir gereksinimin kabul ölçütü belirsizse test yazılmaz; soru sahibe döner. Ölçütler **gözlemlenebilir davranış** anlatır (API yanıtı, DB durumu, SSE olayı, ekran öğesi); fonksiyon veya paket adı içermez. Adlar `docs/contracts/**` içinde tanımlanır (P1).
+**Kural:** Bir gereksinimin kabul ölçütü belirsizse test yazılmaz; soru sahibe döner. Ölçütler **gözlemlenebilir davranış** anlatır (API yanıtı, DB durumu, SSE olayı, ekran öğesi); fonksiyon veya paket adı içermez. Testte kullanılacak somut ad/yol/alan ölçütün kendisinde yazmalıdır; yazmıyorsa test yazarı "REQ eksik" der ve sahip/mimar ölçüte ekler (sözleşme dosyaları test yazarına kapalıdır).
 
 ## Sözlük
 
