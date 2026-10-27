@@ -36,21 +36,25 @@ const shown = computed(() =>
     class="flex flex-col gap-3"
   >
     <template v-if="shown">
-      <p class="flex items-start gap-1.5 text-body-sm text-ink-600">
-        <Mail class="mt-0.5 size-4 shrink-0 text-email" aria-hidden="true" />
-        <span>
-          {{ t('preview.subject') }}:
-          <span data-testid="email-preview-subject" class="font-semibold text-ink-900">{{
-            shown.email.subject
-          }}</span>
-        </span>
-      </p>
+      <!-- Same field chrome as ContentEditor's subject input and body textarea (DESIGN.md). -->
+      <div class="flex flex-col gap-1.5">
+        <p class="flex items-center gap-1.5 text-body-sm font-semibold text-ink-600">
+          <Mail class="size-4 shrink-0 text-email" aria-hidden="true" />
+          {{ t('preview.subject') }}
+        </p>
+        <p
+          data-testid="email-preview-subject"
+          class="flex min-h-11 items-center rounded-input border border-border-default bg-surface-card px-4 py-2.5 text-body break-words text-ink-900"
+        >
+          {{ shown.email.subject }}
+        </p>
+      </div>
       <iframe
         data-testid="email-preview-frame"
         sandbox=""
         :srcdoc="shown.email.html"
         :title="t('preview.emailFrameTitle')"
-        class="h-96 w-full rounded-card border border-border-default bg-surface-card"
+        class="block h-96 w-full rounded-input border border-border-default bg-surface-card"
       />
     </template>
     <Skeleton v-else-if="state === 'loading'" class="h-96 w-full" />
