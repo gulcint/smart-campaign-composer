@@ -82,6 +82,22 @@ second file for the same rule, and "what is tested where" is lost.
 - **A new file is allowed only for a new test layer (§4) or a new area** with no file yet; list
   it in your report so the `docs/requirements.md` §İzlenebilirlik table gets the file.
 
+### 3.2 The eight test rules (owner decision)
+
+1. A test comes only from a `docs/requirements.md` criterion. Every test carries
+   `// REQ-XXX-NN Cn`, with the criterion number: `Cn` is the n-th bullet of that REQ's
+   acceptance list (C1 = first bullet). A test without a resolvable `REQ-XXX-NN Cn` is rejected.
+2. Each REQ gets exactly one **primary layer** (the one in its `Test katmanı` row). All boundary
+   and error cases are written there and nowhere else.
+3. Other layers get at most **one smoke test** per criterion.
+4. Before writing a test, search for the REQ ID (§3.1). If the primary layer already has a test,
+   extend that file; never write a copy in another layer.
+5. Several cases of the same behaviour are **table rows**, not separate test functions.
+6. UI detail (shortcut, focus, aria, paste trimming) is tested only if a criterion states it. If
+   none does, report "REQ eksik" to the owner and do not test it.
+7. A review finding never opens a new file: it adds a row to the existing table.
+8. Setup longer than 30 lines in one test moves to a shared helper.
+
 ## 4. Layers and where tests live
 
 | Layer | Location | Touches | Runs in |

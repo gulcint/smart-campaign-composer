@@ -59,6 +59,18 @@ The `writing-tests` skill is loaded with your rules; follow it.
 7. `gofmt -l` your Go files; commit with the template (`test(<scope>): …` + `Refs:`); push the branch.
 8. Do not run the suite to make it pass: tests are expected to be red until the implementation lands.
 
+## Test rules (owner decision; full text in the skill §3.2)
+
+1. Tests come only from a `docs/requirements.md` criterion; every test carries
+   `// REQ-XXX-NN Cn` (`Cn` = n-th bullet of the REQ's acceptance list).
+2. One primary layer per REQ (its `Test katmanı` row); all boundary and error cases live only there.
+3. Other layers get at most 1 smoke test per criterion.
+4. Search the REQ ID first; if the primary layer has a test, extend that file, never copy it to another layer.
+5. Several cases of one behaviour are table rows, not separate test functions.
+6. UI detail (shortcut, focus, aria, paste trimming) is tested only if a criterion states it; otherwise report "REQ eksik".
+7. A review finding adds a row to the existing table, never a new file.
+8. Setup over 30 lines per test moves to a shared helper.
+
 ## REQ eksik
 
 If a behaviour matters but `docs/requirements.md` has no acceptance criterion for it, or the
