@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -67,9 +69,14 @@ func docsMediaType(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return mt
 }
 
-// assertDocsHeaders: nosniff, X-Frame-Options DENY, Referrer-Policy no-referrer, one CSP whose
-// script-src and connect-src are exactly 'self' and which has no 'unsafe-eval' (D36, go-interfaces
-// §httpapi, openapi.yaml getApiDocs). Each header appears exactly once.
+// docsCSP is the Content-Security-Policy of docs/contracts/README.md §7 (nginx); go-interfaces.md
+// §httpapi "Doküman rotaları (D36)" says the API's documentation responses carry the same policy
+// ("nginx'tekiyle aynı"). Compared byte for byte.
+const docsCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+
+// assertDocsHeaders: nosniff, X-Frame-Options DENY, Referrer-Policy no-referrer and exactly the
+// policy docsCSP (D36, go-interfaces §httpapi, openapi.yaml getApiDocs, README §7). Each header
+// appears exactly once.
 func assertDocsHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
 	h := rec.Header()
@@ -87,24 +94,8 @@ func assertDocsHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
 	if len(csps) != 1 {
 		t.Fatalf("Content-Security-Policy appears %d times (%q), want exactly once", len(csps), csps)
 	}
-	dirs := map[string][]string{}
-	for _, d := range strings.Split(csps[0], ";") {
-		f := strings.Fields(d)
-		if len(f) == 0 {
-			continue
-		}
-		name := strings.ToLower(f[0])
-		if _, dup := dirs[name]; !dup {
-			dirs[name] = f[1:]
-		}
-	}
-	for _, name := range []string{"script-src", "connect-src"} {
-		if diff := cmp.Diff([]string{"'self'"}, dirs[name]); diff != "" {
-			t.Errorf("CSP %s must allow only the same origin (-want +got):\n%s", name, diff)
-		}
-	}
-	if strings.Contains(strings.ToLower(csps[0]), "'unsafe-eval'") {
-		t.Errorf("CSP %q contains 'unsafe-eval'", csps[0])
+	if csps[0] != docsCSP {
+		t.Errorf("Content-Security-Policy mismatch\n got: %q\nwant: %q", csps[0], docsCSP)
 	}
 }
 
@@ -269,6 +260,136 @@ func TestDocsRoutes_UnknownNamesAndMethods(t *testing.T) {
 			assertErrorBody(t, rec, http.StatusMethodNotAllowed, "method_not_allowed", false)
 			if got := strings.TrimSpace(rec.Header().Get("Allow")); got != "GET" {
 				t.Fatalf("Allow = %q, want %q", got, "GET")
+			}
+		})
+	}
+}
+
+// D36, docs/contracts/README.md §7 ("Range isteği de 200 ve tam gövde döner (API 206/416 üretmez)")
+// A Range request on a documentation route answers 200 with the full body and the plain GET's
+// Content-Type (never multipart/byteranges); Content-Length, when set, is the full size; no
+// Content-Range; no Accept-Ranges advertising byte ranges.
+func TestDocsRoutes_RangeRequestsGetTheFullBody(t *testing.T) {
+	t.Parallel()
+	h := docsOnlyRouter(t)
+	paths := []string{"/openapi.yaml", "/docs/swagger-ui.css", "/docs/favicon-32x32.png", "/docs", "/schemas/content.schema.json"}
+	ranges := []string{"bytes=0-9", "bytes=99999999-", "bytes=0-0,5-9", "bytes=-1"}
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			t.Parallel()
+			plain := do(t, h, http.MethodGet, p)
+			if plain.Code != http.StatusOK || plain.Body.Len() == 0 {
+				t.Fatalf("GET %s status = %d (%d bytes), want 200 with a body", p, plain.Code, plain.Body.Len())
+			}
+			full := plain.Body.Bytes()
+			wantCT := plain.Header().Get("Content-Type")
+			for _, r := range ranges {
+				t.Run("Range "+r, func(t *testing.T) {
+					t.Parallel()
+					rec := send(t, h, http.MethodGet, p, nil, map[string]string{"Range": r})
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status = %d, want 200 (no 206/416)", rec.Code)
+					}
+					ct := rec.Header().Get("Content-Type")
+					if mt, _, err := mime.ParseMediaType(ct); err == nil && strings.HasPrefix(mt, "multipart/") {
+						t.Fatalf("Content-Type = %q: a multipart range response", ct)
+					}
+					if ct != wantCT {
+						t.Errorf("Content-Type = %q, want %q (the plain GET's)", ct, wantCT)
+					}
+					if !bytes.Equal(full, rec.Body.Bytes()) {
+						t.Errorf("body (%d bytes) is not the full body (%d bytes)", rec.Body.Len(), len(full))
+					}
+					if cl := rec.Header().Values("Content-Length"); len(cl) > 0 {
+						if len(cl) != 1 || strings.TrimSpace(cl[0]) != strconv.Itoa(len(full)) {
+							t.Errorf("Content-Length = %q, want exactly one %d", cl, len(full))
+						}
+					}
+					if cr := rec.Header().Values("Content-Range"); len(cr) > 0 {
+						t.Errorf("Content-Range = %q on a 200 full-body response", cr)
+					}
+					for _, v := range rec.Header().Values("Accept-Ranges") {
+						if strings.Contains(strings.ToLower(v), "bytes") {
+							t.Errorf("Accept-Ranges = %q although ranges are not served", v)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+// D36, docs/contracts/README.md §11; go-interfaces.md §httpapi ("{asset} ve {schema} kapalı
+// kümelerdir (spec'teki enum), dışındaki ad 404 not_found"); openapi.yaml /docs/{asset},
+// /schemas/{schema}
+// The served names are exactly the spec enums: the enum equals the documented list, every enum value
+// answers 200 with a body, and names outside it answer 404 `not_found`.
+func TestDocsRoutes_ServedNamesEqualTheSpecEnums(t *testing.T) {
+	t.Parallel()
+	h := docsOnlyRouter(t)
+	path, err := apispec.SpecPath()
+	if err != nil {
+		t.Fatalf("locate openapi.yaml: %v", err)
+	}
+	spec, err := apispec.Load(path)
+	if err != nil {
+		t.Fatalf("load openapi.yaml: %v", err)
+	}
+	tests := []struct {
+		template, param, prefix string
+		names                   []string
+		notFound                []string
+	}{
+		{
+			template: "/docs/{asset}", param: "asset", prefix: "/docs/",
+			names: []string{
+				"swagger-ui-bundle.js", "swagger-ui-bundle.js.LICENSE.txt", "swagger-ui.css",
+				"swagger-initializer.js", "favicon-32x32.png", "LICENSE", "NOTICE",
+			},
+			notFound: []string{
+				"index.html", "swagger-ui-bundle.js.map", "swagger-ui.js", "..%2Fopenapi.yaml", "",
+				"SWAGGER-UI.CSS", "Swagger-UI-Bundle.js", "swagger-initializer.JS", "Favicon-32x32.png",
+				"license", "Notice", "SWAGGER-UI-BUNDLE.JS.LICENSE.TXT",
+			},
+		},
+		{
+			template: "/schemas/{schema}", param: "schema", prefix: "/schemas/",
+			names: []string{"segment-rule.schema.json", "content.schema.json"},
+			notFound: []string{
+				"", "CONTENT.SCHEMA.JSON", "Segment-Rule.schema.json", "..%2Fopenapi.yaml",
+				"llm%2Fcontent.tool.json", "content.tool.json",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.template, func(t *testing.T) {
+			t.Parallel()
+			enum, err := spec.PathEnum(tc.template, tc.param)
+			if err != nil {
+				t.Fatalf("read the {%s} enum: %v", tc.param, err)
+			}
+			if diff := cmp.Diff(slices.Sorted(slices.Values(tc.names)), enum); diff != "" {
+				t.Fatalf("{%s} enum of openapi.yaml vs the documented names (-names +enum):\n%s", tc.param, diff)
+			}
+			for _, name := range enum {
+				t.Run("serves "+name, func(t *testing.T) {
+					t.Parallel()
+					rec := do(t, h, http.MethodGet, tc.prefix+name)
+					if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+						t.Fatalf("GET %s%s status = %d (%d bytes), want 200 with a body", tc.prefix, name, rec.Code, rec.Body.Len())
+					}
+				})
+			}
+			for _, name := range tc.notFound {
+				label := name
+				if label == "" {
+					label = "(empty)"
+				}
+				t.Run("404 "+label, func(t *testing.T) {
+					t.Parallel()
+					rec := send(t, h, http.MethodGet, tc.prefix+name, nil, nil)
+					assertErrorBody(t, rec, http.StatusNotFound, "not_found", false)
+				})
 			}
 		})
 	}

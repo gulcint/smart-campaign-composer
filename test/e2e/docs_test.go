@@ -20,8 +20,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
 	"github.com/gulcint/smart-campaign-composer/test/testenv/apispec"
 )
 
@@ -96,10 +94,15 @@ func assertMediaType(t *testing.T, what string, hdr http.Header, want string) {
 	}
 }
 
-// assertDocsSecurityHeaders checks the headers go-interfaces.md §httpapi and openapi.yaml getApiDocs
-// require on the documentation responses: nosniff, X-Frame-Options DENY, Referrer-Policy no-referrer
-// and a CSP that allows only same-origin scripts and connections (D36: `script-src 'self'`,
-// `connect-src 'self'`, not relaxed, so no 'unsafe-eval'). Each header appears exactly once.
+// docsCSP is the one Content-Security-Policy of docs/contracts/README.md §7 (nginx, every forwarded
+// and SPA path); go-interfaces.md §httpapi "Doküman rotaları (D36)" says the API's documentation
+// responses carry the same policy ("nginx'tekiyle aynı"). Compared byte for byte.
+const docsCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+
+// assertDocsSecurityHeaders checks the headers go-interfaces.md §httpapi, openapi.yaml getApiDocs and
+// README §7 require: nosniff, X-Frame-Options DENY, Referrer-Policy no-referrer and exactly the
+// policy docsCSP. Each header appears exactly once (header values are counted, so a duplicated line
+// fails; a comma-joined duplicate fails the exact value comparison).
 func assertDocsSecurityHeaders(t *testing.T, what string, hdr http.Header) {
 	t.Helper()
 	want := map[string]string{
@@ -121,45 +124,9 @@ func assertDocsSecurityHeaders(t *testing.T, what string, hdr http.Header) {
 	if len(csps) != 1 {
 		t.Fatalf("%s: Content-Security-Policy appears %d times (%q), want exactly once", what, len(csps), csps)
 	}
-	dirs := parseCSP(csps[0])
-	for _, name := range []string{"script-src", "connect-src"} {
-		got, ok := dirs[name]
-		if !ok {
-			t.Errorf("%s: CSP %q has no %s directive", what, csps[0], name)
-			continue
-		}
-		if diff := cmp.Diff([]string{"'self'"}, got); diff != "" {
-			t.Errorf("%s: CSP %s must allow only the same origin (-want +got):\n%s", what, name, diff)
-		}
+	if csps[0] != docsCSP {
+		t.Errorf("%s: Content-Security-Policy mismatch\n got: %q\nwant: %q", what, csps[0], docsCSP)
 	}
-	if strings.Contains(strings.ToLower(csps[0]), "'unsafe-eval'") {
-		t.Errorf("%s: CSP %q contains 'unsafe-eval'; D36 says the policy was not relaxed", what, csps[0])
-	}
-}
-
-// parseCSP splits a policy into directive name (lower case) -> source tokens (sources lower-cased
-// only for keywords in quotes, so 'self' compares exactly).
-func parseCSP(policy string) map[string][]string {
-	out := map[string][]string{}
-	for _, d := range strings.Split(policy, ";") {
-		f := strings.Fields(d)
-		if len(f) == 0 {
-			continue
-		}
-		name := strings.ToLower(f[0])
-		if _, dup := out[name]; dup {
-			continue // a browser uses the first occurrence of a directive
-		}
-		var srcs []string
-		for _, s := range f[1:] {
-			if strings.HasPrefix(s, "'") {
-				s = strings.ToLower(s)
-			}
-			srcs = append(srcs, s)
-		}
-		out[name] = srcs
-	}
-	return out
 }
 
 // pageLoads returns the src/href values of <script>, <link> and <img> in page.
