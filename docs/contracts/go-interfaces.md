@@ -416,7 +416,11 @@ func CheckWorstCase(c Content, l Longest) error
 // RenderEmailHTML builds the escaped HTML document used for the provider and the preview:
 //   <!doctype html><html lang="tr"><head><meta charset="utf-8">
 //   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-//   <title>{subject}</title></head><body><p>{paragraph}</p>...</body></html>
+//   <title>{subject}</title></head><body style="{emailBodyStyle}"><p>{paragraph}</p>...</body></html>
+// emailBodyStyle is one constant inline style (never built from content) that mirrors the editor
+// field: margin:0;padding:0 16px; font-family 'Figtree Variable',Figtree,system-ui,…,sans-serif
+// (no font download: the document CSP has no font-src); 16px/24px; color #241c20 on #fcfcf9.
+// There is no <style> element; <html> carries only lang="tr" and <p> has no attributes.
 // Paragraphs are separated by one or more blank lines; a single "\n" inside a paragraph becomes "<br>".
 // Every text fragment is escaped with html.EscapeString; the output never contains a tag that
 // was not produced by this skeleton (no "<script", no "<a", no attributes from content).

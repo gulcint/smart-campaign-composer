@@ -504,6 +504,14 @@ func CheckRendered(r Rendered) error {
 	return nil
 }
 
+// emailBodyStyle is the skeleton's only styling: a constant inline style on <body> (allowed by the
+// document's own CSP style-src 'unsafe-inline'; no <style> element, no font download) that mirrors
+// the editor field (DESIGN.md text-body 16/24, --ink-900 on --surface-card, 16px side padding).
+// Figtree is used only where it is installed locally; otherwise the system sans-serif stack.
+const emailBodyStyle = "margin:0;padding:0 16px;font-family:'Figtree Variable',Figtree,system-ui," +
+	"-apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif;font-size:16px;line-height:24px;" +
+	"color:#241c20;background:#fcfcf9;overflow-wrap:anywhere"
+
 // RenderEmailHTML builds the escaped HTML document used for the provider and the preview.
 // Paragraphs are separated by one or more blank lines; a single newline inside a paragraph becomes
 // "<br>". Every text fragment goes through html.EscapeString; the only tags are the skeleton's.
@@ -513,7 +521,7 @@ func RenderEmailHTML(subject, bodyText string) string {
 	b.WriteString(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">`)
 	b.WriteString("<title>")
 	b.WriteString(html.EscapeString(subject))
-	b.WriteString("</title></head><body>")
+	b.WriteString("</title></head><body style=\"" + emailBodyStyle + "\">")
 	var para []string
 	flush := func() {
 		if len(para) == 0 {
