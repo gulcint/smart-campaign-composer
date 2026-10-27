@@ -123,6 +123,7 @@ Bugün denenebilecek olan: `docker compose up` bitince tarayıcıda <http://127.
 - [`docs/PLAN.md`](docs/PLAN.md): fazlar, git akışı, roller
 - [`docs/requirements.md`](docs/requirements.md): gereksinim kataloğu
 - [`docs/contracts/`](docs/contracts/README.md): API, veri ve LLM araç sözleşmeleri
+- [`docs/API.md`](docs/API.md): etkileşimli API dokümanı (Swagger UI); `docker compose up` sonrası <http://127.0.0.1:8081/docs>
 - [`DESIGN.md`](DESIGN.md): görsel sistem ve ekranlar
 - [`ai-sessions/INDEX.md`](ai-sessions/INDEX.md): temizlenmiş Claude session kayıtları
 - [`CLAUDE.md`](CLAUDE.md): proje kuralları ve ajan talimatları

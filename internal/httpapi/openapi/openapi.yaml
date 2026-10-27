@@ -27,8 +27,17 @@ info:
     are excluded from body validation; their events are specified in sse-events.md. Router-level
     responses that belong to no operation (unknown path => `RouteNotFound`, unsupported method =>
     `MethodNotAllowed`) are listed under components.responses and checked against those directly.
+
+    Interactive documentation (tag `documentation`, read-only, no secrets): GET /docs is the Swagger UI
+    page, GET /docs/{asset} its vendored files, GET /openapi.yaml this very contract and
+    GET /schemas/{schema} the two JSON Schema files it references, all served byte-identically from the
+    copy embedded in the API (README.md §11 `check-contract-copies`). `servers` is the relative `/`,
+    so "Try it out" hits the same origin as the page.
 servers:
-  - url: http://localhost:8080
+  # Relative on purpose: the paths below already carry the `/api` prefix (or none, for /healthz and
+  # friends), so "/" makes Swagger UI's "Try it out" call the origin that served /docs, i.e. the web
+  # container, which proxies every documented path to the API. No absolute URL, no port.
+  - url: /
 security: []  # no authentication (local demo, VARSAYIM)
 tags:
   - name: campaigns
@@ -37,6 +46,7 @@ tags:
   - name: approval
   - name: delivery
   - name: system
+  - name: documentation
 
 paths:
   /healthz:
@@ -97,6 +107,118 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AppConfig' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /docs:
+    get:
+      tags: [documentation]
+      operationId: getApiDocs
+      summary: Interactive API documentation (Swagger UI)
+      description: |
+        HTML page that loads Swagger UI from /docs/{asset} and this contract from /openapi.yaml. It has no
+        inline script (CSP `script-src 'self'`); the UI is started by /docs/swagger-initializer.js.
+        Security headers on the response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+        `Referrer-Policy: no-referrer` and a `Content-Security-Policy` that allows only same-origin
+        scripts and connections.
+      responses:
+        '200':
+          description: The Swagger UI page.
+          headers:
+            X-Content-Type-Options:
+              required: true
+              schema: { const: nosniff }
+          content:
+            text/html:
+              schema: { type: string }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /docs/{asset}:
+    parameters:
+      - name: asset
+        in: path
+        required: true
+        description: One of the vendored Swagger UI files (swagger-ui-dist, Apache-2.0) or the page initializer.
+        schema:
+          type: string
+          enum:
+            - swagger-ui-bundle.js
+            - swagger-ui-bundle.js.LICENSE.txt
+            - swagger-ui.css
+            - swagger-initializer.js
+            - favicon-32x32.png
+            - LICENSE
+            - NOTICE
+    get:
+      tags: [documentation]
+      operationId: getApiDocsAsset
+      summary: A file used by the documentation page
+      description: |
+        Content type by file: `.js` => `text/javascript`, `.css` => `text/css`, `.png` => `image/png`,
+        `LICENSE`, `NOTICE` and `*.LICENSE.txt` => `text/plain`. Any other name => 404 `not_found`.
+      responses:
+        '200':
+          description: The file.
+          headers:
+            X-Content-Type-Options:
+              required: true
+              schema: { const: nosniff }
+          content:
+            text/javascript:
+              schema: { type: string }
+            text/css:
+              schema: { type: string }
+            text/plain:
+              schema: { type: string }
+            image/png:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/RouteNotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /openapi.yaml:
+    get:
+      tags: [documentation]
+      operationId: getOpenApiSpec
+      summary: This OpenAPI contract
+      description: |
+        Byte-identical to docs/contracts/openapi.yaml (the embedded copy, `make check-contract-copies`).
+        Its relative `$ref`s resolve to /schemas/{schema}.
+      responses:
+        '200':
+          description: The contract as YAML.
+          headers:
+            X-Content-Type-Options:
+              required: true
+              schema: { const: nosniff }
+          content:
+            application/yaml:
+              schema: { type: string }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /schemas/{schema}:
+    parameters:
+      - name: schema
+        in: path
+        required: true
+        description: A JSON Schema file referenced by this contract.
+        schema:
+          type: string
+          enum: [segment-rule.schema.json, content.schema.json]
+    get:
+      tags: [documentation]
+      operationId: getContractSchema
+      summary: A JSON Schema file referenced by this contract
+      description: Byte-identical to docs/contracts/schemas/{schema}. Any other name => 404 `not_found`.
+      responses:
+        '200':
+          description: The schema.
+          headers:
+            X-Content-Type-Options:
+              required: true
+              schema: { const: nosniff }
+          content:
+            application/schema+json:
+              schema: { type: object }
+        '404': { $ref: '#/components/responses/RouteNotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
 
   /api/campaigns:

@@ -259,6 +259,37 @@ func (s *Spec) Match(method, path string) (op *Operation, template string, pathK
 	return nil, best, true
 }
 
+// PathEnum returns the enum values (sorted) of the path parameter name declared on the path item
+// template (e.g. "/docs/{asset}") or on its GET operation.
+func (s *Spec) PathEnum(template, name string) ([]string, error) {
+	item, ok := s.model.Paths.PathItems.Get(template)
+	if !ok || item == nil {
+		return nil, fmt.Errorf("apispec: %s has no path %s", s.path, template)
+	}
+	params := slices.Clone(item.Parameters)
+	if item.Get != nil {
+		params = append(params, item.Get.Parameters...)
+	}
+	for _, p := range params {
+		if p == nil || p.Name != name || p.In != "path" || p.Schema == nil {
+			continue
+		}
+		sch := p.Schema.Schema()
+		if sch == nil {
+			return nil, fmt.Errorf("apispec: path parameter %q of %s has no resolvable schema", name, template)
+		}
+		var out []string
+		for _, n := range sch.Enum {
+			if n != nil {
+				out = append(out, n.Value)
+			}
+		}
+		slices.Sort(out)
+		return out, nil
+	}
+	return nil, fmt.Errorf("apispec: path parameter %q of %s not found", name, template)
+}
+
 // Uncovered returns the operationIds (sorted) that are implemented — every spec operation not in
 // notImplemented — but have no entry in calls.
 func (s *Spec) Uncovered(calls map[string]int, notImplemented map[string]string) []string {

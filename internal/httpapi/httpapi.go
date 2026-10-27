@@ -1,8 +1,8 @@
 // Package httpapi is the HTTP router of cmd/api (docs/contracts/openapi.yaml).
 //
 // It serves the system endpoints (/healthz, /readyz, /metrics, /api/config), the
-// audience slice (campaign create/get/list, segment generation, rule counting) and
-// the cross-cutting behaviour every route shares: X-Request-ID, the 64 KiB body
+// interactive documentation (/docs, /openapi.yaml; docs.go), the audience slice (campaign
+// create/get/list, segment generation, rule counting) and the cross-cutting behaviour every route shares: X-Request-ID, the 64 KiB body
 // limit, JSON 404/405 errors, error mapping, HTTP metrics and panic recovery. The
 // content, approval and delivery routes are added by the P4/P5 slices.
 package httpapi
@@ -85,6 +85,12 @@ var routeTable = []struct {
 	{Route{http.MethodGet, "/readyz"}, func(a *api) http.Handler { return health.Readyz(a.deps.DB) }},
 	{Route{http.MethodGet, "/metrics"}, (*api).metricsHandler},
 	{Route{http.MethodGet, "/api/config"}, handlerOf((*api).getConfig)},
+
+	// Interactive documentation (tag `documentation`; docs.go).
+	{Route{http.MethodGet, "/docs"}, handlerOf((*api).getAPIDocs)},
+	{Route{http.MethodGet, "/docs/{asset}"}, handlerOf((*api).getAPIDocsAsset)},
+	{Route{http.MethodGet, "/openapi.yaml"}, handlerOf((*api).getOpenAPISpec)},
+	{Route{http.MethodGet, "/schemas/{schema}"}, handlerOf((*api).getContractSchema)},
 
 	// Audience slice (P3).
 	{Route{http.MethodPost, "/api/campaigns"}, handlerOf((*api).createCampaign)},
