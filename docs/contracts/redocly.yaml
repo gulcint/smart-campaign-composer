@@ -1,0 +1,11 @@
+# Lint configuration of the `api-lint` gate (contracts README §11):
+#   npx -y @redocly/cli@2.71.1 lint --config docs/contracts/redocly.yaml docs/contracts/openapi.yaml
+# The gate fails on any error or warning. Each rule turned off below is a deliberate contract choice.
+extends:
+  - recommended
+rules:
+  info-license: off                # private case study, no license object
+  no-server-example.com: off       # the only server is the local compose API (localhost:8080) by design
+  tag-description: off             # tags only group operations; meaning lives in the operations
+  operation-4xx-response: off      # /healthz, /readyz, /metrics, /api/config have no client errors
+  no-unused-components: off        # RouteNotFound / MethodNotAllowed are router-level, used by no operation

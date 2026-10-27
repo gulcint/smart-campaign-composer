@@ -8,7 +8,8 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 
 | Dosya | İçerik |
 |---|---|
-| [`openapi.yaml`](openapi.yaml) | HTTP API (OpenAPI 3.1): 19 operasyon, şemalar, durum kodları, hata gövdesi |
+| [`openapi.yaml`](openapi.yaml) | HTTP API (OpenAPI 3.1): 19 operasyon, kapalı şemalar, durum kodları, yanıt başına izinli hata kodları; segment kuralı ve içerik gövdeleri `schemas/*.schema.json`'a göreli `$ref` (çok dosyalı, doğruluk kaynağı; §11) |
+| [`redocly.yaml`](redocly.yaml) | `api-lint` kapısının Redocly yapılandırması (kapatılan her kural gerekçeli) |
 | [`sse-events.md`](sse-events.md) | İçerik üretimi (`delta`, `invalid`, `validated`) ve canlı durum (`snapshot`, `status`, `completed`) olayları |
 | [`schemas/segment-rule.schema.json`](schemas/segment-rule.schema.json) | Segment kuralı JSON şeması (LLM aracı girdisi + `POST /api/segments/count` gövdesi) |
 | [`schemas/content.schema.json`](schemas/content.schema.json) | İçerik JSON şeması (LLM aracı girdisi + düzenleme gövdesi) |
@@ -236,7 +237,25 @@ Hepsi `DECISIONS.md`'ye gerekçesiyle yazılır.
 12. **Üretim kilidi**: üretim sürerken onay ve içerik düzenleme de 409 `generation_in_progress` döner (önceki `validated` sürüm de onaylanamaz). Kilit istek `ctx`'i iptal edilince ve en geç `campaign.MaxGenerationDuration` = 120 sn sonra bırakılır (VARSAYIM).
 13. **HTTP 200 sonrası `llm_unavailable`**: düzeltme denemesi yok, son `invalid`, durum değişmez.
 14. Sahte LLM'in adı her yerde **`llm.Mock`**.
+15. **OpenAPI elle yazılan doğruluk kaynağıdır; kod ona uyar** (P3, sahip onayı). Spec çok dosyalı kalır (`openapi.yaml` + `schemas/*.schema.json`, göreli `$ref`); Redocly ve libopenapi-validator ikisi de demetlemeden çözer (P3'te denendi), bu yüzden `make api-bundle` yok. Testler spec'i diskten okur (`OPENAPI_SPEC_PATH`, konteynerde `/src/docs/contracts/openapi.yaml`); `go:embed` `../docs`'u gömemediği için `internal/httpapi/openapi/` altında birebir kopya tutulur ve `make check-contract-copies` `cmp` ile denetler ([go-interfaces §httpapi](go-interfaces.md#internalhttpapi)). Kapılar §11'de.
 
 ## 10. Açık noktalar
 
 1. ~~Strict birleşim sınırının sayım biçimi~~ **Kapandı (2026-10-26):** gerçek API çağrısıyla segment ve içerik aracı `strict: true` kabul edildi (llm-tools §1.1). Geri dönüş (`strict: false`) yalnız ileride 400 gelirse devreye girer; `DECISIONS.md`'ye D23 olarak yazıldı.
+
+## 11. API ↔ doc sapma koruması
+
+`openapi.yaml` elle yazılır ve doğruluk kaynağıdır (§9 #15); CI kodun ona uyduğunu denetler. Spec'in sıkılığı bunun ön koşuludur: her nesne şeması kapalıdır (`additionalProperties: false`), her operasyon dönebileceği tüm durum kodlarını (500 dahil) listeler, hata yanıtları o durum için izinli `error.code` değerlerini sabitler, `fields` yalnız `validation_failed`/`llm_invalid_output`'ta bulunur.
+
+| Kapı | Ne garanti eder | Sahibi |
+|---|---|---|
+| `api-lint` | `npx -y @redocly/cli@2.71.1 lint --config docs/contracts/redocly.yaml docs/contracts/openapi.yaml` sıfır hata **ve** sıfır uyarı: spec geçerli OpenAPI 3.1, tüm `$ref`'ler (dış şema dosyaları dahil) çözülüyor | mimar (spec), CI |
+| `api-routes` | `httpapi.Routes()` ↔ spec `paths × method` iki yönlü eşit (SSE operasyonları dahil; faz izin listesi hariç) — dokümante edilmemiş veya uygulanmamış uç nokta kalmaz | test yazarı (`test/contract`), kodu yazan (`Routes()` tek tablo) |
+| `api-breaking` | `oasdiff breaking` `main`'deki spec'e karşı: kırıcı değişiklik (alan/uç nokta silme, tip daraltma, zorunlu yapma) PR'da görünür; kasıtlıysa PR açıklamasında gerekçelendirilir ve `DECISIONS.md`'ye yazılır | CI, inceleyen |
+| `api-types-check` | `web/src/api` TS tipleri spec'ten üretilir (`openapi-typescript`); üretilen dosya commit'tekiyle aynı değilse kırmızı — frontend tipleri spec'ten sapamaz | kodu yazan (web) |
+| `check-contract-copies` | `internal/httpapi/openapi/` kopyaları `docs/contracts/openapi.yaml` ve başvurulan `schemas/*.schema.json` ile bayt bayt aynı (`cmp`, `make lint` içinde) | kodu yazan |
+| Sıkı E2E doğrulama (`OPENAPI_VALIDATE=strict`) | E2E istemcisi her yanıtı (SSE gövdeleri hariç, `x-sse-events`) libopenapi-validator ile spec'e karşı doğrular; 2xx alan isteği de doğrular; bilinmeyen alan, yanlış tip, listelenmemiş durum kodu veya izinsiz hata kodu testi düşürür; uygulanmış her `operationId` en az bir kez çağrılır | test yazarı (`test/e2e`), `compose.test.yml` |
+
+**İnsan incelemesinde kalanlar** (araçlar denetlemez): hata kodlarının anlamı ve hangi durumda hangisinin seçildiği, kontrol sırası ("ilk hata kazanır"), sıralama/sayfalama anlamı, retry ve idempotency davranışı, SSE olay sırası ve anlamı (P4'te olay başına şemalar gelene kadar gövdeleri de), `X-Request-ID` başlığı, düzyazı dokümanlar (`*.md`) ile spec açıklamalarının tutarlılığı.
+
+**İnceleme kuralı:** bir uç noktayı ekleyen, silen veya davranışını (yol, metot, gövde, durum kodu, hata kodu) değiştiren her PR, `openapi.yaml`'ı ve etkilenen `.md` sözleşmelerini **aynı PR'da** günceller; PR şablonundaki kutu işaretlenir. Spec'siz uç nokta değişikliği `api-routes` / sıkı E2E'de kırmızıya düşer; kırmızıyı spec'i koda uydurarak geçmek ancak mimar onayıyla olur.
