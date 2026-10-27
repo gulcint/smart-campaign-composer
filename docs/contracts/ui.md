@@ -18,7 +18,7 @@ Görsel dil ve ekran düzeni: kök dizindeki `DESIGN.md` (bağlayıcı değil; �
 | `@/api/sse.ts` | `createSSEParser` (§5.1) |
 | `@/api/client.ts` | `createApiClient`, `ApiClientKey` |
 | `@/api/errors.ts` | `ApiError`, `errorPresentation` (§4) |
-| `@/api/types.ts` | OpenAPI şemalarının TS karşılıkları (aynı adlar: `Campaign`, `ContentVersion`, `Preview`, `CampaignStatus`, `Delivery`, `FieldError`, `WorstCase`, `Audience`, …) |
+| `@/api/types.ts` | OpenAPI şemalarının TS karşılıkları (aynı adlar: `Campaign`, `ContentVersion`, `Preview`, `CampaignStatus`, `Delivery`, `FieldError`, `WorstCase`, `Audience`, …); içerik akışı olay tipleri: `ContentDeltaEvent`, `ContentInvalidEvent`, `ContentValidatedEvent` (openapi bileşenleriyle aynı ad) |
 | `@/i18n/index.ts` | `t(id: MessageId, params?: Record<string, string \| number>): string`, `messages: Record<MessageId, string>` |
 
 Bağımlılık enjeksiyonu (testlerde sahte verilir):
@@ -134,6 +134,7 @@ Props: `rule: object`. Testid'ler: `segment-rule`; her koşul için bir `segment
 
 ### 3.9 `ChannelTabs`
 Props: `modelValue: ChannelKey`, `phases: Record<FieldKey, ContentPhase>`. Emits: `update:modelValue(c: ChannelKey)`. Testid'ler: `channel-tab-sms`, `channel-tab-email` (`aria-selected`, `data-status` = kanalın özet fazı: kanalın herhangi bir alanı `invalid` ise `invalid`, aksi halde ilk alanının fazı), sekme `invalid` iken `channel-tab-error-sms` / `channel-tab-error-email`.
+Erişilebilirlik ve klavye (Reka Tabs): kök `role="tablist"`, `aria-label` = `t('tabs.channels')`; her sekme `role="tab"`, `aria-controls` = `content-panel-<c>` öğesinin kimliği; seçili sekme `tabindex="0"`, diğeri `tabindex="-1"` (yuvarlanan tabindex). `←`/`→` odağı komşu sekmeye taşır ve **seçer** (otomatik etkinleştirme, uçlarda başa/sona sarar; `update:modelValue` emit eder), `Home`/`End` ilk/son sekmeye gider. Sekme içeriği `content-panel-sms` / `content-panel-email` (`role="tabpanel"`, `aria-labelledby` = ilgili sekme); seçili olmayan panel `hidden` özniteliğini taşır ama DOM'dan kaldırılmaz (akış sırasında gizli kanalın `StreamingText`'leri de dolmaya devam eder).
 
 ### 3.10 `StreamingText` (REQ-CNT-04, REQ-UI-01)
 Props: `field: FieldKey`, `text: string`, `phase: ContentPhase`, `errors: FieldError[]` ([]). Emits: `regenerate()`.
@@ -144,6 +145,7 @@ Props: `kind: 'content'|'delivery'|'campaign'`, `status: string` (content: `draf
 
 ### 3.12 `VariableChip` (REQ-CNT-03)
 Props: `name: string`, `variant: 'insert'|'inline'|'invalid'`, `disabled: boolean` (false). Emits: `insert(name: string)` (yalnız `insert` ve `!disabled`). Testid: `variable-chip-<name>` (`data-variant`); metin `{{<name>}}`. `ContentEditor` araç çubuğunda yalnız `first_name`, `last_name`, `city` için `insert` chip'leri bulunur; düzenleme metnindeki izinsiz değişkenler (`{{password}}`) için önizleme altında `invalid` chip gösterilir.
+`invalid` chip'leri yalnız sunum amaçlıdır ve istemcide düzenleme metninden türetilir (doğrulama değildir; asıl hata `inline-error-<f>` ile backend'den gelir): `\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}` ile bulunan adlardan `first_name|last_name|city` dışında kalanlar, tekilleştirilerek, önizlemenin altında bir `invalid` chip olarak sıralanır. Bozuk söz dizimi (`{{first_name`) chip üretmez; onu backend `malformed_variable` olarak bildirir.
 
 ### 3.13 `CharCounter` (REQ-CNT-01, -02, -05)
 Props: `field: 'sms-body'|'email-subject'`, `text: string`, `limit: 160|80`, `worstCase: number|null` (null).
@@ -153,16 +155,19 @@ Kaynak: `worstCase` = API `ContentVersion.worst_case.sms_runes` / `.subject_rune
 
 ### 3.14 `ContentEditor` (REQ-APR-01, -02, -03)
 Props: `modelValue: Content`, `channel: ChannelKey`, `mode: 'readonly'|'editable'|'locked'`, `dirty: boolean`, `saving: boolean` (false), `fieldErrors: FieldError[]` ([]), `worstCase: WorstCase|null` (null). Emits: `update:modelValue(c: Content)`, `save(c: Content)`.
+Ayrıntılar: (a) `modelValue` **her zaman tam** `Content`'tir (iki kanal); `channel` yalnız hangi alanların gösterildiğini belirler ve `save(c)` tam içeriği gönderir (API gövdesi tam içeriktir). (b) `dirty` ebeveynindir: `modelValue`, taban içerikten (son `validated` sürümün içeriği; `invalid` taslak düzenlenirken taslak metinleri) alan alan katı dize eşitliğiyle farklıysa `true`. (c) `editor-save` ve alanlarda **Ctrl/⌘+Enter** aynı koşullarla `save` emit eder (kullanılabilirken); Enter metin alanında yeni satırdır, konu `input`'unda bir şey yapmaz. (d) Değişken chip'i tıklanınca `{{<ad>}}` **son odaklanan alanın** seçimine yazılır (seçim varsa yerini alır), imleç eklenen metnin sonuna konur, odak alana döner, `update:modelValue` emit edilir; hiç odaklanılmadıysa hedef kanalın gövde alanıdır (`sms-body` / `email-body`). (e) Her alan: kendi `fieldErrors` girdisi varsa veya sayacı `over-limit` ise `aria-invalid="true"`; `aria-describedby` alanın `char-counter-<f>` (varsa) ve `inline-error-<f>` (varsa) öğelerine işaret eder. `path: ""` alan hataları her alanın `inline-error-<f>`'ine eklenir (§5.2 ile aynı kural). (f) `saving` iken alanlar `readonly`, `editor-save` `aria-disabled`.
 Testid'ler: `channel="sms"` iken `editor-sms-body` (textarea) + `CharCounter field="sms-body"`; `channel="email"` iken `editor-email-subject` (input) + `CharCounter field="email-subject"` + `editor-email-body` (textarea); `editor-save` (`mode !== 'editable'`, `!dirty` veya `saving` iken `aria-disabled="true"`); `mode` `readonly`/`locked` iken alanlarda `readonly`; `locked` iken `editor-locked-note`; insert chip'leri `variable-chip-first_name|last_name|city` (imleç konumuna ekler, `locked`/`readonly` iken `disabled`); her alan hatası için `inline-error-<f>` (`data-code`). `mode` kuralı: akış sürerken `readonly`; kampanya `sending`/`completed` ise `locked`; aksi `editable`.
 
 ### 3.15 `SmsPreview` (REQ-APR-01, REQ-CNT-03, REQ-UI-01)
 Props: `preview: Preview|null`, `loading: boolean`, `error: ApiError|null`. Emits: `next-sample()`. Testid'ler: `sms-preview` (`data-state`: `loading|ready|error|empty`), `sms-preview-text` (textContent **birebir** `preview.sms.text`), `sms-preview-recipient` (textContent = `preview.customer.first_name` boşsa `t('preview.fallbackRecipient')`, aksi `first_name`), `sms-preview-sample` (metin `t('preview.sample', { i: sample_index + 1, n: sample_count })`), `sms-preview-next` (Button; `sample_count ≤ 1` iken `aria-disabled`).
+`data-state` ilk eşleşen kural (hem `SmsPreview` hem `EmailPreview`): `loading` (`loading` true; önceki başarılı `preview` varsa metni yerinde kalır) › `error` (`error` ≠ null) › `ready` (`preview` ≠ null) › `empty`. `empty` ve `error` iken metin/çerçeve öğeleri (`sms-preview-text`, `email-preview-frame`, …) DOM'da bulunmaz. `error` durumunda `error.code` `customer_not_found` ise `sms-preview-next` kullanılabilir kalır ve `sample_index=0` istenir (§4).
 
 ### 3.16 `EmailPreview` (REQ-APR-01, REQ-UI-01)
 Props: `preview: Preview|null`, `loading: boolean`, `error: ApiError|null`. Testid'ler: `email-preview` (`data-state`), `email-preview-subject` (textContent = `preview.email.subject`), `email-preview-frame` — `<iframe>`: `sandbox=""` (**boş değer**, hiçbir `allow-*` yok), `srcdoc` = `preview.email.html` **birebir** (istemci değiştirmez/temizlemez), `title` = `t('preview.emailFrameTitle')`, `src` özniteliği yok.
 
 ### 3.17 `ApprovalBar` (REQ-APR-01, -03, REQ-CNT-04, -05)
 Props: `campaignState: CampaignState`, `versionStatus: VersionStatus`, `dirty: boolean`, `submitting: boolean` (false), `stale: boolean` (false). Emits: `approve()`, `send()`.
+`stale` prop'unu `ApprovalPage` yönetir (§3.24): onay veya gönderim isteği 409 `stale_content_version` döndürünce `true` olur; kullanıcı bir sonraki onay denemesini başlatınca veya sayfadan ayrılınca `false` olur. `disabled` iken `approval-approve` `aria-describedby` ile `approval-reason` öğesine bağlıdır.
 Durum (`approval-bar`'ın `data-state`'i), ilk eşleşen:
 1. `campaignState` `approved` ve `!stale` → `approved`: `approval-send` görünür (Button primary), `approval-approve` yok.
 2. `stale` → `stale`: `approval-stale-note` görünür; `approval-approve` `aria-disabled` değil (yeniden onay).
@@ -173,6 +178,7 @@ Testid'ler: `approval-bar`, `approval-approve`, `approval-send`, `approval-reaso
 
 ### 3.18 `ConfirmDialog`
 Props: `open: boolean`, `kind: 'approve'|'send'|'regenerate'`, `counts: { sms: number; email: number } | null` (null), `submitting: boolean` (false), `error: ApiError|null` (null). Emits: `confirm()`, `cancel()`, `update:open(v: boolean)`. Testid'ler: `confirm-dialog` (`data-kind`), `confirm-dialog-confirm`, `confirm-dialog-cancel`, `send` iken `confirm-dialog-count-sms`, `confirm-dialog-count-email` (`data-value`), `error` varsa `confirm-dialog-error` (`data-code`; 422 alan hataları içinde `field-error` öğeleri, `data-code` ör. `sms_too_long_worst_case`).
+Ek testid: `confirm-dialog-title` (metin `t('confirm.<kind>.title')`). Erişilebilirlik ve davranış (Reka AlertDialog): kök `role="alertdialog"`, `aria-modal="true"`, `aria-labelledby` = `confirm-dialog-title`; açılınca odak `confirm-dialog-cancel`'a gider (geri alınamaz eylemlerde güvenli varsayılan); odak diyalog içinde döner (Tab/Shift+Tab tuzağı); `Esc` ve arka plana tıklama `cancel` emit eder ve `update:open(false)`; kapanınca odak diyaloğu açan öğeye döner. `submitting` iken `confirm-dialog-confirm` `aria-disabled="true"` ve `confirm` emit etmez, `confirm-dialog-cancel` etkindir ama `Esc`, arka plan ve iptal **kapatmaz** (`cancel` emit edilmez). `error` null değilken diyalog açık kalır ve `confirm-dialog-error` görünür; sayfa başarıda `open`'ı `false` yapar. `confirm` her tıklamada en çok bir kez emit edilir.
 
 ### 3.19 `ProgressBar` / `ProgressRow`
 Props: `value: number`, `max: number`, `variant: 'single'|'segmented'`, `segments: { sent: number; failed: number; sending: number; queued: number } | null` (null), `label: string` (''). Kök `role="progressbar"`, `aria-valuenow` = `value`, `aria-valuemin="0"`, `aria-valuemax` = `max`; testid ebeveynden düşer.
@@ -196,6 +202,34 @@ Testid'ler: `activity-feed` (`role="log"`, `aria-live="off"`, `data-state` — i
 - `ConnectionBanner` — Props: `visible: boolean`. Testid `connection-banner` (metin `t('connection.lost')`).
 - `EmptyState` — Props: `kind: 'campaign_not_found'|'not_found'|'audience_empty'|'feed_empty'`. Emits: `action()`. Testid'ler: `empty-state` (`data-kind`), `empty-state-action`.
 - `Skeleton` — testid `skeleton`; içerik iddia edilmez.
+
+### 3.23 `ContentPage` kompozisyonu (REQ-CNT-04, REQ-APR-01..03)
+
+Sayfa; `useContentGeneration`, kampanya (`GET /api/campaigns/{id}`) ve önizleme isteklerini birleştirir. **Taban sürüm** = `latest_content_version` (varsa). Sayfa durumu `versionStatus`'tur (§5.2); bu sayfa oturumunda hiç üretim başlatılmadıysa: taban sürüm varsa `validated`, yoksa `none` sayılır.
+
+| `versionStatus` | Gövdede görünen | Birincil eylem |
+|---|---|---|
+| `none` (taban sürüm yok, üretim yok) | `content-empty` (içinde `content-regenerate`, metin `t('content.generate')`, onay diyaloğu **yok**) | `content-regenerate` |
+| `streaming`, `retrying` | `ChannelTabs` + her üç `StreamingText` (`content-panel-*` içinde; seçili olmayan panel `hidden`); `ContentEditor` yok | — (`content-regenerate` `aria-disabled`) |
+| `interrupted` | `ChannelTabs` + üç `StreamingText` (`interrupted`) | `content-regenerate` (metin `t('content.regenerate')`, diyalog yok: onaylanacak sürüm yok) |
+| `invalid` | `ChannelTabs` + üç `StreamingText` (`invalid`, hatalarıyla) + `content-edit-draft` | `content-regenerate`; ikincil `content-edit-draft` |
+| `validated` | `ChannelTabs` + seçili kanalın `ContentEditor`'ı (`mode` §3.14) + `CharCounter`'lar + önizleme (`sms` sekmesinde `SmsPreview`, `email` sekmesinde `EmailPreview`) | `content-to-approval` |
+| düzenleme (`content-edit-draft` sonrası) | `invalid` taslağın metinleriyle dolu `ContentEditor` (`editable`, `dirty` = true, `fieldErrors` = son `invalid` olayının hataları), `StreamingText`'ler kaldırılır; `versionStatus` `invalid` kalır, kaydedilince `validated` olur | `editor-save` |
+
+- Her zaman görünür: `page-title`, `content-live-status` (görsel olarak gizli, `role="status"`, `aria-live="polite"`; metni yalnız faz değişiminde `t('content.live.<streaming|retrying|validated|invalid|interrupted>')` olur; delta başına güncellenmez), `ConfirmDialog kind="regenerate"`.
+- `ChannelTabs.phases`: akış durumu varsa `useContentGeneration().fields[*].phase`; yoksa (taban sürüm) üç alan `validated`. Seçili kanal varsayılanı `sms`.
+- `content-regenerate` ve `StreamingText`'in `regenerate` emit'i aynı eylemdir: `validated` bir sürüm var **veya** editör `dirty` ise önce `ConfirmDialog kind="regenerate"` (kaydedilmemiş düzenleme kaybolur); onayda `start(campaignId)`.
+- **Kaydetme:** `editor-save` → `POST /api/campaigns/{id}/content-versions` (tam içerik). Başarıda: taban := yanıtın `content`'i, `dirty` false, `fieldErrors` boş, `worstCase` := yanıtın `worst_case`'i, `versionId` := yanıtın `id`'si, `versionStatus` `validated`, kampanya yeniden çekilir (durum `content_ready`, stepper güncellenir), önizleme yeniden istenir, `toast.contentSaved` (success). **422:** `ApiError.fields` yollarına göre `ContentEditor.fieldErrors`'a dağıtılır, editör `dirty` kalır, odak ilk hatalı alana gider. **409** (`invalid_state`, `generation_in_progress`): toast + kampanya yeniden çekilir, düzenleme korunur. **413 / ağ hatası:** §4.
+- `ContentEditor.mode`: kampanya `sending`/`completed` ise `locked` (ayrıca `content-regenerate`, `content-edit-draft`, `editor-save` `aria-disabled`), aksi `editable`. Editör akış sürerken bağlı olmadığından §3.14'teki "akış sürerken `readonly`" kuralı yalnız bileşen tek başına test edilirken geçerlidir.
+- İstek hataları: `start()` sonrası `useContentGeneration().error` doluysa §4'e göre sunulur; `llm_unavailable` (stream açılmadan) → `ErrorCard action="regenerate"` (`error-card-action` `start()`'ı yeniden çağırır), 409'lar → toast.
+
+### 3.24 `ApprovalPage` kompozisyonu (REQ-APR-01, -03, REQ-CNT-05)
+
+- Mount'ta kampanya çekilir; onaylanacak sürüm **her zaman `campaign.latest_content_version`**'dır (yoksa `ApprovalBar` `versionStatus="none"`, `approval-reason` `no_content`). Önizleme §1.1'e göre istenir.
+- Testid'ler: `approval-version` (`data-version-id` = sürüm kimliği, `data-value` = `version_number`; metin `t('approval.version', { n })`), `approval-audience-sms`, `approval-audience-email` (`data-value` = `segment.audience.sms|email`), `approval-edit` (içerik adımına götürür; metin `t('approval.edit')`), `SmsPreview`, `EmailPreview`, `ApprovalBar`, `ConfirmDialog`.
+- **Onay:** `approval-approve` → `ConfirmDialog kind="approve"` → `confirm` → `POST /approve {content_version_id: latest.id}`. Başarı: kampanya yanıtla değiştirilir, diyalog kapanır, `toast.approved` (success), `ApprovalBar` `approved`. **422** (`sms_too_long_worst_case`, `subject_too_long_worst_case`): diyalog açık kalır, `error` prop'u dolar. **409 `stale_content_version`:** diyalog kapanır, kampanya yeniden çekilir, `stale=true`, toast. **Diğer 409/404:** diyalog kapanır, kampanya yeniden çekilir, toast (stepper §1 tablosuna göre güncellenir).
+- **Gönderim:** `approval-send` → `ConfirmDialog kind="send"` (`counts` = `segment.audience.{sms,email}`) → `POST /send {content_version_id: campaign.approval.content_version_id}`. Başarı: `tracking` rotası. 409'lar onaydakiyle aynı biçimde ele alınır (`stale_content_version` → `stale=true`).
+- Onaylıyken içerik düzenlenirse (başka sekme/API) onay düşer; bu sayfa bunu yalnız bir sonraki istekteki 409 veya yeniden çekmeyle öğrenir (canlı bildirim yok).
 
 ## 4. Hata kodu → sunum → i18n
 
@@ -223,15 +257,15 @@ export function errorPresentation(e: ApiError, context?: ErrorContext): { displa
 | `generation_in_progress` (409) | `error.generation_in_progress` | `toast` (warning) | — |
 | `payload_too_large` (413) | `error.payload_too_large` | `inline` | `inline-error-brief` (brief) veya ilgili editör alanı, `data-code="payload_too_large"` |
 | `validation_failed` (422) | `error.validation_failed` | `inline` | `fields[]` `path`'e göre `inline-error-<pathKey>`'e dağıtılır; eşlenemeyen (`header.*`, `query.*`, `""`) `ErrorCard`'a; onay bağlamında `ConfirmDialog` içinde; odak ilk hatalı alana |
-| `llm_invalid_output` (502) | `error.llm_invalid_output` | `card` | segment: `ErrorCard action="retry"` |
-| `llm_unavailable` (502) | `error.llm_unavailable` | `card` | `ErrorCard action="retry"` (içerikte stream açılmadan) |
+| `llm_invalid_output` (502) | `error.llm_invalid_output` | `card` | segment: `ErrorCard action="retry"` (brief bağlamı); içerikte bu kod HTTP olarak dönmez (son `invalid` olayı) |
+| `llm_unavailable` (502) | `error.llm_unavailable` | `card` | `ErrorCard`; `action` bağlama göre: segment/`brief` → `retry`, `content` (stream açılmadan) → `regenerate` |
 | `malformed_request` (400) | `error.malformed_request` | `toast` (error) | — |
 | `internal_error` (500) | `error.internal_error` | `toast` (error) | — |
 | `network_error` (fetch hatası / SSE kopması) | `error.network` | `banner` | `ConnectionBanner visible` |
 
 Alan hata mesaj id'leri: `field_error.<code>` — 23 kodun her biri için (README §5.2): `field_error.required`, `field_error.too_long`, `field_error.invalid_value`, `field_error.invalid_json`, `field_error.schema_violation`, `field_error.truncated_output`, `field_error.no_tool_call`, `field_error.llm_unavailable`, `field_error.internal_error`, `field_error.sms_too_long`, `field_error.subject_too_long`, `field_error.email_body_too_long`, `field_error.sms_too_long_worst_case`, `field_error.subject_too_long_worst_case`, `field_error.unknown_variable`, `field_error.malformed_variable`, `field_error.unknown_field`, `field_error.unknown_operator`, `field_error.operator_not_allowed`, `field_error.type_mismatch`, `field_error.empty_group`, `field_error.max_depth_exceeded`, `field_error.max_conditions_exceeded`; ayrıca bilinmeyen kodlar için `field_error.unknown`.
 
-Diğer zorunlu `MessageId`'ler: `provider.mock`, `provider.claude`, `provider.unknown`; `status.content.{draft,validated,invalid,interrupted}`; `status.delivery.{queued,sending,sent,failed}`; `status.campaign.{draft,audience_ready,content_ready,approved,sending,completed}`; `step.{brief,audience,content,approval,tracking}`; `audience.consentNote`, `audience.empty`; `counter.worstCase`; `stream.retrying`, `stream.interrupted`; `approval.reason.{no_content,streaming,invalid,interrupted,dirty,state}`, `approval.staleNote`; `confirm.{approve,send,regenerate}.title`; `preview.emailFrameTitle`, `preview.fallbackRecipient`, `preview.sample`; `feed.empty`, `feed.newItems`; `connection.lost`; `delivery.staleNote`, `delivery.completedTitle`; tüm `error.*` (15 kod + `error.network`). `messages` nesnesi bu id'lerin her birini boş olmayan bir metinle içerir (test: id kümesi bu listeyi kapsar).
+Diğer zorunlu `MessageId`'ler: `provider.mock`, `provider.claude`, `provider.unknown`; `status.content.{draft,validated,invalid,interrupted}`; `status.delivery.{queued,sending,sent,failed}`; `status.campaign.{draft,audience_ready,content_ready,approved,sending,completed}`; `step.{brief,audience,content,approval,tracking}`; `audience.consentNote`, `audience.empty`; `counter.worstCase`; `stream.retrying`, `stream.interrupted`; `approval.reason.{no_content,streaming,invalid,interrupted,dirty,state}`, `approval.staleNote`; `confirm.{approve,send,regenerate}.title`; `preview.emailFrameTitle`, `preview.fallbackRecipient`, `preview.sample`; `feed.empty`, `feed.newItems`; `connection.lost`; `delivery.staleNote`, `delivery.completedTitle`; tüm `error.*` (15 kod + `error.network`); `tabs.channels`; `content.{generate,regenerate,editDraft,empty}`; `content.live.{streaming,retrying,validated,invalid,interrupted}`; `approval.version`, `approval.edit`; `toast.contentSaved`, `toast.approved`. `messages` nesnesi bu id'lerin her birini boş olmayan bir metinle içerir (test: id kümesi bu listeyi kapsar).
 
 ## 5. SSE istemci davranışı
 
@@ -276,6 +310,15 @@ Durum geçişleri (normatif, testler sahte `fetch` ile `ReadableStream` parçala
 | `abort()` / bileşen unmount | `AbortController.abort()`; alanlar `interrupted` (bileşen yaşıyorsa) |
 
 `ApprovalBar` yalnız `versionStatus === 'validated'` iken `ready` olabilir; `interrupted` veya `invalid` iken onay butonu `aria-disabled="true"` (REQ-CNT-04).
+
+Ek kurallar (sse-events.md §1.3.1 ile aynı):
+
+- `start()` zaten `versionStatus === 'streaming'` iken çağrılırsa **yok sayılır** (ikinci istek gitmez). `start()` hiçbir zaman reddetmez (reject): sonuç `fields`/`versionStatus`/`error` ile bildirilir; döndürdüğü `Promise` akış bitince (terminal olay, kesilme veya hata) çözülür. `start()` sırasında `versionStatus === 'invalid' | 'interrupted' | 'validated'` ise önceki durum atılır (yeni üretim baştan başlar).
+- İstek: `fetch(url, { method: 'POST', headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' }, body: '{}', signal })`. Yanıt 2xx değilse gövde `ApiClient` ile **aynı** kuralla (`apiErrorFromBody`; JSON değilse veya gövde yoksa `status`'a göre genel kod, fetch hatası `network_error`) `ApiError`'a çevrilir.
+- Ayrıştırıcıya gelen bilinmeyen `event` adı yok sayılır; `data` JSON değilse veya olay şemasına uymuyorsa akış "terminal olay yok" gibi ele alınır (alanlar `interrupted`, `versionStatus='interrupted'`, `error` boş).
+- Terminal olaydan (`validated` / `invalid` `final:true`) sonra gelen veriler yok sayılır; gövde kapanınca `Promise` çözülür.
+- `delta` içinde geçersiz (`channel`,`field`) çifti yok sayılır. `attempt` yalnız bilgidir (`attempt` ref'i); alan metinlerinin temizlenmesini yalnız `invalid` `final:false` tetikler.
+- `abort()` sunucuya iptal gönderir (bağlantı kapanır; sunucu LLM çağrısını iptal eder ve kilidi bırakır). Unmount sonrası `useContentGeneration` hiçbir ref'i değiştirmez.
 
 ### 5.3 Canlı durum — `useCampaignStatusStream` (GET, EventSource)
 
@@ -351,11 +394,11 @@ export function useActivityFeed(campaignId: Ref<string>, status: Ref<CampaignSta
 | REQ-AUD-05 (UI) | §3.5 `brief-counter`, `brief-submit` pasifliği, `inline-error-brief`; §4 413/422 |
 | REQ-CNT-01 / REQ-CNT-02 | §3.13 `CharCounter` (160/80, eşikler 144/72, `over-limit`), §3.14 |
 | REQ-CNT-03 | §3.12 `VariableChip`, §3.15 `sms-preview-text` (yedek metin API render'ından), `sms-preview-recipient` |
-| REQ-CNT-04 | §3.10 `StreamingText` fazları, §5.2 durum geçişleri, §1.1 (`start()` tetikleri, `content-regenerate`, `content-to-approval`), §3.17 kural 4–5 |
+| REQ-CNT-04 | §3.10 `StreamingText` fazları, §5.2 durum geçişleri, §1.1 (`start()` tetikleri, `content-regenerate`, `content-to-approval`), §3.17 kural 4–5, §3.23 (sayfa durum tablosu, `content-live-status`), §3.9 (klavye) |
 | REQ-CNT-05 | §3.13 `char-counter-worst-<f>`, §3.18 `confirm-dialog-error` (`sms_too_long_worst_case`), §7 #1 |
-| REQ-APR-01 | §1.1 sayfa eylemleri ve önizleme tetikleri, §3.14 `ContentEditor`, §3.15–3.16 önizleme, §3.17 `ApprovalBar`, §3.18 `ConfirmDialog` |
+| REQ-APR-01 | §1.1 sayfa eylemleri ve önizleme tetikleri, §3.14 `ContentEditor`, §3.15–3.16 önizleme, §3.17 `ApprovalBar`, §3.18 `ConfirmDialog` (odak/Esc), §3.23, §3.24 |
 | REQ-APR-02 | §3.14 `inline-error-<f>` (422 alan hataları), §4 |
-| REQ-APR-03 | §3.17 `stale` durumu, §4 `stale_content_version`, §1 adım erişimi |
+| REQ-APR-03 | §3.17 `stale` durumu, §4 `stale_content_version`, §1 adım erişimi, §3.24 (hangi sürüm onaylanır, `stale` yönetimi) |
 | REQ-TRK-01 | §3.20 `DeliveryCounters`, §3.21 `ActivityFeed`, §5.3, §5.4 |
 | REQ-AI-03 | §3.3 `ProviderBadge` (`data-provider="mock"`), §2 `GET /api/config` |
 | REQ-UI-01 | §6 (1–5), §3.16 `email-preview-frame` |
