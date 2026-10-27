@@ -2,7 +2,7 @@
 
 Önemli kararlar ve nedenleri. Her faz kapısında güncellenir (`docs/PLAN.md` §3.2). Her karar: **bağlam → karar → neden → alternatifler/bedel**. "Doküman" case dokümanıdır; dokümanda olmayan her şey VARSAYIM olarak işaretlidir. Ayrıntılı gereksinimler `docs/requirements.md`, ad sözleşmeleri `docs/contracts/`.
 
-Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D37–D46; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
+Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D37–D47; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
 
 ---
 
@@ -198,6 +198,11 @@ D32'de gerçek API ile doğrulanan biçim (sahte `tool_use` + `is_error` `tool_r
 
 ### D45 — Sayfa kompozisyonları: geçersiz taslak düzenlenebilir; hep en son sürüm onaylanır
 PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `invalid` sonrası `content-edit-draft` taslak metinlerini editöre alır (hatalar satır içi, `dirty`), kaydet doğrulayıcıdan geçerek yeni `validated` sürüm üretir. `ApprovalPage` her zaman `latest_content_version`'ı onaylar/gönderir; `stale` yalnız 409 sonrası görünür (canlı bildirim yok). Bedel: ek iki testid (`content-edit-draft`, `content-empty`) ve sayfa durum tablosu (ui.md §3.23–3.24).
+
+### D47 — Kanonik UUID, kilit penceresi ve `editContent` denetim sırası (P4 incelemesi)
+- **Bağlam:** Bağımsız inceleme (PR #50) üç şey buldu: (a) `uuid.Parse` büyük harfli UUID'yi kabul eder ama dize olduğu gibi taşınınca bellek içi üretim kilidi (dize anahtarlı) ve sürüm kimliği karşılaştırmaları Postgres'ten (uuid tipi) farklı davranır: büyük harfli yol kilidi atlatır, büyük harfli `content_version_id` yanlış `stale_content_version` döner; (b) kilit denetimi (`busy`) satır kilidinden önce yapılır, onay ile üretim başlangıcı arasında bir pencere kalır; (c) README §5.4 (3) ile openapi/go-interfaces `editContent` sırası çelişir.
+- **Karar:** (a) Kimlikler HTTP sınırında küçük harfli kanonik biçime çevrilir; servis de kanonik olmayan kimliği kanonikleştirir. (b) `Approve` ve `EditContent` kilit denetimini satır kilidi altındaki `decide` içinde yineler; `Send` için aynı kural P5'te zorunludur (P5 başlamadan önce üretim işaretçisi satır kilidiyle birlikte atomik olmalı). (c) `editContent` için sıra openapi ve go-interfaces'teki gibidir; README §5.4'e açık istisna yazıldı.
+- **Bedel:** Üretim kilidi hâlâ süreç içidir (bkz. Bilinen sınırlar); bu karar yalnız tek süreç içindeki pencereyi kapatır.
 
 ## Bilinen sınırlar ve riskler
 
