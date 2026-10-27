@@ -5,6 +5,7 @@ import { Info, Sparkles } from '@lucide/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import BrandMark from '@/components/BrandMark.vue'
 import BriefComposer from '@/components/BriefComposer.vue'
 import Button from '@/components/Button.vue'
 import ChatBubble from '@/components/ChatBubble.vue'
@@ -131,7 +132,10 @@ function newCampaign() {
           context="brief"
           @action="campaignId && store.load(campaignId)"
         />
-        <Skeleton v-else-if="!campaign" class="h-16 w-full rounded-bubble" />
+        <div v-else-if="!campaign" class="flex items-center gap-3">
+          <BrandMark :size="24" muted />
+          <Skeleton class="h-16 flex-1 rounded-bubble" />
+        </div>
         <template v-else>
           <ChatBubble role="user" :text="campaign.brief" />
           <ChatBubble

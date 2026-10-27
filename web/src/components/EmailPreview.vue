@@ -10,6 +10,7 @@ import { errorPresentation } from '@/api/errors'
 import type { Preview } from '@/api/types'
 import { t } from '@/i18n'
 
+import BrandMark from './BrandMark.vue'
 import Skeleton from './Skeleton.vue'
 
 const props = defineProps<{
@@ -49,13 +50,25 @@ const shown = computed(() =>
           {{ shown.email.subject }}
         </p>
       </div>
-      <iframe
-        data-testid="email-preview-frame"
-        sandbox=""
-        :srcdoc="shown.email.html"
-        :title="t('preview.emailFrameTitle')"
-        class="block h-96 w-full rounded-input border border-border-default bg-surface-card"
-      />
+      <!-- Brand strip outside the sandbox (srcdoc is a backend contract and cannot load /brand/...). -->
+      <div class="flex flex-col">
+        <div
+          data-testid="email-preview-brand"
+          aria-hidden="true"
+          class="flex items-center gap-2 rounded-t-input border border-b-0 border-border-default bg-surface-card px-4 py-2 text-body-sm font-semibold text-ink-900"
+        >
+          <BrandMark :size="20" />
+          <span>{{ t('app.wordmark') }}</span>
+          <span class="text-accent-display">{{ t('app.wordmarkAccent') }}</span>
+        </div>
+        <iframe
+          data-testid="email-preview-frame"
+          sandbox=""
+          :srcdoc="shown.email.html"
+          :title="t('preview.emailFrameTitle')"
+          class="block h-96 w-full rounded-b-input border border-border-default bg-surface-card"
+        />
+      </div>
     </template>
     <Skeleton v-else-if="state === 'loading'" class="h-96 w-full" />
     <p v-else-if="state === 'empty'" class="text-body-sm text-ink-500">{{ t('preview.empty') }}</p>

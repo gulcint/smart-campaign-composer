@@ -24,7 +24,8 @@ env:
   GO_IMAGE: golang:1.27-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
 
 jobs:
-  # GitHub has no "exists:" rule; this job tells later jobs which parts of the repo exist yet.
+  # GitHub has no "exists:" rule; this job tells later jobs which parts of the repo exist yet,
+  # and whether the change needs the heavy (build/test) jobs at all.
   detect:
     runs-on: ubuntu-latest
     outputs:
@@ -32,8 +33,37 @@ jobs:
       migrations: ${{ steps.d.outputs.migrations }}
       compose_test: ${{ steps.d.outputs.compose_test }}
       web: ${{ steps.d.outputs.web }}
+      heavy: ${{ steps.h.outputs.heavy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2 # the PR merge commit and its first parent (the base)
+      # heavy=false only for a pull request whose every changed file is documentation:
+      # ai-sessions/**, docs/** outside docs/contracts/, or *.md outside docs/contracts/ and web/
+      # (contracts feed codegen and tests; `prettier --check .` in web/ also checks *.md).
+      # Anything else, any doubt, and every non-PR event (push to main) -> heavy=true.
+      # No workflow-level `paths:` filter: ci-ok must report on every PR (ruleset).
+      - id: h
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          heavy=true
+          if [ "$EVENT" = pull_request ] && git rev-parse -q --verify HEAD^2 >/dev/null; then
+            # --no-renames: a file moved out of code into docs/ still lists its old path.
+            heavy=false; n=0
+            while IFS= read -r -d '' f; do
+              n=$((n + 1))
+              case "$f" in
+                docs/contracts/*|web/*) heavy=true ;;
+                ai-sessions/*|docs/*|*.md) ;;
+                *) heavy=true ;;
+              esac
+            done < <(git -c core.quotePath=false diff --no-renames --name-only -z HEAD^1 HEAD)
+            if [ "$n" -eq 0 ]; then heavy=true; fi
+            echo "$n changed file(s)"
+          fi
+          echo "heavy=$heavy"
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
       - id: d
         run: |
           {
@@ -116,21 +146,15 @@ jobs:
 
   go-lint:
     needs: detect
-    if: needs.detect.outputs.go == 'true'
+    if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.go == 'true'
     runs-on: ubuntu-latest
     container: golangci/golangci-lint:v2.15.0@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: golangci-lint run ./...
-      # The embedded LLM tool schemas must stay byte-identical to the contract copies.
-      - name: tool schemas match the contract
-        run: |
-          for f in segment-rule content; do
-            cmp docs/contracts/schemas/llm/"$f".tool.json internal/llm/schemas/"$f".tool.json
-          done
 
-  # API <-> doc drift guard (contracts README §11). api-routes and the strict E2E validation run
-  # inside `make test` (make-test job).
+  # API <-> doc drift guard (contracts README §11), plus the embedded LLM tool schemas. api-routes
+  # and the strict E2E validation run inside `make test` (make-test job).
   api-contract:
     runs-on: ubuntu-latest
     env:
@@ -153,6 +177,8 @@ jobs:
         run: make api-lint
       - name: check-contract-copies (embedded spec == docs/contracts)
         run: make check-contract-copies
+      - name: check-tool-schemas (embedded LLM tool schemas == docs/contracts)
+        run: make check-tool-schemas
       - name: api-breaking (oasdiff vs the PR base, origin/main on push; label api-breaking-ok lets intentional changes through)
         run: |
           if [ "$API_BREAKING_OK" = "true" ]; then
@@ -164,7 +190,7 @@ jobs:
   # Web UI: ESLint (vue/no-v-html: error) + Prettier, vue-tsc, Vitest, production build.
   web:
     needs: detect
-    if: needs.detect.outputs.web == 'true'
+    if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.web == 'true'
     runs-on: ubuntu-latest
     container: node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
     defaults:
@@ -192,10 +218,11 @@ jobs:
       # docs/PLAN.md §6 #16
       - run: npm audit --audit-level=high
 
-  # The served image builds (non-root nginx, digest-pinned bases).
+  # The served image builds (non-root nginx, digest-pinned bases). The only CI check of the
+  # production web image: compose.test.yml builds just the web `test` stage (Vitest).
   web-image:
     needs: detect
-    if: needs.detect.outputs.web == 'true'
+    if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -207,7 +234,7 @@ jobs:
 
   sql-lint:
     needs: detect
-    if: needs.detect.outputs.migrations == 'true'
+    if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,7 +246,7 @@ jobs:
   # up -> down -> up on a throwaway Postgres must leave an identical schema (docs/PLAN.md §2.2).
   db-roundtrip:
     needs: detect
-    if: needs.detect.outputs.migrations == 'true'
+    if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -249,18 +276,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: make test-hooks
 
-  go-unit:
-    needs: detect
-    if: needs.detect.outputs.go == 'true'
-    runs-on: ubuntu-latest
-    container: golang:1.27-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: go test -race -short -count=1 -shuffle=on ./...
-
+  # Unit + integration + E2E: scripts/test-container.sh runs `go test -race ./...` without
+  # -short, a superset of a separate unit-test job.
   make-test:
     needs: detect
-    if: needs.detect.outputs.compose_test == 'true'
+    if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.compose_test == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -288,7 +308,7 @@ jobs:
 
   govulncheck:
     needs: detect
-    if: needs.detect.outputs.go == 'true'
+    if: needs.detect.outputs.heavy == 'true' && needs.detect.outputs.go == 'true'
     runs-on: ubuntu-latest
     container: golang:1.27-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5
     steps:
@@ -298,10 +318,11 @@ jobs:
   # ---------- gate ----------
 
   # The only required status check in the main ruleset. Skipped jobs (parts of
-  # the repo that do not exist yet) pass; failed or cancelled jobs do not.
+  # the repo that do not exist yet, or heavy jobs on a docs-only PR) pass; failed
+  # or cancelled jobs do not.
   ci-ok:
     if: always()
-    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, api-contract, web, web-image, sql-lint, db-roundtrip, compose-ports, hook-tests, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
+    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, api-contract, web, web-image, sql-lint, db-roundtrip, compose-ports, hook-tests, make-test, gitleaks, ai-sessions-scan, govulncheck]
     runs-on: ubuntu-latest
     steps:
       - env:

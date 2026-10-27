@@ -113,7 +113,7 @@ main
 - P2'den itibaren her faz bu akışı izler (P2 dahil: `slice/p2-foundation`). P0 ve P1'de test yoktur, kod da yoktur.
 - Test yazarının worktree'si **sparse checkout** ile açılır: yalnızca `docs/`, `testdata/`, `test/` ve test dosyası desenleri (`**/*_test.go`, `web/tests/**`). Önceki fazlardan `main`'e girmiş implementasyon (`cmd/`, `internal/`, `migrations/`, `web/src/`) worktree'de **bulunmaz** (R1).
 - `*_test.go` dosyaları Go gereği paketlerin yanında durur. Sparse checkout bu dosyaları getirir ama yanlarındaki `.go` implementasyon dosyalarını getirmez. Test yazarı testleri derleyip çalıştırmaz; çalıştırma kodu yazanın ve CI'ın işidir.
-- Her PR'da aynı pipeline çalışır (Actions public repoda sınırsız); `main`'e yalnızca `ci-ok` yeşilken merge edilir.
+- Her PR'da aynı pipeline tetiklenir (Actions public repoda sınırsız); `main`'e yalnızca `ci-ok` yeşilken merge edilir. Yalnızca doküman değiştiren PR'da (`ai-sessions/**`, `docs/contracts/` dışındaki `docs/**`, `docs/contracts/` ve `web/` dışındaki `*.md`) `detect` job'ı `heavy=false` verir: build/test job'ları (go-lint, web, web-image, sql-lint, db-roundtrip, make-test, govulncheck) atlanır, politika ve sır job'ları her zaman çalışır, `ci-ok` yine raporlar. `main`'e push'ta her şey çalışır. Ayrı `go-unit` job'ı yok: make-test aynı paketleri `-race` ile, `-short` olmadan koşar.
 - `main`'e squash merge; `slice/*` içinde merge commit serbest.
 
 ### 1.3 Branch isimlendirme
@@ -226,7 +226,7 @@ Araç: `lefthook` (VARSAYIM), `make hooks` ile kurulur.
 ### 2.3 Hook'lar atlanabilir — asıl zorlayıcı CI + protected branch
 
 - `--no-verify` ile atlanabilir veya hiç kurulmamış olabilir. Hook'lar hızlı geri bildirimdir, güvenlik sınırı değildir.
-- **Asıl zorlayıcı:** GitHub Actions tüm kontrolleri yeniden çalıştırır (+ `make test`, compose duman testi, tüm geçmişte gitleaks, frontend testleri, `npm audit`); `main` ruleset'i `ci-ok` kırmızıyken merge'ü sunucu tarafında engeller. Ajanın merge yetkisi buna ek bir yerel katmandır: `guard-git.sh`, `gh pr merge`'e yalnızca o PR'da `ci-ok` yeşilken, `--squash` ve açık PR numarasıyla izin verir; `--admin` yasaktır. Secret scanning push protection, sır içeren push'u GitHub tarafında reddeder.
+- **Asıl zorlayıcı:** GitHub Actions tüm kontrolleri yeniden çalıştırır (yalnızca doküman değiştiren PR'da build/test job'ları atlanır, bkz. §1.2; + `make test`, compose duman testi, tüm geçmişte gitleaks, frontend testleri, `npm audit`); `main` ruleset'i `ci-ok` kırmızıyken merge'ü sunucu tarafında engeller. Ajanın merge yetkisi buna ek bir yerel katmandır: `guard-git.sh`, `gh pr merge`'e yalnızca o PR'da `ci-ok` yeşilken, `--squash` ve açık PR numarasıyla izin verir; `--admin` yasaktır. Secret scanning push protection, sır içeren push'u GitHub tarafında reddeder.
 - Ek katman: Claude Code `PreToolUse` hook'ları ajanların `main`'e push yapmasını engeller.
 - CI dokümanda **bonus** olarak geçiyor (düzeltme #12) — README'de bonus olarak belirtilir.
 
