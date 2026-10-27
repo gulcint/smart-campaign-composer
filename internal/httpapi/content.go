@@ -33,6 +33,8 @@ func (a *api) generateContent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	ctx, cancel := a.streamContext(ctx)
+	defer cancel()
 	if !readEmptyObject(w, r) {
 		return
 	}

@@ -9,6 +9,7 @@
 package httpapi
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -39,7 +40,11 @@ type Deps struct {
 	StatusPollInterval time.Duration
 	// HeartbeatInterval: ": keepalive" comment period on both SSE streams; zero => 15s.
 	HeartbeatInterval time.Duration
-	Logger            *slog.Logger
+	// Shutdown, when closed, ends every open SSE stream (content and status) at once, so a
+	// graceful http.Server.Shutdown does not wait for endless streams; ordinary requests are
+	// left to finish. Nil => streams end only with their request.
+	Shutdown <-chan struct{}
+	Logger   *slog.Logger
 }
 
 // MaxBodyBytes is the request body limit (contracts README §3).
@@ -152,6 +157,22 @@ func (a *api) metricsHandler() http.Handler {
 }
 
 type api struct{ deps Deps }
+
+// streamContext derives a stream handler's context: done with the request or when Deps.Shutdown
+// closes. The watcher goroutine ends with the returned context; the caller defers cancel.
+func (a *api) streamContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	if a.deps.Shutdown != nil {
+		go func() {
+			select {
+			case <-a.deps.Shutdown:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+	return ctx, cancel
+}
 
 // ---- GET /api/config ----
 

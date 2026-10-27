@@ -88,7 +88,11 @@ func run() error {
 		SegmentReferenceTime: cfg.SegmentReferenceTime,
 		Logger:               logger,
 	})
+	// Closed when Shutdown starts: open SSE streams end at once instead of holding the
+	// shutdown for shutdownTimeout; ordinary requests still finish gracefully.
+	streamsDone := make(chan struct{})
 	handler := httpapi.New(httpapi.Deps{
+		Shutdown:    streamsDone,
 		Service:     service,
 		LLMProvider: provider,
 		DB:          pool,
@@ -101,6 +105,7 @@ func run() error {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	srv.RegisterOnShutdown(func() { close(streamsDone) })
 
 	errc := make(chan error, 1)
 	go func() {
