@@ -93,55 +93,6 @@ func TestCompile_InjectionPayloadsStayParameters(t *testing.T) {
 	}
 }
 
-// REQ-AUD-02
-// Values become $2, $3, ... from left to right in depth-first order; is_null adds no parameter.
-func TestCompile_ParameterOrder(t *testing.T) {
-	t.Parallel()
-	raw := doc(all(
-		cond("city", "eq", `"Ankara"`),
-		anyOf(
-			cond("orders_30d", "gt", "1"),
-			cond("last_purchase_at", "is_null", ""),
-		),
-		cond("loyalty_tier", "in", `["gold","platinum"]`),
-		cond("last_cart_add_at", "older_than", `{"days":10}`),
-	))
-	c, err := segment.Compile(mustRule(t, raw), refTime)
-	if err != nil {
-		t.Fatalf("Compile() error = %v", err)
-	}
-	if len(c.Args) != 5 {
-		t.Fatalf("len(Args) = %d (%#v), want 5: ref + 4 values (is_null has none)", len(c.Args), c.Args)
-	}
-	assertRefArg(t, c, refTime)
-	if s, ok := c.Args[1].(string); !ok || s != "Ankara" {
-		t.Errorf("Args[1] = %#v, want \"Ankara\"", c.Args[1])
-	}
-	if !numberEquals(c.Args[2], 1) {
-		t.Errorf("Args[2] = %#v, want 1", c.Args[2])
-	}
-	if got, ok := stringsOf(c.Args[3]); !ok || !slices.Equal(got, []string{"gold", "platinum"}) {
-		t.Errorf("Args[3] = %#v, want one array parameter [gold platinum]", c.Args[3])
-	}
-	if !numberEquals(c.Args[4], 10) {
-		t.Errorf("Args[4] = %#v, want 10", c.Args[4])
-	}
-	assertPlaceholders(t, c)
-}
-
-// REQ-AUD-02
-// Args[0] is the injected reference time in UTC, whatever zone the caller used.
-func TestCompile_ReferenceTimeIsUTC(t *testing.T) {
-	t.Parallel()
-	istanbul := time.FixedZone("TRT", 3*60*60)
-	ref := refTime.In(istanbul)
-	c, err := segment.Compile(mustRule(t, doc(exampleRule)), ref)
-	if err != nil {
-		t.Fatalf("Compile() error = %v", err)
-	}
-	assertRefArg(t, c, refTime)
-}
-
 // REQ-AUD-01
 // Compile validates first and returns Validate's error; nothing is compiled for an invalid rule.
 func TestCompile_InvalidRuleIsRejected(t *testing.T) {

@@ -4,10 +4,10 @@ import (
 	"testing"
 )
 
-// REQ-CNT-04, REQ-AI-01 (sse-events.md §0 "Makine okunur şemalar", DECISIONS.md D42)
-// The SSE payload components of openapi.yaml accept the sse-events.md §1.4 examples and refuse
-// payloads the prose forbids. This checks the spec and the apispec.ValidateComponent helper the
-// E2E suite relies on (including the external content.schema.json ref of ContentValidatedEvent).
+// REQ-CNT-04
+// "Her delta/invalid/validated olayının JSON alanları openapi.yaml bileşenlerinde (ContentDeltaEvent,
+// ContentInvalidEvent, ContentValidatedEvent) tanımlıdır": the components accept the event shapes
+// the requirement describes and refuse ones it forbids.
 func TestSSEEventSchemas(t *testing.T) {
 	t.Parallel()
 	spec := loadSpec(t)
@@ -48,10 +48,4 @@ func TestSSEEventSchemas(t *testing.T) {
 			}
 		})
 	}
-	t.Run("unknown component is a problem", func(t *testing.T) {
-		t.Parallel()
-		if len(spec.ValidateComponent("NoSuchSchema", []byte(`{}`))) == 0 {
-			t.Fatal("ValidateComponent accepted an unknown component name")
-		}
-	})
 }

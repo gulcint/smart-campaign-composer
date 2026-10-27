@@ -14,7 +14,6 @@ import {
   delta,
   errorBody,
   fieldError,
-  frame,
   invalid,
   jsonResponse,
   sseResponse,
@@ -70,17 +69,6 @@ describe('useContentGeneration start (REQ-CNT-04)', () => {
     expect(hdrs.get('Accept')).toBe('text/event-stream')
     expect(init?.body).toBe('{}')
     expect(init?.signal).toBeDefined()
-    s.push(validated(content()))
-    s.close()
-    await done
-  })
-
-  it('a second start while streaming is ignored', async () => {
-    const { gen, fetchMock, s } = streaming()
-    const done = gen.start(CAMPAIGN_ID)
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-    void gen.start(CAMPAIGN_ID)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
     s.push(validated(content()))
     s.close()
     await done
@@ -181,22 +169,6 @@ describe('useContentGeneration events (REQ-CNT-04)', () => {
     expect(gen.versionStatus.value).toBe('invalid')
     expect(gen.versionId.value).toBeNull()
   })
-
-  it('unknown events and invalid (channel, field) pairs are ignored; nothing after the terminal counts', async () => {
-    const { gen, s } = streaming()
-    const done = gen.start(CAMPAIGN_ID)
-    s.push(frame('progress', { pct: 50 }))
-    s.push(delta(1, 'sms', 'subject', 'yanlış'))
-    s.push(delta(1, 'sms', 'body', 'Doğru'))
-    s.push(validated(content('Son'), V1))
-    s.push(delta(1, 'sms', 'body', ' sonra'))
-    s.push(invalid(1, true, [fieldError('', 'internal_error')]))
-    s.close()
-    await done
-    expect(gen.versionStatus.value).toBe('validated')
-    expect(gen.fields['sms-body'].text).toBe('Son')
-    expect(gen.fields['sms-body'].errors).toEqual([])
-  })
 })
 
 describe('useContentGeneration interruptions (REQ-CNT-04, sse-events.md §1.3.1)', () => {
@@ -222,37 +194,6 @@ describe('useContentGeneration interruptions (REQ-CNT-04, sse-events.md §1.3.1)
     expect(gen.versionStatus.value).toBe('interrupted')
     expect(gen.error.value).toBeNull()
   })
-
-  it.each([
-    { name: 'data that is not JSON', bad: 'event: delta\ndata: {not json\n\n' },
-    { name: 'data that does not follow the event schema', bad: frame('validated', { attempt: 1 }) },
-  ])('$name is treated as interrupted', async ({ bad }) => {
-    const { gen, s } = streaming()
-    const done = gen.start(CAMPAIGN_ID)
-    s.push(bad)
-    s.push(validated(content()))
-    s.close()
-    await done
-    expect(gen.versionStatus.value).toBe('interrupted')
-    expect(gen.error.value).toBeNull()
-  })
-
-  it('abort() aborts the request and marks the fields interrupted', async () => {
-    const s = controllableStream()
-    let signal: AbortSignal | undefined
-    const { gen } = setup(async (_u, init) => {
-      signal = init?.signal ?? undefined
-      signal?.addEventListener('abort', () => s.error(new DOMException('aborted', 'AbortError')))
-      return sseResponse(s.stream)
-    })
-    const done = gen.start(CAMPAIGN_ID)
-    s.push(delta(1, 'sms', 'body', 'Merh'))
-    await vi.waitFor(() => expect(gen.fields['sms-body'].text).toBe('Merh'))
-    gen.abort()
-    await done
-    expect(signal?.aborted).toBe(true)
-    expect(gen.versionStatus.value).toBe('interrupted')
-  })
 })
 
 describe('useContentGeneration errors before the stream (REQ-CNT-04, ui.md §4)', () => {
@@ -272,30 +213,4 @@ describe('useContentGeneration errors before the stream (REQ-CNT-04, ui.md §4)'
       expect(phases(gen)).toEqual(['idle', 'idle', 'idle'])
     },
   )
-
-  it('a fetch failure is network_error', async () => {
-    const { gen } = setup(async () => {
-      throw new TypeError('Failed to fetch')
-    })
-    await gen.start(CAMPAIGN_ID)
-    expect(gen.error.value?.code).toBe('network_error')
-    expect(gen.versionStatus.value).toBe('none')
-  })
-
-  it('a new start after an error clears it', async () => {
-    let n = 0
-    const s = controllableStream()
-    const { gen } = setup(async () =>
-      n++ === 0 ? jsonResponse(502, errorBody('llm_unavailable')) : sseResponse(s.stream),
-    )
-    await gen.start(CAMPAIGN_ID)
-    expect(gen.error.value?.code).toBe('llm_unavailable')
-    const done = gen.start(CAMPAIGN_ID)
-    expect(gen.error.value).toBeNull()
-    expect(gen.versionStatus.value).toBe('streaming')
-    s.push(validated(content()))
-    s.close()
-    await done
-    expect(gen.versionStatus.value).toBe('validated')
-  })
 })

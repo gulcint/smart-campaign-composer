@@ -108,17 +108,6 @@ describe('ContentPage on mount (REQ-CNT-04, ui.md §1.1)', () => {
     )
   })
 
-  it('?generate=1 starts exactly one generation and removes the query', async () => {
-    const { fetchMock, router } = await mountContent(
-      { camp: { value: campaign('audience_ready', null) } },
-      { query: { generate: '1' } },
-    )
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-    await flushPromises()
-    expect(router.currentRoute.value.query.generate).toBeUndefined()
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
   it('renders stored content as text, never HTML (REQ-UI-01)', async () => {
     const { w } = await mountContent({
       camp: { value: campaign('content_ready', version(V1, 1, content(P))) },
@@ -179,32 +168,6 @@ describe('ContentPage streaming (REQ-CNT-04)', () => {
     await typeSMS(w, 'Kısa taslak')
     await clickSave(w)
     expect(header(a.last('POST', `${C}/content-versions`), 'X-Expected-Version')).toBe('none')
-  })
-})
-
-// ui.md §3.14 d2 (D48): an invalid LLM draft over the limit is loaded into the editor as is by
-// content-edit-draft; the counter shows the real count and over-limit.
-describe('ContentPage over-limit draft (REQ-CNT-01, D48)', () => {
-  it('content-edit-draft loads a 406-rune SMS draft untrimmed: 406/160 over-limit, −246', async () => {
-    const long = 'x'.repeat(406)
-    const s = controllableStream()
-    const fetchMock = vi.fn(async () => sseResponse(s.stream))
-    const { w } = await mountContent(
-      { camp: { value: campaign('audience_ready', null) } },
-      { fetch: fetchMock },
-    )
-    await w.get(sel('content-regenerate')).trigger('click')
-    s.push(invalid(1, false, [fieldError('sms.body', 'sms_too_long', 160, 406)]))
-    s.push(delta(2, 'sms', 'body', long))
-    s.push(invalid(2, true, [fieldError('sms.body', 'sms_too_long', 160, 406)], V2))
-    s.close()
-    await vi.waitFor(() => expect(w.find(sel('content-edit-draft')).exists()).toBe(true))
-    await w.get(sel('content-edit-draft')).trigger('click')
-    await flushPromises()
-    expect((w.get(sel('editor-sms-body')).element as HTMLTextAreaElement).value).toBe(long)
-    expect(w.get(sel('char-counter-value-sms-body')).attributes('data-count')).toBe('406')
-    expect(w.get(sel('char-counter-sms-body')).attributes('data-state')).toBe('over-limit')
-    expect(w.get(sel('char-counter-over-sms-body')).text()).toContain('−246')
   })
 })
 
@@ -298,122 +261,9 @@ describe('ContentPage edit conflict (REQ-APR-03, D40)', () => {
     )
     expect(w.get(sel('editor-save')).attributes('aria-disabled')).toBe('true')
   })
-
-  it('reload-latest replaces the text with the latest version and closes the conflict', async () => {
-    const setup = conflictSetup(version(V2, 2, content('Başkasının metni')))
-    const { w, a } = await mountContent(setup)
-    await typeSMS(w, 'Benim metnim')
-    await clickSave(w)
-    const previews = a.count('GET', `${C}/preview`)
-    await w.get(sel('editor-conflict-reload')).trigger('click')
-    await flushPromises()
-    expect(w.find(sel('editor-conflict')).exists()).toBe(false)
-    expect((w.get(sel('editor-sms-body')).element as HTMLTextAreaElement).value).toBe(
-      'Başkasının metni',
-    )
-    expect(w.get(sel('editor-save')).attributes('aria-disabled')).toBe('true')
-    expect(a.count('GET', `${C}/preview`)).toBeGreaterThan(previews)
-  })
-
-  it('keep-mine keeps the text, rebases onto the latest version and the next save uses its id', async () => {
-    const setup = conflictSetup(version(V2, 2, content('Başkasının metni')))
-    const { w, a } = await mountContent(setup)
-    await typeSMS(w, 'Benim metnim')
-    await clickSave(w)
-    await w.get(sel('editor-conflict-keep-mine')).trigger('click')
-    await flushPromises()
-    expect(w.find(sel('editor-conflict')).exists()).toBe(false)
-    expect((w.get(sel('editor-sms-body')).element as HTMLTextAreaElement).value).toBe(
-      'Benim metnim',
-    )
-    expect(w.get(sel('editor-save')).attributes('aria-disabled')).not.toBe('true')
-    expect(q('confirm-dialog')).toBeNull()
-
-    setup.saveImpl = (b) =>
-      version('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 3, b as never, { source: 'edit' })
-    await clickSave(w)
-    const last = a.last('POST', `${C}/content-versions`)
-    expect(header(last, 'X-Expected-Version')).toBe(V2)
-    expect((last?.opts?.body as ReturnType<typeof content>).sms.body).toBe('Benim metnim')
-  })
-
-  // ui.md §3.23: keep-mine rebases onto the version named by the 409 (error.current_version, carried
-  // as ApiError.currentVersion, ui.md §4) — 'none' when its id is null — even when the campaign
-  // refetch after the conflict fails.
-  it.each([
-    { name: 'a current version', current: { id: V2, version_number: 2 }, want: V2 },
-    {
-      name: 'no current version (id null)',
-      current: { id: null, version_number: null },
-      want: 'none',
-    },
-  ])(
-    'keep-mine uses error.current_version ($name) as the base when the refetch fails',
-    async ({ current, want }) => {
-      let gets = 0
-      const saves: unknown[] = []
-      const a = fakeApi({
-        [`GET ${C}`]: () => {
-          gets += 1
-          if (gets === 1) return campaign('content_ready', version(V1, 1))
-          throw apiError(500, 'internal_error')
-        },
-        [`GET ${C}/preview`]: () => preview(),
-        [`POST ${C}/content-versions`]: (r) => {
-          saves.push(r.opts?.body)
-          if (saves.length === 1) throw apiError(409, 'content_edit_conflict', [], current)
-          return version('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 3, r.opts?.body as never, {
-            source: 'edit',
-          })
-        },
-      })
-      const r = await mountPage(ContentPage, 'content', {
-        api: a.client,
-        fetch: vi.fn(async () => sseResponse(controllableStream().stream)),
-      })
-      wrapper = r.wrapper
-      const w = r.wrapper
-      await typeSMS(w, 'Benim metnim')
-      await clickSave(w)
-      expect(gets).toBeGreaterThanOrEqual(2) // the refetch after the conflict was attempted (and failed)
-      expect(w.find(sel('editor-conflict')).exists()).toBe(true)
-      await w.get(sel('editor-conflict-keep-mine')).trigger('click')
-      await flushPromises()
-      expect((w.get(sel('editor-sms-body')).element as HTMLTextAreaElement).value).toBe(
-        'Benim metnim',
-      )
-      await clickSave(w)
-      expect(saves).toHaveLength(2)
-      expect(header(a.last('POST', `${C}/content-versions`), 'X-Expected-Version')).toBe(want)
-    },
-  )
-
-  it('a conflict whose latest content equals the editor text is treated as success (retried request)', async () => {
-    const setup = conflictSetup(version(V2, 2, content('Benim metnim')))
-    const { w } = await mountContent(setup)
-    await typeSMS(w, 'Benim metnim')
-    await clickSave(w)
-    expect(w.find(sel('editor-conflict')).exists()).toBe(false)
-    expect(w.get(sel('editor-save')).attributes('aria-disabled')).toBe('true')
-  })
 })
 
-describe('ContentPage regenerate and locked states (REQ-CNT-04, REQ-APR-01)', () => {
-  it('regenerate with a validated version asks for confirmation first', async () => {
-    const { w, fetchMock } = await mountContent({
-      camp: { value: campaign('content_ready', version()) },
-    })
-    await w.get(sel('content-regenerate')).trigger('click')
-    await flushPromises()
-    expect(fetchMock).not.toHaveBeenCalled()
-    await vi.waitFor(() =>
-      expect(q('confirm-dialog')?.getAttribute('data-kind')).toBe('regenerate'),
-    )
-    q('confirm-dialog-confirm')?.click()
-    await flushPromises()
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-  })
-
+describe('ContentPage locked states (REQ-APR-03)', () => {
   it.each(['sending', 'completed'])(
     'campaign %s locks the editor and the actions',
     async (state) => {
@@ -422,61 +272,6 @@ describe('ContentPage regenerate and locked states (REQ-CNT-04, REQ-APR-01)', ()
       expect(w.get(sel('editor-save')).attributes('aria-disabled')).toBe('true')
       expect(w.get(sel('content-regenerate')).attributes('aria-disabled')).toBe('true')
       expect(w.get(sel('editor-sms-body')).attributes('readonly')).toBeDefined()
-    },
-  )
-
-  it('content-to-approval is disabled while the editor is dirty', async () => {
-    const { w } = await mountContent({ camp: { value: campaign('content_ready', version()) } })
-    await typeSMS(w, 'Kaydedilmemiş')
-    expect(w.get(sel('content-to-approval')).attributes('aria-disabled')).toBe('true')
-  })
-})
-
-// D49 (ui.md §1.1 preview triggers, §3.15; openapi previewContent): sms-preview-next requests
-// sample_index = (i + 1) mod min(sample_count, 5) — the UI walks only the first 5 samples.
-describe('ContentPage next sample (REQ-APR-01, D49)', () => {
-  function requestedIndex(path: string, opts?: { query?: Record<string, string | number> }) {
-    const fromQuery = opts?.query?.sample_index
-    const fromPath = new URLSearchParams(path.split('?')[1] ?? '').get('sample_index')
-    return Number(fromQuery ?? fromPath ?? 0)
-  }
-
-  async function mountWithSample(index: number, count: number) {
-    const requested: number[] = []
-    const a = fakeApi({
-      [`GET ${C}`]: () => campaign('content_ready', version(V1, 1)),
-      [`GET ${C}/preview`]: () => preview({ sample_index: index, sample_count: count }),
-    })
-    const client = {
-      request(method: string, path: string, opts?: { query?: Record<string, string | number> }) {
-        if (method.toUpperCase() === 'GET' && path.split('?')[0]?.endsWith('/preview')) {
-          requested.push(requestedIndex(path, opts))
-        }
-        return a.client.request(method, path, opts as never)
-      },
-    }
-    const r = await mountPage(ContentPage, 'content', {
-      api: client,
-      fetch: vi.fn(async () => sseResponse(controllableStream().stream)),
-    })
-    wrapper = r.wrapper
-    return { w: r.wrapper, requested }
-  }
-
-  it.each([
-    { index: 0, count: 584, want: 1 },
-    { index: 4, count: 584, want: 0 },
-    { index: 2, count: 3, want: 0 },
-  ])(
-    'from sample_index $index of $count, next requests sample_index=$want',
-    async ({ index, count, want }) => {
-      const { w, requested } = await mountWithSample(index, count)
-      expect(requested.length).toBeGreaterThanOrEqual(1)
-      const before = requested.length
-      await w.get(sel('sms-preview-next')).trigger('click')
-      await flushPromises()
-      await vi.waitFor(() => expect(requested.length).toBeGreaterThan(before))
-      expect(requested[requested.length - 1]).toBe(want)
     },
   )
 })

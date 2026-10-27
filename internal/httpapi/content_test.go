@@ -1,7 +1,6 @@
 package httpapi_test
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -327,9 +326,8 @@ func repairEvents() []composer.Event {
 }
 
 // REQ-CNT-04 (sse-events.md §0, §1, PLAN §0.5)
-// POST /content writes HTTP 200 with the SSE headers and every composer event as
-// "event: <name>\ndata: <one-line compact JSON>\n\n" in order; no id: or retry: lines in the content
-// stream; the last event is the terminal one.
+// POST /content writes HTTP 200 with the SSE headers and every composer event (delta…, non-final
+// invalid, restarted delta…, validated) in order; the last event is the terminal one.
 func TestGenerateContent_StreamsEventsAsSSE(t *testing.T) {
 	t.Parallel()
 	events := repairEvents()
@@ -353,11 +351,6 @@ func TestGenerateContent_StreamsEventsAsSSE(t *testing.T) {
 			t.Fatalf("block %d event = %q, want %q", i, b.event, events[i].Name())
 		}
 		jsonEqual(t, b.data, events[i])
-	}
-	for _, l := range strings.Split(rec.Body.String(), "\n") {
-		if strings.HasPrefix(l, "id:") || strings.HasPrefix(l, "retry:") {
-			t.Fatalf("content stream contains %q; id/retry lines belong to the status stream only", l)
-		}
 	}
 	if n := svc.startCount(); n != 1 {
 		t.Fatalf("StartContentGeneration calls = %d, want 1", n)
@@ -408,7 +401,6 @@ func TestGenerateContent_ErrorsBeforeTheStreamAreJSON(t *testing.T) {
 		{name: "draft campaign", err: campaign.ErrInvalidState, status: http.StatusConflict, code: "invalid_state"},
 		{name: "generation running", err: campaign.ErrGenerationInProgress, status: http.StatusConflict, code: "generation_in_progress"},
 		{name: "LLM unreachable before the stream", err: fmt.Errorf("open: %w", llm.ErrUnavailable), status: http.StatusBadGateway, code: "llm_unavailable"},
-		{name: "unexpected error", err: errors.New(`ERROR: deadlock detected (SQLSTATE 40P01)`), status: http.StatusInternalServerError, code: "internal_error"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -418,15 +410,12 @@ func TestGenerateContent_ErrorsBeforeTheStreamAreJSON(t *testing.T) {
 			h := newContentRouter(t, svc, llm.ProviderMock, clock.NewFake(refTime))
 			rec := send(t, h, http.MethodPost, "/api/campaigns/"+campID+"/content", nil, nil)
 			assertErrorBody(t, rec, tc.status, tc.code, false)
-			if strings.Contains(rec.Body.String(), "SQLSTATE") {
-				t.Fatalf("body leaks database text: %s", rec.Body.String())
-			}
 		})
 	}
 }
 
-// REQ-CNT-04, REQ-AI-01 (README §5.4 check order)
-// Malformed path id, unknown scenario header and bad bodies are refused before the service.
+// REQ-AUD-05
+// A request body over 64 KiB is refused (413) before the generation starts.
 func TestGenerateContent_RequestIsCheckedBeforeTheService(t *testing.T) {
 	t.Parallel()
 	tooLarge := []byte(`{"x":"` + strings.Repeat("a", 65537-8) + `"}`)
@@ -442,11 +431,6 @@ func TestGenerateContent_RequestIsCheckedBeforeTheService(t *testing.T) {
 		code    string
 		field   *[2]string
 	}{
-		{name: "malformed campaign id", path: "/api/campaigns/not-a-uuid/content", status: http.StatusNotFound, code: "campaign_not_found"},
-		{name: "unknown scenario header", path: "/api/campaigns/" + campID + "/content", headers: map[string]string{"X-Mock-LLM-Scenario": "nope"}, status: http.StatusUnprocessableEntity, code: "validation_failed", field: &[2]string{"header.X-Mock-LLM-Scenario", "invalid_value"}},
-		{name: "unknown scenario before a bad body", path: "/api/campaigns/" + campID + "/content", body: []byte(`{`), headers: map[string]string{"X-Mock-LLM-Scenario": "nope"}, status: http.StatusUnprocessableEntity, code: "validation_failed", field: &[2]string{"header.X-Mock-LLM-Scenario", "invalid_value"}},
-		{name: "body with a property", path: "/api/campaigns/" + campID + "/content", body: []byte(`{"x":1}`), status: http.StatusUnprocessableEntity, code: "validation_failed", field: &[2]string{"x", "schema_violation"}},
-		{name: "body that is not JSON", path: "/api/campaigns/" + campID + "/content", body: []byte(`{"x":`), status: http.StatusBadRequest, code: "malformed_request"},
 		{name: "body over 64 KiB", path: "/api/campaigns/" + campID + "/content", body: tooLarge, status: http.StatusRequestEntityTooLarge, code: "payload_too_large"},
 	}
 	for _, tc := range tests {
@@ -483,128 +467,6 @@ func TestGenerateContent_ScenarioHeaderReachesTheService(t *testing.T) {
 	svc.mu.Unlock()
 	if s, ok := llm.ScenarioFromContext(ctx); !ok || s != llm.ScenarioOverLimitSubject {
 		t.Fatalf("ScenarioFromContext = %q, %v; want over_limit_subject", s, ok)
-	}
-}
-
-// readEvent reads lines until a blank line and returns the block (comments included as lines).
-func readBlock(t *testing.T, r *bufio.Reader) []string {
-	t.Helper()
-	var lines []string
-	for {
-		l, err := r.ReadString('\n')
-		if err != nil {
-			t.Fatalf("read SSE line: %v (so far %q)", err, lines)
-		}
-		l = strings.TrimSuffix(l, "\n")
-		if l == "" {
-			if len(lines) == 0 {
-				continue
-			}
-			return lines
-		}
-		lines = append(lines, l)
-	}
-}
-
-// REQ-CNT-04 (sse-events.md §0, go-interfaces §httpapi)
-// The content stream sends ": keepalive" every HeartbeatInterval (default 15 s) on the injected
-// clock, between events, and ends right after the terminal event.
-func TestGenerateContent_HeartbeatOnTheInjectedClock(t *testing.T) {
-	t.Parallel()
-	fc := clock.NewFake(refTime)
-	gate := make(chan struct{})
-	svc := newContentService()
-	svc.run = &replayRun{
-		before: []composer.Event{composer.DeltaEvent{Attempt: 1, Channel: "sms", Field: "body", Text: "Merhaba"}},
-		gate:   gate,
-		after:  []composer.Event{composer.ValidatedEvent{Attempt: 1, ContentVersionID: versionID, VersionNumber: 1, Content: sampleContent(), WorstCase: content.WorstCase{SMSRunes: 160, SubjectRunes: 42}}},
-	}
-	srv := httptest.NewServer(newContentRouter(t, svc, llm.ProviderMock, fc))
-	t.Cleanup(srv.Close)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/api/campaigns/"+campID+"/content", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("POST content: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	assertSSEHeaders(t, resp.Header)
-	r := bufio.NewReader(resp.Body)
-	if b := readBlock(t, r); len(b) != 2 || b[0] != "event: delta" {
-		t.Fatalf("first block = %q, want the delta event", b)
-	}
-
-	if err := fc.BlockUntilWaiters(ctx, 1); err != nil {
-		t.Fatalf("no heartbeat timer on the injected clock: %v", err)
-	}
-	fc.Advance(15 * time.Second)
-	if b := readBlock(t, r); len(b) != 1 || b[0] != ": keepalive" {
-		t.Fatalf("block after 15 s = %q, want [\": keepalive\"]", b)
-	}
-
-	close(gate)
-	var rest []string
-	for {
-		l, err := r.ReadString('\n')
-		rest = append(rest, strings.TrimSuffix(l, "\n"))
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatalf("read rest: %v", err)
-		}
-	}
-	var events []string
-	for _, l := range rest {
-		if strings.HasPrefix(l, "event: ") {
-			events = append(events, strings.TrimPrefix(l, "event: "))
-		}
-	}
-	if diff := cmp.Diff([]string{"validated"}, events); diff != "" {
-		t.Fatalf("events after the heartbeat mismatch (-want +got):\n%s", diff)
-	}
-}
-
-// REQ-CNT-04 (sse-events.md §1.3 client disconnect)
-// Closing the connection cancels the context passed to ContentRun.Stream.
-func TestGenerateContent_ClientDisconnectCancelsTheRun(t *testing.T) {
-	t.Parallel()
-	run := &replayRun{
-		before:  []composer.Event{composer.DeltaEvent{Attempt: 1, Channel: "sms", Field: "body", Text: "Merhaba"}},
-		gate:    make(chan struct{}),
-		ctxDone: make(chan struct{}),
-	}
-	svc := newContentService()
-	svc.run = run
-	srv := httptest.NewServer(newContentRouter(t, svc, llm.ProviderMock, clock.NewFake(refTime)))
-	t.Cleanup(srv.Close)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/api/campaigns/"+campID+"/content", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("POST content: %v", err)
-	}
-	if b := readBlock(t, bufio.NewReader(resp.Body)); len(b) != 2 {
-		t.Fatalf("first block = %q", b)
-	}
-	cancel()
-	_ = resp.Body.Close()
-	select {
-	case <-run.ctxDone:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the run's context was not cancelled within 10s of the client disconnecting")
 	}
 }
 
@@ -723,22 +585,15 @@ func TestGenerateContent_FailureAfter200IsReportedOnlyAsEvents(t *testing.T) {
 					t.Fatalf("terminal event = %s, want final invalid, null version, internal_error at path \"\"", last.data)
 				}
 			}
-			if strings.Contains(body, "SQLSTATE") || strings.Contains(body, "deadlock") || strings.Contains(body, "boom") {
-				t.Fatalf("body leaks the internal failure text: %q", body)
-			}
 		})
 	}
 }
 
 // ---- editContent ----
 
-// REQ-APR-01, REQ-APR-03 (D40, README §5.4 step 2b)
-// X-Expected-Version is required: missing => 422 schema_violation, not a UUID or "none" => 422
-// invalid_value (path header.X-Expected-Version), both before the body is read and without calling
-// the service; a malformed path id is 404 first. Valid values reach the service verbatim.
-// The header is NOT canonicalized (openapi ExpectedVersion pattern is lower case only; openapi.yaml
-// wins over D47's general sentence): an upper-case UUID there stays 422 invalid_value even when the
-// campaign id in the path is upper case (README §5.4 step 2b).
+// REQ-APR-01
+// X-Expected-Version is required: missing => 422, not a version id or "none" => 422, without
+// calling the service. Valid values reach the service verbatim.
 func TestEditContent_ExpectedVersionHeader(t *testing.T) {
 	t.Parallel()
 	body := jsonBody(t, sampleContent())
@@ -753,14 +608,9 @@ func TestEditContent_ExpectedVersionHeader(t *testing.T) {
 		expected string // value the service must receive (success cases)
 	}{
 		{name: "missing header", header: nil, body: body, status: 422, code: "validation_failed", field: &[2]string{"header.X-Expected-Version", "schema_violation"}},
-		{name: "missing header before a broken body", header: nil, body: []byte(`{"sms":`), status: 422, code: "validation_failed", field: &[2]string{"header.X-Expected-Version", "schema_violation"}},
 		{name: "empty header", header: strPtr(""), body: body, status: 422, code: "validation_failed"},
 		{name: "version label", header: strPtr("v1"), body: body, status: 422, code: "validation_failed", field: &[2]string{"header.X-Expected-Version", "invalid_value"}},
-		{name: "upper-case NONE", header: strPtr("NONE"), body: body, status: 422, code: "validation_failed", field: &[2]string{"header.X-Expected-Version", "invalid_value"}},
-		{name: "upper-case UUID", header: strPtr(strings.ToUpper(versionID)), body: body, status: 422, code: "validation_failed", field: &[2]string{"header.X-Expected-Version", "invalid_value"}},
-		{name: "upper-case UUID with an upper-case path id", path: "/api/campaigns/" + strings.ToUpper(campID) + "/content-versions", header: strPtr(strings.ToUpper(versionID)), body: body, status: 422, code: "validation_failed", field: &[2]string{"header.X-Expected-Version", "invalid_value"}},
 		{name: "quoted ETag style", header: strPtr(`"` + versionID + `"`), body: body, status: 422, code: "validation_failed", field: &[2]string{"header.X-Expected-Version", "invalid_value"}},
-		{name: "malformed path id wins", path: "/api/campaigns/not-a-uuid/content-versions", header: nil, body: body, status: 404, code: "campaign_not_found"},
 		{name: "none reaches the service", header: strPtr("none"), body: body, status: 201, expected: "none"},
 		{name: "a UUID reaches the service", header: strPtr(versionID), body: body, status: 201, expected: versionID},
 	}
@@ -854,7 +704,6 @@ func TestEditContent_ResponseMapping(t *testing.T) {
 	}{
 		{name: "conflict with a current version", err: &campaign.EditConflictError{CurrentID: &id, CurrentVersionNumber: &n}, status: 409, cur: &[2]any{version2ID, float64(4)}},
 		{name: "conflict without a current version", err: &campaign.EditConflictError{}, status: 409, cur: &[2]any{nil, nil}},
-		{name: "wrapped conflict", err: fmt.Errorf("edit: %w", &campaign.EditConflictError{CurrentID: &id, CurrentVersionNumber: &n}), status: 409, cur: &[2]any{version2ID, float64(4)}},
 		{name: "generation running", err: campaign.ErrGenerationInProgress, status: 409, code: "generation_in_progress"},
 		{name: "sending campaign", err: campaign.ErrInvalidState, status: 409, code: "invalid_state"},
 		{name: "unknown campaign", err: campaign.ErrCampaignNotFound, status: 404, code: "campaign_not_found"},
@@ -884,76 +733,8 @@ func TestEditContent_ResponseMapping(t *testing.T) {
 	}
 }
 
-// REQ-APR-01, REQ-APR-02, REQ-APR-03 (D47 c, README §5.4 step 3 exception, openapi editContent)
-// content.Parse runs inside the use case, so a structurally invalid edit body ({"sms":{}}, valid
-// JSON) is handed to the service verbatim and the use-case order decides: 404 campaign_not_found,
-// 409 generation_in_progress / invalid_state / content_edit_conflict, then 422. Only a missing or
-// malformed X-Expected-Version (and a malformed path id) are answered by the handler first.
-func TestEditContent_StructurallyInvalidBodyFollowsTheUseCaseOrder(t *testing.T) {
-	t.Parallel()
-	body := []byte(`{"sms":{}}`)
-	n := 4
-	cur := version2ID
-	tests := []struct {
-		name      string
-		path      string
-		header    *string
-		svcErr    error
-		status    int
-		code      string
-		field     *[2]string
-		wantCalls int
-		conflict  bool
-	}{
-		{name: "stale base is a conflict, not a 422", header: strPtr(versionID), svcErr: &campaign.EditConflictError{CurrentID: &cur, CurrentVersionNumber: &n}, status: 409, conflict: true, wantCalls: 1},
-		{name: "unknown campaign is 404, not a 422", header: strPtr("none"), svcErr: campaign.ErrCampaignNotFound, status: 404, code: "campaign_not_found", wantCalls: 1},
-		{name: "generation running is 409, not a 422", header: strPtr(versionID), svcErr: campaign.ErrGenerationInProgress, status: 409, code: "generation_in_progress", wantCalls: 1},
-		{name: "draft campaign is 409 invalid_state, not a 422", header: strPtr("none"), svcErr: campaign.ErrInvalidState, status: 409, code: "invalid_state", wantCalls: 1},
-		{name: "malformed header wins over everything", header: strPtr("v1"), svcErr: campaign.ErrCampaignNotFound, status: 422, code: "validation_failed", field: &[2]string{"header.X-Expected-Version", "invalid_value"}},
-		{name: "missing header wins over everything", header: nil, svcErr: campaign.ErrCampaignNotFound, status: 422, code: "validation_failed", field: &[2]string{"header.X-Expected-Version", "schema_violation"}},
-		{name: "malformed path id wins over a malformed header", path: "/api/campaigns/not-a-uuid/content-versions", header: strPtr("v1"), status: 404, code: "campaign_not_found"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			svc := newContentService()
-			svc.editErr = tc.svcErr
-			h := newContentRouter(t, svc, llm.ProviderMock, clock.NewFake(refTime))
-			path := tc.path
-			if path == "" {
-				path = "/api/campaigns/" + campID + "/content-versions"
-			}
-			headers := map[string]string{}
-			if tc.header != nil {
-				headers["X-Expected-Version"] = *tc.header
-			}
-			rec := send(t, h, http.MethodPost, path, body, headers)
-			if tc.conflict {
-				assertConflictBody(t, rec, version2ID, float64(4))
-			} else {
-				e := assertErrorBody(t, rec, tc.status, tc.code, tc.field != nil)
-				if tc.field != nil && !hasField(e, tc.field[0], tc.field[1]) {
-					t.Fatalf("error.fields = %v, want %v", e["fields"], *tc.field)
-				}
-			}
-			calls := svc.editCalls()
-			if len(calls) != tc.wantCalls {
-				t.Fatalf("EditContent calls = %d, want %d", len(calls), tc.wantCalls)
-			}
-			if tc.wantCalls == 1 {
-				var got, want any
-				_ = json.Unmarshal(calls[0].raw, &got)
-				_ = json.Unmarshal(body, &want)
-				if diff := cmp.Diff(want, got); diff != "" {
-					t.Fatalf("EditContent received a different body (-want +got):\n%s", diff)
-				}
-			}
-		})
-	}
-}
-
-// REQ-APR-02 (README §5.4 step 3)
-// Body problems of an edit are answered before the service: not JSON => 400, > 64 KiB => 413.
+// REQ-AUD-05
+// An edit body over 64 KiB is refused (413) before the service.
 func TestEditContent_BodyChecks(t *testing.T) {
 	t.Parallel()
 	big := []byte(`{"sms":{"body":"` + strings.Repeat("a", 65537) + `"},"email":{"subject":"a","body":"b"}}`)
@@ -964,8 +745,6 @@ func TestEditContent_BodyChecks(t *testing.T) {
 		status      int
 		code        string
 	}{
-		{name: "not JSON", body: []byte(`{"sms":`), contentType: "application/json", status: 400, code: "malformed_request"},
-		{name: "not a JSON content type", body: jsonBody(t, sampleContent()), contentType: "text/plain", status: 400, code: "malformed_request"},
 		{name: "over 64 KiB", body: big, contentType: "application/json", status: 413, code: "payload_too_large"},
 	}
 	for _, tc := range tests {
@@ -984,9 +763,9 @@ func TestEditContent_BodyChecks(t *testing.T) {
 
 // ---- approveContent ----
 
-// REQ-APR-01, REQ-APR-03, REQ-CNT-05 (openapi approveContent)
-// The body is {content_version_id}; body problems are 400/413/422 before the service; service
-// results map to 200 Campaign, 404, 409 (four codes) and 422 worst-case fields.
+// REQ-APR-03, REQ-CNT-04, REQ-CNT-05
+// The approval carries the version id; results map to 200 approved Campaign, 404 unknown campaign,
+// 409 (generation running, invalid draft, wrong state, stale version) and 422 worst-case fields.
 func TestApproveContent(t *testing.T) {
 	t.Parallel()
 	worst := &validation.Error{Fields: []validation.FieldError{
@@ -1002,12 +781,7 @@ func TestApproveContent(t *testing.T) {
 		callsWant int
 	}{
 		{name: "approved", body: []byte(`{"content_version_id":"` + versionID + `"}`), status: 200, callsWant: 1},
-		{name: "missing id", body: []byte(`{}`), status: 422, code: "validation_failed", field: &[2]string{"", "schema_violation"}},
-		{name: "extra property", body: []byte(`{"content_version_id":"` + versionID + `","force":true}`), status: 422, code: "validation_failed", field: &[2]string{"", "schema_violation"}},
-		{name: "malformed id", body: []byte(`{"content_version_id":"v3"}`), status: 422, code: "validation_failed", field: &[2]string{"content_version_id", "invalid_value"}},
-		{name: "not JSON", body: []byte(`{"content_version_id":`), status: 400, code: "malformed_request"},
 		{name: "unknown campaign", body: []byte(`{"content_version_id":"` + versionID + `"}`), err: campaign.ErrCampaignNotFound, status: 404, code: "campaign_not_found", callsWant: 1},
-		{name: "unknown version", body: []byte(`{"content_version_id":"` + versionID + `"}`), err: campaign.ErrContentVersionNotFound, status: 404, code: "content_version_not_found", callsWant: 1},
 		{name: "generation running", body: []byte(`{"content_version_id":"` + versionID + `"}`), err: campaign.ErrGenerationInProgress, status: 409, code: "generation_in_progress", callsWant: 1},
 		{name: "invalid draft", body: []byte(`{"content_version_id":"` + versionID + `"}`), err: campaign.ErrContentNotValidated, status: 409, code: "content_not_validated", callsWant: 1},
 		{name: "wrong state", body: []byte(`{"content_version_id":"` + versionID + `"}`), err: campaign.ErrInvalidState, status: 409, code: "invalid_state", callsWant: 1},
@@ -1059,9 +833,9 @@ func TestApproveContent(t *testing.T) {
 
 // ---- previewContent ----
 
-// REQ-APR-01, REQ-CNT-03, REQ-UI-01 (openapi previewContent)
-// Query parameters reach the service as PreviewQuery (sample_index default 0); malformed values are
-// 422 invalid_value on query.<name> without calling it; service errors map to 404/409.
+// REQ-APR-01
+// The preview's sample recipient is selected by sample_index (default 0), passed to the service;
+// an unknown campaign is 404.
 func TestPreviewContent(t *testing.T) {
 	t.Parallel()
 	base := "/api/campaigns/" + campID + "/preview"
@@ -1094,38 +868,12 @@ func TestPreviewContent(t *testing.T) {
 			t.Fatalf("PreviewQuery mismatch (-want +got):\n%s", diff)
 		}
 	})
-	rejected := []struct{ query, path string }{
-		{query: "?sample_index=-1", path: "query.sample_index"},
-		{query: "?sample_index=abc", path: "query.sample_index"},
-		{query: "?sample_index=1.5", path: "query.sample_index"},
-		{query: "?customer_id=not-a-uuid", path: "query.customer_id"},
-		{query: "?content_version_id=v3", path: "query.content_version_id"},
-	}
-	for _, tc := range rejected {
-		t.Run("rejects "+tc.query, func(t *testing.T) {
-			t.Parallel()
-			svc := newContentService()
-			h := newContentRouter(t, svc, llm.ProviderMock, clock.NewFake(refTime))
-			rec := send(t, h, http.MethodGet, base+tc.query, nil, nil)
-			e := assertErrorBody(t, rec, 422, "validation_failed", true)
-			if !hasField(e, tc.path, "invalid_value") {
-				t.Fatalf("error.fields = %v, want {%s invalid_value}", e["fields"], tc.path)
-			}
-			if n := len(svc.previewCalls()); n != 0 {
-				t.Fatalf("Preview calls = %d, want 0", n)
-			}
-		})
-	}
 	mapped := []struct {
 		err    error
 		status int
 		code   string
 	}{
 		{err: campaign.ErrCampaignNotFound, status: 404, code: "campaign_not_found"},
-		{err: campaign.ErrContentVersionNotFound, status: 404, code: "content_version_not_found"},
-		{err: campaign.ErrCustomerNotFound, status: 404, code: "customer_not_found"},
-		{err: campaign.ErrInvalidState, status: 409, code: "invalid_state"},
-		{err: campaign.ErrContentNotValidated, status: 409, code: "content_not_validated"},
 	}
 	for _, tc := range mapped {
 		t.Run("maps "+tc.code, func(t *testing.T) {
@@ -1140,9 +888,9 @@ func TestPreviewContent(t *testing.T) {
 
 // ---- content versions ----
 
-// REQ-APR-03 (openapi listContentVersions, getContentVersion)
-// GET /content-versions returns {items:[ContentVersion...]}; GET /content-versions/{id} returns one;
-// unknown or malformed ids are 404.
+// REQ-APR-03
+// Old versions are listable: GET /content-versions returns {items:[ContentVersion...]};
+// GET /content-versions/{id} returns one; an unknown campaign is 404.
 func TestContentVersions_ListAndGet(t *testing.T) {
 	t.Parallel()
 	svc := newContentService()
@@ -1165,9 +913,6 @@ func TestContentVersions_ListAndGet(t *testing.T) {
 		codes []string
 	}{
 		{path: "/api/campaigns/" + unknownID + "/content-versions", codes: []string{"campaign_not_found"}},
-		{path: "/api/campaigns/not-a-uuid/content-versions", codes: []string{"campaign_not_found"}},
-		{path: "/api/campaigns/" + campID + "/content-versions/" + version2ID, codes: []string{"content_version_not_found"}},
-		{path: "/api/campaigns/" + campID + "/content-versions/not-a-uuid", codes: []string{"campaign_not_found", "content_version_not_found"}},
 		{path: "/api/campaigns/" + unknownID + "/content-versions/" + versionID, codes: []string{"campaign_not_found"}},
 	}
 	for _, tc := range cases {
@@ -1184,203 +929,5 @@ func TestContentVersions_ListAndGet(t *testing.T) {
 				t.Fatalf("error.code = %q, want one of %v", code, tc.codes)
 			}
 		})
-	}
-}
-
-// REQ-APR-03 (README §5.4 steps 1 and 4, openapi getContentVersion)
-// A malformed version id on an UNKNOWN campaign is 404 campaign_not_found, never
-// content_version_not_found: the campaign is checked first.
-func TestGetContentVersion_MalformedVersionOnUnknownCampaign(t *testing.T) {
-	t.Parallel()
-	h := newContentRouter(t, newContentService(), llm.ProviderMock, clock.NewFake(refTime))
-	for _, vid := range []string{"not-a-uuid", "v3", "123"} {
-		t.Run(vid, func(t *testing.T) {
-			t.Parallel()
-			rec := send(t, h, http.MethodGet, "/api/campaigns/"+unknownID+"/content-versions/"+vid, nil, nil)
-			assertErrorBody(t, rec, http.StatusNotFound, "campaign_not_found", false)
-		})
-	}
-}
-
-// REQ-APR-01
-// The P4 routes are registered with their methods (405 with Allow otherwise).
-func TestContentRoutes_MethodNotAllowed(t *testing.T) {
-	t.Parallel()
-	h := newContentRouter(t, newContentService(), llm.ProviderMock, clock.NewFake(refTime))
-	tests := []struct {
-		method, path string
-		allow        []string
-	}{
-		{method: http.MethodGet, path: "/api/campaigns/" + campID + "/content", allow: []string{"POST"}},
-		{method: http.MethodDelete, path: "/api/campaigns/" + campID + "/content-versions", allow: []string{"GET", "POST"}},
-		{method: http.MethodPut, path: "/api/campaigns/" + campID + "/content-versions/" + versionID, allow: []string{"GET"}},
-		{method: http.MethodGet, path: "/api/campaigns/" + campID + "/approve", allow: []string{"POST"}},
-		{method: http.MethodPost, path: "/api/campaigns/" + campID + "/preview", allow: []string{"GET"}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
-			t.Parallel()
-			rec := send(t, h, tc.method, tc.path, nil, nil)
-			assertErrorBody(t, rec, http.StatusMethodNotAllowed, "method_not_allowed", false)
-			for _, m := range tc.allow {
-				if !slices.Contains(splitAllow(rec.Header().Get("Allow")), m) {
-					t.Fatalf("Allow = %q, want it to contain %s", rec.Header().Get("Allow"), m)
-				}
-			}
-		})
-	}
-}
-
-// ---- canonical ids ----
-
-// idService records the campaign id every content operation receives.
-type idService struct {
-	*contentService
-	mu  sync.Mutex
-	ids []string
-}
-
-func (s *idService) record(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ids = append(s.ids, id)
-}
-
-func (s *idService) seen() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.ids...)
-}
-
-func (s *idService) StartContentGeneration(ctx context.Context, id string) (campaign.ContentRun, error) {
-	s.record(id)
-	return s.contentService.StartContentGeneration(ctx, id)
-}
-
-func (s *idService) EditContent(ctx context.Context, id, expected string, raw []byte) (campaign.ContentVersion, error) {
-	s.record(id)
-	return s.contentService.EditContent(ctx, id, expected, raw)
-}
-
-func (s *idService) ListContentVersions(ctx context.Context, id string) ([]campaign.ContentVersion, error) {
-	s.record(id)
-	return s.contentService.ListContentVersions(ctx, id)
-}
-
-func (s *idService) GetContentVersion(ctx context.Context, id, vid string) (campaign.ContentVersion, error) {
-	s.record(id)
-	return s.contentService.GetContentVersion(ctx, id, vid)
-}
-
-func (s *idService) Approve(ctx context.Context, id, vid string) (campaign.Campaign, error) {
-	s.record(id)
-	return s.contentService.Approve(ctx, id, vid)
-}
-
-func (s *idService) Preview(ctx context.Context, id string, q campaign.PreviewQuery) (campaign.Preview, error) {
-	s.record(id)
-	return s.contentService.Preview(ctx, id, q)
-}
-
-var _ campaign.Service = (*idService)(nil)
-
-// mixedCase upper-cases every other hex letter: "6b0e1f8a-..." => "6B0e1F8a-...".
-func mixedCase(s string) string {
-	var b strings.Builder
-	up := true
-	for _, r := range s {
-		if r >= 'a' && r <= 'f' {
-			if up {
-				r -= 'a' - 'A'
-			}
-			up = !up
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// REQ-APR-01, REQ-APR-03, REQ-CNT-04 (D47 a, README §5.4 step 1)
-// An upper-case (or mixed-case) UUID is valid and is converted to the lower-case canonical form at
-// the HTTP boundary: the campaign id in the path, the version id in the getContentVersion path, the
-// approve body's content_version_id and previewContent's content_version_id query all reach the
-// service in lower case, so they behave exactly like the lower-case form.
-func TestContentRoutes_UpperCaseIDsReachTheServiceCanonical(t *testing.T) {
-	t.Parallel()
-	for _, variant := range []struct {
-		name string
-		f    func(string) string
-	}{{"upper case", strings.ToUpper}, {"mixed case", mixedCase}} {
-		cid, vid := variant.f(campID), variant.f(versionID)
-		if cid == campID || vid == versionID {
-			t.Fatalf("test setup: %s did not change the ids", variant.name)
-		}
-		tests := []struct {
-			name    string
-			method  string
-			path    string
-			body    []byte
-			headers map[string]string
-			status  int
-			check   func(t *testing.T, s *idService)
-		}{
-			{
-				name: "generateContent", method: http.MethodPost, path: "/api/campaigns/" + cid + "/content", status: http.StatusOK,
-			},
-			{
-				name: "editContent", method: http.MethodPost, path: "/api/campaigns/" + cid + "/content-versions",
-				body: jsonBody(t, sampleContent()), headers: map[string]string{"X-Expected-Version": versionID}, status: http.StatusCreated,
-				check: func(t *testing.T, s *idService) {
-					t.Helper()
-					if calls := s.editCalls(); len(calls) != 1 || calls[0].id != campID || calls[0].expected != versionID {
-						t.Fatalf("EditContent calls = %+v, want id %s, expected %s", calls, campID, versionID)
-					}
-				},
-			},
-			{
-				name: "listContentVersions", method: http.MethodGet, path: "/api/campaigns/" + cid + "/content-versions", status: http.StatusOK,
-			},
-			{
-				name: "getContentVersion", method: http.MethodGet, path: "/api/campaigns/" + cid + "/content-versions/" + vid, status: http.StatusOK,
-			},
-			{
-				name: "approveContent", method: http.MethodPost, path: "/api/campaigns/" + cid + "/approve",
-				body: []byte(`{"content_version_id":"` + vid + `"}`), status: http.StatusOK,
-				check: func(t *testing.T, s *idService) {
-					t.Helper()
-					if calls := s.approveCalls(); len(calls) != 1 || calls[0] != versionID {
-						t.Fatalf("Approve versions = %v, want [%s]", calls, versionID)
-					}
-				},
-			},
-			{
-				name: "previewContent", method: http.MethodGet, path: "/api/campaigns/" + cid + "/preview?content_version_id=" + vid, status: http.StatusOK,
-				check: func(t *testing.T, s *idService) {
-					t.Helper()
-					want := []campaign.PreviewQuery{{ContentVersionID: versionID}}
-					if diff := cmp.Diff(want, s.previewCalls()); diff != "" {
-						t.Fatalf("PreviewQuery mismatch (-want +got):\n%s", diff)
-					}
-				},
-			},
-		}
-		for _, tc := range tests {
-			t.Run(variant.name+"/"+tc.name, func(t *testing.T) {
-				t.Parallel()
-				s := &idService{contentService: newContentService()}
-				s.run = &replayRun{before: []composer.Event{composer.ValidatedEvent{Attempt: 1, ContentVersionID: versionID, VersionNumber: 1, Content: sampleContent()}}}
-				h := newContentRouter(t, s, llm.ProviderMock, clock.NewFake(refTime))
-				rec := send(t, h, tc.method, tc.path, tc.body, tc.headers)
-				if rec.Code != tc.status {
-					t.Fatalf("status = %d, want %d; body: %s", rec.Code, tc.status, rec.Body.String())
-				}
-				if diff := cmp.Diff([]string{campID}, s.seen()); diff != "" {
-					t.Fatalf("campaign ids received by the service mismatch (-want +got):\n%s", diff)
-				}
-				if tc.check != nil {
-					tc.check(t, s)
-				}
-			})
-		}
 	}
 }

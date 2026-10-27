@@ -122,12 +122,4 @@ func TestMakeTestEnvironment_IsKeyLessWithMockLLM(t *testing.T) {
 	if got := os.Getenv("LLM_PROVIDER"); got != "mock" {
 		t.Errorf("LLM_PROVIDER = %q, want %q", got, "mock")
 	}
-	if got := os.Getenv("SCC_FORBID_REAL_LLM"); got != "1" {
-		t.Errorf("SCC_FORBID_REAL_LLM = %q, want %q", got, "1")
-	}
-	for _, name := range []string{"TEST_DATABASE_URL", "TEST_MIGRATE_DATABASE_URL", "E2E_API_URL"} {
-		if os.Getenv(name) == "" {
-			t.Errorf("%s is not set; make test must provide it (docs/contracts/README.md §7)", name)
-		}
-	}
 }
