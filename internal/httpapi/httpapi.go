@@ -3,9 +3,9 @@
 // It serves the system endpoints (/healthz, /readyz, /metrics, /api/config), the audience slice
 // (campaign create/get/list, segment generation, rule counting), the content + approval slice (SSE content
 // generation, versions, edits, approval, preview; content.go), the send + tracking routes (send,
-// status, deliveries; send.go) and the cross-cutting behaviour every
-// route shares: X-Request-ID, the 64 KiB body limit, JSON 404/405 errors, error mapping, HTTP
-// metrics and panic recovery. The live status stream (events) is still to come in P5.
+// status, deliveries; send.go; the live status SSE stream; events.go) and the cross-cutting
+// behaviour every route shares: X-Request-ID, the 64 KiB body limit, JSON 404/405 errors, error
+// mapping, HTTP metrics and panic recovery.
 package httpapi
 
 import (
@@ -106,6 +106,7 @@ var routeTable = []struct {
 	{Route{http.MethodPost, "/api/campaigns/{campaign_id}/send"}, handlerOf((*api).sendCampaign)},
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/status"}, handlerOf((*api).getCampaignStatus)},
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/deliveries"}, handlerOf((*api).listDeliveries)},
+	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/events"}, handlerOf((*api).streamCampaignEvents)},
 }
 
 func handlerOf(m func(*api, http.ResponseWriter, *http.Request)) func(*api) http.Handler {
