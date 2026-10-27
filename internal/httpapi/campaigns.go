@@ -280,9 +280,6 @@ func (a *api) writeServiceError(w http.ResponseWriter, r *http.Request, err erro
 		if errors.As(err, &ve) {
 			fields = ve.Fields
 		}
-		if len(fields) == 0 {
-			fields = []validation.FieldError{{Path: "", Code: validation.CodeSchemaViolation, Message: "invalid model output"}}
-		}
 		writeFieldError(w, r, http.StatusBadGateway, "llm_invalid_output",
 			"the language model did not return a valid result after one repair attempt", fields)
 	case errors.As(err, &ve):
