@@ -2,7 +2,7 @@
 
 Önemli kararlar ve nedenleri. Her faz kapısında güncellenir (`docs/PLAN.md` §3.2). Her karar: **bağlam → karar → neden → alternatifler/bedel**. "Doküman" case dokümanıdır; dokümanda olmayan her şey VARSAYIM olarak işaretlidir. Ayrıntılı gereksinimler `docs/requirements.md`, ad sözleşmeleri `docs/contracts/`.
 
-Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D37–D47; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
+Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D37–D49; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
 
 ---
 
@@ -203,6 +203,16 @@ PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `in
 - **Bağlam:** Bağımsız inceleme (PR #50) üç şey buldu: (a) `uuid.Parse` büyük harfli UUID'yi kabul eder ama dize olduğu gibi taşınınca bellek içi üretim kilidi (dize anahtarlı) ve sürüm kimliği karşılaştırmaları Postgres'ten (uuid tipi) farklı davranır: büyük harfli yol kilidi atlatır, büyük harfli `content_version_id` yanlış `stale_content_version` döner; (b) kilit denetimi (`busy`) satır kilidinden önce yapılır, onay ile üretim başlangıcı arasında bir pencere kalır; (c) README §5.4 (3) ile openapi/go-interfaces `editContent` sırası çelişir.
 - **Karar:** (a) Kimlikler HTTP sınırında küçük harfli kanonik biçime çevrilir; servis de kanonik olmayan kimliği kanonikleştirir. (b) `Approve` ve `EditContent` kilit denetimini satır kilidi altındaki `decide` içinde yineler; `Send` için aynı kural P5'te zorunludur (P5 başlamadan önce üretim işaretçisi satır kilidiyle birlikte atomik olmalı). (c) `editContent` için sıra openapi ve go-interfaces'teki gibidir; README §5.4'e açık istisna yazıldı.
 - **Bedel:** Üretim kilidi hâlâ süreç içidir (bkz. Bilinen sınırlar); bu karar yalnız tek süreç içindeki pencereyi kapatır.
+
+### D48 — Düzenlenebilir SMS ve konu alanlarında giriş sınırda kırpılır (sahip kararı)
+- **Bağlam:** Düzenleyici sınırın üstüne yazmaya izin veriyor ve sayaç `90/80 −10` gibi aşımı gösteriyordu; sahip bunu yanlış buldu ("80/80 olup daha fazla karakter yazmasına izin vermemeliyiz").
+- **Karar:** `editor-sms-body` (160) ve `editor-email-subject` (80) şablon metnini rune sayısıyla limitte kırpar (yazma, yapıştırma, chip). Limiti zaten aşan LLM taslağı gerçek sayıyla gösterilir ve yalnız sayıyı artırmayan düzenlemeye izin verilir. API doğrulaması (422, REQ-APR-02) ve en kötü durum denetimi değişmez; arayüz sınırı yardımcıdır, güvence değildir.
+- **Bedel:** Kullanıcı kısaltmak yerine kesilen metinle karşılaşabilir; yapıştırma sessizce kırpılır (bkz. ui.md §3.14 d2).
+
+### D49 — Önizleme yalnız ilk 5 örneği gezer (sahip kararı)
+- **Bağlam:** "Örnek 1/579" yazısı ve eşleşen tüm müşterileri gezen "Sonraki örnek" düğmesi pazarlamacıya bilgi katmıyordu (örnekler kimlik sırasındadır); sahip bu kadar örneğin gerekli olup olmadığını sordu.
+- **Karar:** Arayüz `sample_index`'i `(i+1) mod min(sample_count, 5)` ile gezer, etiket `Örnek i/min(n,5)` olur. API değişmez: `sample_index` ve `sample_count` aynı kalır, REQ-APR-01'deki deterministik örnek korunur. Daha anlamlı alternatif (en uzun isim ve hitapsız önizleme) ayrı bir faz işi olarak reddedilmedi, ertelendi.
+- **Bedel:** Arayüz 5'in ötesindeki alıcıları göstermez; uzunluk güvencesi önizleme değil en kötü durum sayacıdır (REQ-CNT-05).
 
 ## Bilinen sınırlar ve riskler
 
