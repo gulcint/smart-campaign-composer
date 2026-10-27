@@ -80,6 +80,6 @@ Doküman koddan üretilmez; tersine, **elle yazılan sözleşme (`docs/contracts
 | `check-contract-copies` | API'ye gömülü sözleşme kopyası `docs/contracts/` ile aynı değil |
 | E2E (`OPENAPI_VALIDATE=strict`) | Gerçek bir istek veya cevap sözleşmeye uymuyor |
 
-`/docs` sayfasının gösterdiği dosya, API'ye gömülü kopyadır (`GET /openapi.yaml`); `check-contract-copies` onun `docs/contracts/openapi.yaml` ile bayt bayt aynı olduğunu garanti eder. Yani gördüğünüz doküman ile gerçek sözleşme arasında ikinci bir kopya yoktur.
+`/docs` sayfasının gösterdiği dosyalar, API'ye gömülü tek üretilmiş kopyadır (`internal/httpapi/openapi/`: `GET /openapi.yaml` ve `GET /schemas/*`); `check-contract-copies` (`cmp`) `openapi.yaml` ile `schemas/*.schema.json` dosyalarının `docs/contracts/` ile bayt bayt aynı olduğunu garanti eder. Bu gömülü kopya dışında sunulan ikinci bir sürüm yoktur.
 
-Bir uç noktayı değiştirirken sıra: önce `docs/contracts/openapi.yaml`'ı düzenleyin, sonra kopyalayın (`cp docs/contracts/openapi.yaml internal/httpapi/openapi/openapi.yaml`), `make api-types` ile TypeScript tiplerini yenileyin, kodu yazın ve `httpapi.Routes()` tablosuna satır ekleyin.
+Bir uç noktayı değiştirirken sıra: önce `docs/contracts/openapi.yaml`'ı düzenleyin, sonra gömülü kopyayı yenileyin (`cp docs/contracts/openapi.yaml internal/httpapi/openapi/openapi.yaml` ve şemalar değiştiyse `cp docs/contracts/schemas/*.schema.json internal/httpapi/openapi/schemas/`), `make api-types` ile TypeScript tiplerini yenileyin, kodu yazın ve `httpapi.Routes()` tablosuna satır ekleyin.
