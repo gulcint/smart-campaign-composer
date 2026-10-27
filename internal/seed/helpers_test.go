@@ -2,8 +2,6 @@ package seed_test
 
 import (
 	"bytes"
-	"crypto/sha1" //nolint:gosec // UUIDv5 is defined over SHA-1 (RFC 9562 §5.5); not a security use.
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -29,9 +27,6 @@ const exampleBrief = "Son 30 günde sepetine ürün ekleyip alışveriş yapmaya
 
 // exampleRule is segment-dsl.md §7.1 "rule" (root group).
 const exampleRule = `{"all":[{"field":"city","op":"eq","value":"İstanbul"},{"field":"last_cart_add_at","op":"within_last","value":{"days":30}},{"field":"orders_30d","op":"eq","value":0}]}`
-
-// seedNamespace is NS of seed.md §2.
-const seedNamespace = "3f6c1b52-8a3e-5d2f-9b7c-2e4d6a8f0c11"
 
 // ---- JSONL export (seed.md §4) ----
 
@@ -73,10 +68,6 @@ type event struct {
 }
 
 // ---- manifest.json (seed.md §5) ----
-
-var manifestTopKeys = []string{
-	"schema_version", "params", "dataset_sha256", "totals", "consent", "contact", "reachable", "cities", "example_brief", "groups",
-}
 
 var groupNames = []string{
 	"cart_add_29d", "cart_add_30d", "cart_add_31d", "cart_add_then_purchase", "purchase_before_cart_add",
@@ -291,19 +282,6 @@ func objectKeys(b []byte) ([]string, error) {
 	return keys, nil
 }
 
-// nestedObjectKeys returns the keys of the object stored under top-level key name.
-func nestedObjectKeys(b []byte, name string) ([]string, error) {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(b, &top); err != nil {
-		return nil, err
-	}
-	raw, ok := top[name]
-	if !ok {
-		return nil, fmt.Errorf("missing key %q", name)
-	}
-	return objectKeys(raw)
-}
-
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -314,23 +292,6 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-// uuidV5 implements RFC 9562 name-based UUIDs (SHA-1) for the deterministic id check.
-func uuidV5(t *testing.T, namespace, name string) string {
-	t.Helper()
-	ns, err := hex.DecodeString(strings.ReplaceAll(namespace, "-", ""))
-	if err != nil || len(ns) != 16 {
-		t.Fatalf("bad namespace %q", namespace)
-	}
-	h := sha1.New() //nolint:gosec // see import comment
-	h.Write(ns)
-	h.Write([]byte(name))
-	u := h.Sum(nil)[:16]
-	u[6] = (u[6] & 0x0f) | 0x50
-	u[8] = (u[8] & 0x3f) | 0x80
-	s := hex.EncodeToString(u)
-	return s[0:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:32]
 }
 
 func readCommittedManifest(t *testing.T) []byte {

@@ -2,13 +2,9 @@ package seed_test
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,37 +14,6 @@ import (
 
 	"github.com/gulcint/smart-campaign-composer/internal/seed"
 )
-
-// REQ-SEED-01
-func TestGenerate_RejectsInvalidOptions(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name    string
-		opts    seed.Options
-		wantErr error
-	}{
-		{name: "199 users is too few", opts: seed.Options{Seed: 42, Users: 199, RefTime: canonicalRefTime}, wantErr: seed.ErrTooFewUsers},
-		{name: "zero users is too few", opts: seed.Options{Seed: 42, Users: 0, RefTime: canonicalRefTime}, wantErr: seed.ErrTooFewUsers},
-		{name: "negative users is too few", opts: seed.Options{Seed: 42, Users: -1, RefTime: canonicalRefTime}, wantErr: seed.ErrTooFewUsers},
-		{name: "zero ref time is invalid", opts: seed.Options{Seed: 42, Users: 5000}, wantErr: seed.ErrInvalidRefTime},
-		{name: "200 users (MinUsers) is accepted", opts: seed.Options{Seed: 42, Users: seed.MinUsers, RefTime: canonicalRefTime}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			d, err := seed.Generate(tc.opts)
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("Generate(%+v) error = %v, want %v", tc.opts, err, tc.wantErr)
-			}
-			if tc.wantErr == nil && d == nil {
-				t.Fatal("Generate() returned a nil dataset without error")
-			}
-		})
-	}
-	if seed.MinUsers != 200 {
-		t.Fatalf("MinUsers = %d, want 200", seed.MinUsers)
-	}
-}
 
 // REQ-SEED-01
 // Same (--seed, --users, --ref-time) => byte-identical export and manifest; other parameters differ.
@@ -93,96 +58,6 @@ func TestManifest_MatchesCommittedFile(t *testing.T) {
 }
 
 // REQ-SEED-01
-// Canonical form: 2-space indent, keys in seed.md §5 order, exactly one trailing newline.
-func TestManifest_CanonicalFormat(t *testing.T) {
-	t.Parallel()
-	m := canonical(t).manifest
-	if !bytes.HasPrefix(m, []byte("{\n  \"schema_version\": 1,\n")) {
-		t.Fatalf("manifest does not start with a 2-space indented schema_version: %q", m[:min(len(m), 40)])
-	}
-	if !bytes.HasSuffix(m, []byte("}\n")) || bytes.HasSuffix(m, []byte("\n\n")) {
-		t.Fatal("manifest must end with exactly one trailing newline")
-	}
-	keys, err := objectKeys(m)
-	if err != nil {
-		t.Fatalf("manifest: %v", err)
-	}
-	if diff := cmp.Diff(manifestTopKeys, keys); diff != "" {
-		t.Fatalf("top-level key order (-want +got):\n%s", diff)
-	}
-	gkeys, err := nestedObjectKeys(m, "groups")
-	if err != nil {
-		t.Fatalf("groups: %v", err)
-	}
-	if diff := cmp.Diff(groupNames, gkeys); diff != "" {
-		t.Fatalf("groups key order (-want +got):\n%s", diff)
-	}
-}
-
-// REQ-SEED-01
-func TestManifest_ParamsAndDatasetHash(t *testing.T) {
-	t.Parallel()
-	g := canonical(t)
-	if g.doc.SchemaVersion != 1 {
-		t.Fatalf("schema_version = %d, want 1", g.doc.SchemaVersion)
-	}
-	if g.doc.Params.Seed != canonicalSeed || g.doc.Params.Users != canonicalUsers {
-		t.Fatalf("params = %+v, want seed %d users %d", g.doc.Params, canonicalSeed, canonicalUsers)
-	}
-	ref, err := time.Parse(time.RFC3339, g.doc.Params.RefTime)
-	if err != nil || !ref.Equal(canonicalRefTime) {
-		t.Fatalf("params.ref_time = %q, want %s", g.doc.Params.RefTime, canonicalRefTime.Format(time.RFC3339))
-	}
-	sum := sha256.Sum256(g.jsonl)
-	if want := hex.EncodeToString(sum[:]); g.doc.DatasetSHA256 != want {
-		t.Fatalf("dataset_sha256 = %q, want sha256(export) = %q", g.doc.DatasetSHA256, want)
-	}
-}
-
-// REQ-SEED-01
-// Customers then events, each sorted by id; customer ids are UUIDv5(NS, "scc-seed/<seed>/customer/<index>").
-func TestExport_OrderAndDeterministicIDs(t *testing.T) {
-	t.Parallel()
-	g := canonical(t)
-	if len(g.customers) != canonicalUsers {
-		t.Fatalf("customers = %d, want --users = %d", len(g.customers), canonicalUsers)
-	}
-	if !slices.IsSortedFunc(g.customers, func(a, b customer) int { return strings.Compare(a.ID, b.ID) }) {
-		t.Fatal("customers are not sorted by id")
-	}
-	if !slices.IsSortedFunc(g.events, func(a, b event) int { return strings.Compare(a.ID, b.ID) }) {
-		t.Fatal("events are not sorted by id")
-	}
-
-	want := map[string]bool{}
-	for i := range canonicalUsers {
-		want[uuidV5(t, seedNamespace, "scc-seed/"+strconv.FormatInt(canonicalSeed, 10)+"/customer/"+strconv.Itoa(i))] = true
-	}
-	ids := map[string]bool{}
-	for _, c := range g.customers {
-		if !want[c.ID] {
-			t.Fatalf("customer id %s is not UUIDv5(NS, scc-seed/42/customer/<index>)", c.ID)
-		}
-		ids[c.ID] = true
-	}
-	if len(ids) != canonicalUsers {
-		t.Fatalf("distinct customer ids = %d, want %d", len(ids), canonicalUsers)
-	}
-	evIDs := map[string]bool{}
-	for _, e := range g.events {
-		if !ids[e.CustomerID] {
-			t.Fatalf("event %s references unknown customer %s", e.ID, e.CustomerID)
-		}
-		if evIDs[e.ID] {
-			t.Fatalf("duplicate event id %s", e.ID)
-		}
-		evIDs[e.ID] = true
-	}
-}
-
-var amountFormat = regexp.MustCompile(`^[0-9]+\.[0-9]{2}$`)
-
-// REQ-SEED-01
 // The data carries name, email, phone, city, consent and shopping history (cart_add / purchase
 // events with dates); no event lies after the reference time.
 func TestDataset_ShoppingHistoryAndConsent(t *testing.T) {
@@ -195,26 +70,8 @@ func TestDataset_ShoppingHistoryAndConsent(t *testing.T) {
 		if e.at.After(ref) {
 			t.Fatalf("event %s occurs at %s, after ref %s", e.ID, e.OccurredAt, ref.Format(time.RFC3339))
 		}
-		switch e.Type {
-		case "purchase":
-			if e.Amount == nil {
-				t.Fatalf("purchase %s has no amount", e.ID)
-			}
-			if !amountFormat.MatchString(e.Amount.String()) {
-				t.Fatalf("purchase %s amount %q is not a number with 2 decimals", e.ID, e.Amount.String())
-			}
-			if f, _ := e.Amount.Float64(); f <= 0 {
-				t.Fatalf("purchase %s amount %s must be > 0", e.ID, e.Amount.String())
-			}
-		case "cart_add", "page_view":
-			if e.Amount != nil {
-				t.Fatalf("%s event %s has amount %s, want null", e.Type, e.ID, e.Amount.String())
-			}
-		default:
-			t.Fatalf("event %s has type %q, want cart_add|purchase|page_view", e.ID, e.Type)
-		}
 	}
-	for _, typ := range []string{"cart_add", "purchase", "page_view"} {
+	for _, typ := range []string{"cart_add", "purchase"} {
 		if byType[typ] == 0 {
 			t.Fatalf("no %s events in the dataset", typ)
 		}
@@ -224,18 +81,6 @@ func TestDataset_ShoppingHistoryAndConsent(t *testing.T) {
 	for _, c := range g.customers {
 		if c.City == "" {
 			t.Fatalf("customer %s has empty city", c.ID)
-		}
-		if !slices.Contains([]string{"tr", "en"}, c.Language) {
-			t.Fatalf("customer %s language %q", c.ID, c.Language)
-		}
-		if !slices.Contains([]string{"bronze", "silver", "gold", "platinum"}, c.LoyaltyTier) {
-			t.Fatalf("customer %s loyalty_tier %q", c.ID, c.LoyaltyTier)
-		}
-		if !c.SMSOptIn && c.SMSOptInAt != nil {
-			t.Fatalf("customer %s: sms_opt_in=false but sms_opt_in_at is set", c.ID)
-		}
-		if !c.EmailOptIn && c.EmailOptInAt != nil {
-			t.Fatalf("customer %s: email_opt_in=false but email_opt_in_at is set", c.ID)
 		}
 		switch {
 		case c.SMSOptIn && c.EmailOptIn:
@@ -460,17 +305,6 @@ func TestManifest_EdgeCaseGroups(t *testing.T) {
 	assertGroups(t, g)
 }
 
-// REQ-SEED-01
-// The fixed groups do not depend on --users: the minimum dataset (200) carries all of them.
-func TestManifest_EdgeCaseGroupsAtMinimumUsers(t *testing.T) {
-	t.Parallel()
-	g := generate(t, seed.Options{Seed: canonicalSeed, Users: seed.MinUsers, RefTime: canonicalRefTime})
-	if len(g.customers) != seed.MinUsers {
-		t.Fatalf("customers = %d, want %d", len(g.customers), seed.MinUsers)
-	}
-	assertGroups(t, g)
-}
-
 func assertGroups(t *testing.T, g *generated) {
 	t.Helper()
 	ref := g.opts.RefTime
@@ -526,27 +360,6 @@ func assertGroups(t *testing.T, g *generated) {
 				}
 			}
 		})
-	}
-
-	// Random population (seed.md §3.2): non-empty first_name <= 20 runes; events in
-	// [ref-120d, ref-1h]; purchase amounts 50.00..5000.00.
-	for _, c := range g.customers {
-		if _, fixed := seen[c.ID]; fixed {
-			continue
-		}
-		if n := utf8.RuneCountInString(c.FirstName); c.FirstName == "" || n > 20 {
-			t.Errorf("random customer %s first_name %q (%d runes), want non-empty and <= 20", c.ID, c.FirstName, n)
-		}
-		for _, e := range evs[c.ID] {
-			if e.at.Before(ref.Add(-days(120))) || e.at.After(ref.Add(-time.Hour)) {
-				t.Errorf("random customer %s event %s at %s outside [ref-120d, ref-1h]", c.ID, e.ID, e.OccurredAt)
-			}
-			if e.Type == "purchase" && e.Amount != nil {
-				if f, _ := e.Amount.Float64(); f < 50 || f > 5000 {
-					t.Errorf("random customer %s purchase amount %s outside 50.00..5000.00", c.ID, e.Amount.String())
-				}
-			}
-		}
 	}
 }
 

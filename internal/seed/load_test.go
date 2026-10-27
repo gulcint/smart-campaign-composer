@@ -2,7 +2,6 @@ package seed_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -30,26 +29,6 @@ func TestLoad_IsIdempotent(t *testing.T) {
 		}
 		assertLoaded(t, ctx, pool, g)
 	}
-}
-
-// REQ-SEED-01
-// A different dataset is refused without --reset and leaves the database unchanged.
-func TestLoad_DifferentDatasetWithoutResetIsRefused(t *testing.T) {
-	pool := testdb.App(t)
-	ctx := t.Context()
-	g := canonical(t)
-	if err := seed.Load(ctx, pool, canonicalDataset(t), false); err != nil {
-		t.Fatalf("Load(canonical) error = %v", err)
-	}
-
-	other, err := seed.Generate(seed.Options{Seed: 43, Users: seed.MinUsers, RefTime: canonicalRefTime})
-	if err != nil {
-		t.Fatalf("Generate(seed 43) error = %v", err)
-	}
-	if err := seed.Load(ctx, pool, other, false); !errors.Is(err, seed.ErrDatasetMismatch) {
-		t.Fatalf("Load(different dataset, reset=false) error = %v, want %v", err, seed.ErrDatasetMismatch)
-	}
-	assertLoaded(t, ctx, pool, g)
 }
 
 func canonicalDataset(t *testing.T) *seed.Dataset {

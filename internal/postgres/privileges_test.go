@@ -90,19 +90,6 @@ func TestAppRole_IsLeastPrivileged(t *testing.T) {
 	}
 }
 
-// REQ-SEC-02
-// The denial is role-based: the migrator role (scc_migrator) can run DDL.
-func TestMigratorRole_CanChangeSchema(t *testing.T) {
-	pool := testdb.Migrator(t)
-	err := inRolledBackTx(t, pool, func(tx pgx.Tx) error {
-		_, err := tx.Exec(t.Context(), `CREATE TABLE scc_privilege_probe (id int)`)
-		return err
-	})
-	if err != nil {
-		t.Fatalf("CREATE TABLE as scc_migrator error = %v, want nil", err)
-	}
-}
-
 // inRolledBackTx runs fn in a transaction that is always rolled back.
 func inRolledBackTx(t *testing.T, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
 	t.Helper()

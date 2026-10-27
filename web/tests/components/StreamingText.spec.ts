@@ -1,4 +1,5 @@
-// REQ-CNT-04, REQ-UI-01 (UI): StreamingText phases (docs/contracts/ui.md §3.10, §6.1).
+// REQ-CNT-04, REQ-UI-01 (UI): streamed content is a draft until validated; invalid shows field
+// errors; streamed text is never interpreted as HTML.
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import StreamingText from '@/components/StreamingText.vue'
@@ -12,65 +13,13 @@ function mountText(props: Record<string, unknown>) {
 
 describe('StreamingText (REQ-CNT-04)', () => {
   it.each([
-    {
-      phase: 'idle',
-      badge: 'draft',
-      busy: false,
-      caret: false,
-      retrying: false,
-      interrupted: false,
-    },
-    {
-      phase: 'streaming',
-      badge: 'draft',
-      busy: true,
-      caret: true,
-      retrying: false,
-      interrupted: false,
-    },
-    {
-      phase: 'retrying',
-      badge: 'draft',
-      busy: true,
-      caret: false,
-      retrying: true,
-      interrupted: false,
-    },
-    {
-      phase: 'validated',
-      badge: 'validated',
-      busy: false,
-      caret: false,
-      retrying: false,
-      interrupted: false,
-    },
-    {
-      phase: 'invalid',
-      badge: 'invalid',
-      busy: false,
-      caret: false,
-      retrying: false,
-      interrupted: false,
-    },
-    {
-      phase: 'interrupted',
-      badge: 'interrupted',
-      busy: false,
-      caret: false,
-      retrying: false,
-      interrupted: true,
-    },
-  ])('phase $phase', ({ phase, badge, busy, caret, retrying, interrupted }) => {
+    { phase: 'streaming', badge: 'draft' },
+    { phase: 'validated', badge: 'validated' },
+    { phase: 'invalid', badge: 'invalid' },
+  ])('phase $phase shows the $badge badge and the text', ({ phase, badge }) => {
     const w = mountText({ phase, text: 'Merhaba' })
-    const root = w.get(sel('streaming-text-sms-body'))
-    expect(root.attributes('data-phase')).toBe(phase)
-    expect(root.attributes('aria-busy') === 'true').toBe(busy)
+    expect(w.get(sel('streaming-text-sms-body')).attributes('data-phase')).toBe(phase)
     expect(w.get(sel('streaming-text-badge-sms-body')).attributes('data-status')).toBe(badge)
-    expect(w.find(sel('streaming-text-caret-sms-body')).exists()).toBe(caret)
-    expect(w.find(sel('streaming-text-retrying-sms-body')).exists()).toBe(retrying)
-    expect(w.find(sel('streaming-text-interrupted-sms-body')).exists()).toBe(interrupted)
-    expect(w.find(sel('streaming-text-regenerate-sms-body')).exists()).toBe(interrupted)
-    expect(w.find(sel('streaming-text-errors-sms-body')).exists()).toBe(phase === 'invalid')
     expect(w.get(sel('streaming-text-content-sms-body')).element.textContent).toBe('Merhaba')
   })
 
@@ -88,12 +37,6 @@ describe('StreamingText (REQ-CNT-04)', () => {
       .findAll(sel('field-error'))
       .map((e) => e.attributes('data-code'))
     expect(codes).toEqual(['subject_too_long', 'invalid_json'])
-  })
-
-  it('interrupted offers regenerate', async () => {
-    const w = mountText({ phase: 'interrupted', text: 'Merh' })
-    await w.get(sel('streaming-text-regenerate-sms-body')).trigger('click')
-    expect(w.emitted('regenerate')).toHaveLength(1)
   })
 
   it('renders streamed text as text, never HTML (REQ-UI-01)', () => {

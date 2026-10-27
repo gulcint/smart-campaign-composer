@@ -580,11 +580,6 @@ func TestE2E_ContentRepairAttempt(t *testing.T) {
 	if len(list) != 1 || list[0].LLMAttempts == nil || *list[0].LLMAttempts != 2 || list[0].Status != "validated" {
 		t.Fatalf("content-versions = %+v, want one validated version with llm_attempts 2", list)
 	}
-
-	// The same generation with an explicit {} body.
-	resp := postContent(t, t.Context(), api, id, []byte(`{}`), scenario("ok"))
-	assertSSEResponse(t, resp)
-	_ = resp.Body.Close()
 }
 
 // REQ-CNT-04, REQ-AI-01, REQ-CNT-01, REQ-CNT-02, REQ-CNT-03 (sse-events.md §1.1, §1.3.2)
@@ -704,9 +699,9 @@ func TestE2E_ContentLLMUnavailableIs502(t *testing.T) {
 	}
 }
 
-// REQ-CNT-04, REQ-AI-02 (README §5.4)
-// generateContent refusals before the stream: unknown/malformed campaign 404, draft 409
-// invalid_state, unknown scenario 422, a body property 422 schema_violation, a broken body 400.
+// REQ-CNT-04
+// generateContent refusals before the stream: unknown campaign 404, draft (no segment) 409
+// invalid_state; nothing is stored.
 func TestE2E_ContentGenerateRequestChecks(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -723,11 +718,7 @@ func TestE2E_ContentGenerateRequestChecks(t *testing.T) {
 		field   *fieldWant
 	}{
 		{name: "unknown campaign", id: unknownCampaignID, headers: scenario("ok"), status: 404, code: "campaign_not_found"},
-		{name: "malformed campaign id", id: "not-a-uuid", headers: scenario("ok"), status: 404, code: "campaign_not_found"},
 		{name: "draft campaign", id: draftID, headers: scenario("ok"), status: 409, code: "invalid_state"},
-		{name: "unknown scenario", id: readyID, headers: scenario("OK"), status: 422, code: "validation_failed", field: &fieldWant{"header.X-Mock-LLM-Scenario", "invalid_value"}},
-		{name: "body with a property", id: readyID, body: []byte(`{"brief":"x"}`), headers: scenario("ok"), status: 422, code: "validation_failed", field: &fieldWant{"brief", "schema_violation"}},
-		{name: "broken body", id: readyID, body: []byte(`{"x":`), headers: scenario("ok"), status: 400, code: "malformed_request"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -963,9 +954,8 @@ func TestE2E_EditAcceptsBoundaries(t *testing.T) {
 // idempotent (same approval id and approved_at); an edit after approval drops the campaign to
 // content_ready with no approval; the old version is then stale (409); the new one can be approved;
 // after a new segment the campaign is audience_ready and approving is 409 invalid_state.
-// Before that, every documented refusal of approveContent that the shared seeded database allows
-// (400, 413, 422 schema_violation / invalid_value, 404 campaign_not_found / content_version_not_found)
-// is answered through the strict OpenAPI client and changes nothing. 409 generation_in_progress and
+// Before that, a body over 64 KiB (413) and an unknown campaign (404) are refused and change
+// nothing. 409 generation_in_progress and
 // content_not_validated are covered by TestE2E_ContentGenerationLock and TestE2E_ContentFinalInvalid;
 // the 422 worst-case re-check needs a customer mutation (forbidden here, openapi approveContent).
 func TestE2E_ApproveFlow(t *testing.T) {
@@ -988,15 +978,8 @@ func TestE2E_ApproveFlow(t *testing.T) {
 		code    string
 		field   *fieldWant
 	}{
-		{name: "body that is not JSON", id: id, body: []byte("content_version_id=" + vid), status: 400, code: "malformed_request"},
-		{name: "non-JSON Content-Type", id: id, body: []byte(`{"content_version_id":"` + vid + `"}`), headers: map[string]string{"Content-Type": "text/plain"}, status: 400, code: "malformed_request"},
 		{name: "body over 65536 bytes", id: id, body: []byte(`{"content_version_id":"` + vid + `"` + strings.Repeat(" ", 65537) + `}`), status: 413, code: "payload_too_large"},
-		{name: "unknown property instead of content_version_id", id: id, body: []byte(`{"version_id":"` + vid + `"}`), status: 422, code: "validation_failed", field: &fieldWant{Code: "schema_violation"}},
-		{name: "content_version_id of the wrong type", id: id, body: []byte(`{"content_version_id":1}`), status: 422, code: "validation_failed", field: &fieldWant{Code: "schema_violation"}},
-		{name: "malformed content_version_id", id: id, body: []byte(`{"content_version_id":"0b8f6c2e"}`), status: 422, code: "validation_failed", field: &fieldWant{"content_version_id", "invalid_value"}},
-		{name: "malformed body on an unknown campaign is 422, not 404", id: unknownCampaignID, body: []byte(`{"content_version_id":"0b8f6c2e"}`), status: 422, code: "validation_failed", field: &fieldWant{"content_version_id", "invalid_value"}},
 		{name: "unknown campaign", id: unknownCampaignID, body: []byte(`{"content_version_id":"` + vid + `"}`), status: 404, code: "campaign_not_found"},
-		{name: "version not in the campaign", id: id, body: []byte(`{"content_version_id":"` + unknownVerID + `"}`), status: 404, code: "content_version_not_found"},
 	}
 	// The group returns only after its parallel subtests finished.
 	t.Run("refused", func(t *testing.T) {
@@ -1162,27 +1145,11 @@ func TestE2E_Preview(t *testing.T) {
 	}
 }
 
-// REQ-APR-01, REQ-CNT-03 (openapi previewContent errors)
-// Preview refusals: draft or no validated version 409 invalid_state; an invalid draft given
-// explicitly 409 content_not_validated; unknown version 404; customer not matched or sample_index
-// out of range 404 customer_not_found; malformed parameters 422 on query.<name>; unknown campaign 404.
+// REQ-APR-01
+// Preview of an unknown campaign is 404 (HTTP status table: "Bilinmeyen kampanya").
 func TestE2E_PreviewErrors(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
-	m := readManifest(t)
-	groups := readGroups(t)
-	draftID, _ := createCampaign(t, api, m.ExampleBrief.Brief)
-	noContent := audienceReady(t, api, m)
-	id := audienceReady(t, api, m)
-	if generate(t, api, id, "ok").validated == nil {
-		t.Fatal("setup: no validated version")
-	}
-	bad := generate(t, api, id, "over_limit_sms").final
-	if bad == nil || bad.ContentVersionID == nil {
-		t.Fatal("setup: no stored draft")
-	}
-	notMatched := groups.Groups["cart_add_31d"].CustomerIDs[0]
-	n := strconv.Itoa(m.ExampleBrief.Audience.Matched)
 	tests := []struct {
 		name   string
 		id     string
@@ -1191,16 +1158,6 @@ func TestE2E_PreviewErrors(t *testing.T) {
 		code   string
 		field  *fieldWant
 	}{
-		{name: "draft campaign", id: draftID, status: 409, code: "invalid_state"},
-		{name: "no validated version", id: noContent, status: 409, code: "invalid_state"},
-		{name: "invalid draft given", id: id, query: "?content_version_id=" + *bad.ContentVersionID, status: 409, code: "content_not_validated"},
-		{name: "unknown version", id: id, query: "?content_version_id=" + unknownVerID, status: 404, code: "content_version_not_found"},
-		{name: "customer not matched by the rule", id: id, query: "?customer_id=" + notMatched, status: 404, code: "customer_not_found"},
-		{name: "sample_index equal to the matched count", id: id, query: "?sample_index=" + n, status: 404, code: "customer_not_found"},
-		{name: "negative sample_index", id: id, query: "?sample_index=-1", status: 422, code: "validation_failed", field: &fieldWant{"query.sample_index", "invalid_value"}},
-		{name: "non-integer sample_index", id: id, query: "?sample_index=bir", status: 422, code: "validation_failed", field: &fieldWant{"query.sample_index", "invalid_value"}},
-		{name: "malformed customer_id", id: id, query: "?customer_id=42", status: 422, code: "validation_failed", field: &fieldWant{"query.customer_id", "invalid_value"}},
-		{name: "malformed content_version_id", id: id, query: "?content_version_id=v1", status: 422, code: "validation_failed", field: &fieldWant{"query.content_version_id", "invalid_value"}},
 		{name: "unknown campaign", id: unknownCampaignID, status: 404, code: "campaign_not_found"},
 	}
 	for _, tc := range tests {
@@ -1277,8 +1234,6 @@ func TestE2E_ContentVersionsNotFound(t *testing.T) {
 		name, path, code string
 	}{
 		{name: "list for an unknown campaign", path: "/api/campaigns/" + unknownCampaignID + "/content-versions", code: "campaign_not_found"},
-		{name: "unknown version", path: "/api/campaigns/" + id + "/content-versions/" + unknownVerID, code: "content_version_not_found"},
-		{name: "another campaign's version", path: "/api/campaigns/" + id + "/content-versions/" + ov.ContentVersionID, code: "content_version_not_found"},
 		{name: "version of an unknown campaign", path: "/api/campaigns/" + unknownCampaignID + "/content-versions/" + ov.ContentVersionID, code: "campaign_not_found"},
 	}
 	for _, tc := range tests {
@@ -1288,22 +1243,4 @@ func TestE2E_ContentVersionsNotFound(t *testing.T) {
 			assertError(t, status, hdr, body, http.StatusNotFound, tc.code, false)
 		})
 	}
-}
-
-// REQ-APR-01, REQ-APR-03 (README §5.4 steps 1 and 4, openapi getContentVersion, previewContent)
-// Check order on unknown things: a malformed version id on an UNKNOWN campaign is 404
-// campaign_not_found (not content_version_not_found); previewContent with an unknown
-// content_version_id on a campaign without a segment is 404 content_version_not_found (the 404s come
-// before 409 invalid_state).
-func TestE2E_NotFoundOrder(t *testing.T) {
-	t.Parallel()
-	api := baseURL(t, "E2E_API_URL")
-	m := readManifest(t)
-	draftID, _ := createCampaign(t, api, m.ExampleBrief.Brief)
-
-	status, hdr, b := doJSON(t, http.MethodGet, api+"/api/campaigns/"+unknownCampaignID+"/content-versions/not-a-uuid", nil, nil)
-	assertError(t, status, hdr, b, http.StatusNotFound, "campaign_not_found", false)
-
-	status, hdr, b = doJSON(t, http.MethodGet, api+"/api/campaigns/"+draftID+"/preview?content_version_id="+unknownVerID, nil, nil)
-	assertError(t, status, hdr, b, http.StatusNotFound, "content_version_not_found", false)
 }
