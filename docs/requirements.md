@@ -180,8 +180,16 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 > "Mesajlar kuyruk üzerinden mock provider'a gönderilir." / "Asenkron kuyruk, kanal başına saniyede en fazla 100 mesaj."
 
 - Onaylı kampanyada gönderim isteği, onaylanan içerik sürümü için **tüm teslimat kayıtlarını tek işlemde** (ya hepsi ya hiçbiri) oluşturur, kampanyayı `sending` yapar ve **hemen döner**; mesajlar arka planda işlenir.
-- Teslimatlar durumlarını (`queued` → `sending` → `sent` | `failed`) kalıcı olarak taşır.
-- Aynı kampanyada içerik üretimi sürerken `POST /api/campaigns/{campaign_id}/send` 409 `generation_in_progress` döner ve hiçbir teslimat kaydı oluşturmaz. Kural, aynı veritabanını kullanan birden fazla API sürecinde de geçerlidir (üretim işareti veritabanında tutulur). Üretim başlatma ile gönderim aynı anda gelirse ikisinden yalnızca biri kabul edilir.
+- İstek: `POST /api/campaigns/{campaign_id}/send`, gövde `{"content_version_id": "<uuid>"}`. Başarı **202**, gövde `{"campaign_id", "state", "content_version_id", "deliveries": {"total", "sms", "email"}}`; `state` = `sending`, `deliveries.sms`/`deliveries.email` segmentin kanal bazlı kitle sayısına (`audience.sms`/`audience.email`) eşittir. İki kanalın kitlesi de boşsa aynı işlemde kampanya `completed` olur ve yanıtta `state` = `completed`'dır.
+- Her yeni teslimat `queued` durumunda doğar; her (kanal, müşteri) çifti için bir teslimat oluşur.
+- Hata yanıtları (gövde `{"error": {"code", "message", "request_id"}}`), denetim sırasıyla: bilinmeyen kampanya **404** `campaign_not_found`; bilinmeyen veya başka kampanyanın sürümü **404** `content_version_not_found`; üretim sürüyor **409** `generation_in_progress`; kampanya `approved` değil (onaysız gönderim ve **ikinci gönderim isteği** dahil) **409** `invalid_state`; `content_version_id` onaylanan sürüm değil **409** `stale_content_version`. Gövde hataları (400/413/422) bu listeden önce gelir (aşağıda). 409 ve 404 durumlarında hiçbir teslimat kaydı oluşmaz.
+- Teslimatlar durumlarını (`queued` → `sending` → `sent` | `failed`) kalıcı olarak taşır; yeniden deneme planlanan teslimat `sending` → `queued`'a döner. `sent` ve `failed` sonuç durumlarıdır, değişmez.
+- Teslimatlar `GET /api/campaigns/{campaign_id}/deliveries` ile listelenir: yanıt `{"items", "total", "limit", "offset"}`; sorgu parametreleri `status` (`queued|sending|sent|failed`), `channel` (`sms|email`), `order` (`customer` varsayılan: `customer_id` artan, sonra `channel`; `recent`: `updated_at` azalan), `customer_id`, `limit` (1–200, varsayılan 50), `offset` (≥ 0). Geçersiz değer **422** `validation_failed`, alan kodu `invalid_value`, yol `query.<ad>` (ör. `query.status`). Her öğe en az `id`, `campaign_id`, `content_version_id`, `customer_id`, `channel`, `status`, `attempts`, `failed_attempts`, `rate_limited_count`, `retry_count`, `next_attempt_at`, `first_attempt_at`, `last_attempt_at`, `last_http_status`, `last_error`, `failure_reason`, `provider_message_id`, `sent_at`, `failed_at`, `created_at`, `updated_at` alanlarını taşır.
+- Aynı kampanyada içerik üretimi sürerken `POST /api/campaigns/{campaign_id}/send` 409 `generation_in_progress` döner ve hiçbir teslimat kaydı oluşturmaz. Kural, aynı veritabanını kullanan birden fazla API sürecinde de geçerlidir (üretim işareti veritabanında tutulur). Bu, aynı veritabanına bağlı iki ayrı `campaign.NewService` örneğiyle sınanır: birinde `StartContentGeneration` ile üretim açıkken diğerinin `Send`'i `campaign.ErrGenerationInProgress` döner ve teslimat oluşmaz. Aynı durumda diğer örnekte `EditContent` ve `Approve` de `campaign.ErrGenerationInProgress` döner ve hiçbir sürüm veya onay kaydı oluşmaz; `StartContentGeneration` ve `GenerateSegment` de `campaign.ErrGenerationInProgress` döner ve LLM çağrılmaz. Üretimi tutan süreç kilidi bırakamadan sonlanırsa diğer süreç kilidi, üretim başladıktan `campaign.MaxGenerationDuration` sonra (enjekte edilen saate göre) serbest sayar; test, kilidi tutan örneğin akışı hiç bitmezken diğer örneğin saatini ilerleterek sınanır. Üretim başlatma ile gönderim aynı anda gelirse ikisinden yalnızca biri kabul edilir.
+- **Gövde denetimi kullanım durumundan önce gelir** (tüm işlemlerde ortak sıra: biçimsiz path → gövde → kampanya/işlem denetimleri). Gövde boşsa, JSON değilse veya `Content-Type` JSON değilse **400** `malformed_request`; 65536 bayttan büyükse **413** `payload_too_large`; `content_version_id` eksikse veya bilinmeyen alan varsa **422** `validation_failed` (alan kodu `schema_violation`), biçimsizse **422** `validation_failed` (`invalid_value`, yol `content_version_id`). Bu gövde hataları, üretim sürüyor olsa ve kampanya bilinmese bile `generation_in_progress` ve 404'ten **önce** döner.
+- "Hiçbir teslimat kaydı oluşmadı" şöyle gözlemlenir: `GET /api/campaigns/{campaign_id}/deliveries` yanıtında `total` = 0 ve `items` boş; `GET /api/campaigns/{campaign_id}/status` yanıtında `counts.total` = 0 ve kampanyanın `state`'i değişmemiş.
+- Üretim sürerken gönderimi test etmek için içerik üretimi açık tutulur: mock LLM modunda `POST /api/campaigns/{campaign_id}/content` isteği `X-Mock-LLM-Scenario: stalled_stream` başlığıyla gönderilir; akış ilk `delta`'dan sonra son olay göndermeden bekler ve istemci bağlantıyı kapatana kadar üretim kilidi tutulur (kapanınca kilit bırakılır, sürüm saklanmaz, durum değişmez). Kilit en geç 120 sn sonra da bırakılır.
+- Kampanya `sending` veya `completed` iken segment üretimi (`POST /api/campaigns/{campaign_id}/segment`) ve içerik üretimi (`POST /api/campaigns/{campaign_id}/content`) **409** `invalid_state` döner. Segment ve içerik üretiminde denetim sırası aynıdır: 404 `campaign_not_found` › 409 `invalid_state` › 409 `generation_in_progress` › 502 `llm_unavailable`.
 
 ### REQ-SND-02 — Kanal başına saniyede en fazla 100 mesaj · Faz P5 · [DOK] + [DOK çıkarımı]
 > "Asenkron kuyruk, kanal başına saniyede en fazla 100 mesaj."
@@ -189,12 +197,17 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 - Her **yarı-açık 1 saniyelik pencerede** [t, t+1) bir kanal için provider'a başlatılan istek sayısı ≤ 100'dür. Uygulama, ardışık istek başlangıçları arasında en az 10 ms bırakarak bunu sağlar; test pencereyi sahte saatle ölçer.
 - Sınır, **kaç worker çalıştığından bağımsızdır**; retry'lar da sayılır.
 - SMS ve email sınırları birbirini etkilemez.
+- Gerçek mock provider ile uçtan uca gönderimde (`compose.test.yml` mock provider'ı `MOCK_PROVIDER_RATE_LIMIT_RATE=0` ile, yani rastgele 429 kapalı çalıştırır) tam bir kampanya bittikten sonra `GET /admin/requests` kaydında `status` = `429` olan istek yoktur: mock provider'ın kanal başına 100/sn kendi hız sınırı (REQ-MOCK-02) hiç tetiklenmemiştir. Kesin pencere ölçümü yalnız unit testtedir (`delivery.NewTokenBucket`, sahte saat); uçtan uca test `received_at` ile pencere saymaz, çünkü ağ gecikmesi zaman damgalarını kaydırır.
+- Sınır worker'ın `DISPATCH_RATE_PER_SECOND` ortam değişkeniyle verilir (varsayılan `100`, kanal başına).
+- İzin veya iletişim bilgisi kalmadığı (`recipient_unavailable`) ya da render sonrası uzunluk aştığı (`content_too_long`) için `failed` olan teslimat provider'a istek göndermez ve hız sınırından pay tüketmez.
 
 ### REQ-SND-03 — Aynı kişiye aynı mesaj iki kez gitmez · Faz P5 · [DOK]
 > "Aynı kişiye aynı mesaj iki kez gitmez."
 
-- (kampanya, kanal, müşteri) için en fazla bir teslimat kaydı vardır; ikinci kayıt oluşturma girişimi reddedilir.
+- (kampanya, kanal, müşteri) için en fazla bir teslimat kaydı vardır; ikinci kayıt oluşturma girişimi reddedilir: veritabanında `deliveries_campaign_channel_customer_key` tekillik kısıtı ihlali (SQLSTATE `23505`); API'de aynı kampanyaya ikinci gönderim isteği **409** `invalid_state` döner ve kayıt sayısı değişmez.
 - Provider kabul etti ama yanıt kayboldu / worker durumu yazamadan düştü senaryosunda retry mesajı **ikinci kez göndermez**: her istek aynı `Idempotency-Key`'i taşır ve provider bununla tekilleştirir (anahtar mekanizması VARSAYIM).
+- `Idempotency-Key` değeri teslimatın `id`'sidir; aynı teslimatın tüm denemeleri bu değeri taşır. Mock provider'ın `GET /admin/messages` kaydında her teslimat için en fazla bir kabul edilmiş mesaj bulunur (`idempotency_key` = teslimat `id`'si; `request_count` o anahtarla gelen toplam istek).
+- `sending` durumunda kalmış teslimatın kirası (`DELIVERY_LEASE`, varsayılan `60s`) dolunca teslimat `queued`'a döner (`failed_attempts` artmaz) ve aynı `Idempotency-Key` ile yeniden gönderilir.
 - Eşzamanlı birden çok worker aynı teslimatı almaz.
 - Aynı telefonu veya e-postayı paylaşan **iki ayrı müşteri kaydında** her müşteri kendi teslimatını alır; tekilleştirme müşteri bazındadır (VARSAYIM).
 
@@ -211,12 +224,20 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 | 429 bütçesi aşıldı (20 adet veya ilk denemeden itibaren 10 dk) | `failed` |
 
 - Retry zamanları sahte saatle deterministik doğrulanabilir.
+- `n`'inci yeniden denemenin gecikmesi `[0, min(60 sn, 1 sn · 2^(n−1)))` aralığında düzgün dağılımlıdır (n = 1 → 1 sn, 2 → 2 sn, 3 → 4 sn, 4 → 8 sn üst sınır). 429'da `n` o teslimatın 429 sayısı, diğer hatalarda başarısız deneme sayısıdır.
+- `Retry-After` saniye (`"2"`) veya HTTP tarihi olabilir; geçmiş tarih 0 sn gecikmedir; boş veya çözülemeyen değer yokmuş gibi işlenir (backoff).
+- 429 bütçesi: teslimatın **20.** 429 yanıtı onu `failed` yapar; ilk denemeden bu yana 10 dk dolmuşsa ya da `Retry-After` (veya backoff) gecikmesi 10 dk penceresini aşacaksa teslimat beklemeden `failed` olur.
+- `failed` teslimatın `failure_reason` değeri: diğer 4xx (ve 1xx/3xx) → `provider_rejected`; 5. başarısız deneme → `max_attempts_exceeded`; 429 bütçesi → `rate_limit_budget_exhausted`. Gönderim anı denetimlerinden: izin/iletişim yok → `recipient_unavailable`, render sonrası uzunluk aşımı → `content_too_long`. `sent` teslimatta `failure_reason` `null`'dır.
+- Teslimat sayaçları (`GET /api/campaigns/{campaign_id}/deliveries` öğesinde): `failed_attempts` (5xx/408/timeout/bağlantı hatası sayısı, 0–5), `rate_limited_count` (429 sayısı, 0–20), `retry_count` (planlanan yeniden deneme sayısı, her nedenden), `attempts` (işleme alınma sayısı). `last_http_status` son HTTP kodu; `last_error` kapalı kümedir: `http_<kod>` (2xx dışı her HTTP yanıtı), `timeout`, `connection_error`, `content_too_long`, `recipient_unavailable`.
+- Worker ortam değişkenleri: `RETRY_MAX_ATTEMPTS` (`5`), `RETRY_BASE_DELAY` (`1s`), `RETRY_MAX_DELAY` (`60s`), `RETRY_MAX_RATE_LIMITED` (`20`), `RETRY_RATE_LIMIT_WINDOW` (`10m`), `PROVIDER_TIMEOUT` (`10s`, aşılırsa timeout), `WORKER_RAND_SEED` (jitter tohumu; `0` = rastgele tohum, sabit değer = tekrarlanabilir gecikmeler).
 
 ### REQ-SND-05 — Gerçek kimseye mesaj gitmez · Faz P5 · [DOK]
 > "Gerçek kimseye mesaj gitmez. Alıcılar senin oluşturacağın sahte kullanıcılardır, gönderim de senin yazacağın mock provider'a yapılır."
 
 - Teslimatlar yalnızca yapılandırılmış provider adresine gönderilir; varsayılan yapılandırma (compose) mock provider'ı gösterir.
+- Adres worker'ın `PROVIDER_BASE_URL` ortam değişkenidir; varsayılanı `http://mockprovider:8090`'dır.
 - Gerçek bir SMS/email servisine bağlanan hiçbir bileşen yoktur; alıcılar yalnızca sahte seed verisidir (REQ-SEED-02).
+- Mock provider kurgusal olmayan alıcıyı reddeder: SMS'te `to` `^\+90500000[0-9]{4}$` biçiminde değilse, email'de adres `@example.com` veya `@example.test` ile bitmiyorsa **400** `invalid_recipient`.
 
 ## Takip (TRK)
 
@@ -225,9 +246,24 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 
 - Kampanya başına sayaçlar (kuyrukta, gönderiliyor, gönderildi, başarısız) SSE ile **sayfa yenilenmeden** güncellenir.
 - Tüm teslimatlar sonlanınca (`sent` veya `failed`) kampanya `completed` olur; kalıcı hatalı teslimat olsa bile `completed` olur ve başarısız sayısı görünür. Kampanya düzeyinde `failed` durumu yoktur.
+- Anlık durum: `GET /api/campaigns/{campaign_id}/status` → 200, gövde `CampaignStatus`: `{"campaign_id", "state", "counts": {"total", "queued", "sending", "sent", "failed"}, "by_channel": {"sms": {…aynı beş alan}, "email": {…}}, "sending_started_at", "completed_at", "updated_at"}`. Her kanal ve toplam için `total = queued + sending + sent + failed`; `counts.x = by_channel.sms.x + by_channel.email.x`. Teslimat yoksa (`draft`…`approved`) tüm sayaçlar 0. Bilinmeyen kampanya **404** `campaign_not_found`.
+- Canlı akış: `GET /api/campaigns/{campaign_id}/events` (EventSource uyumlu, `Content-Type: text/event-stream; charset=utf-8`). Akış başında bir kez `retry: 3000`; her olay `id: <n>` (bağlantı başına 1'den artar), `event:` ve tek satırlık JSON `data:` taşır; olayların `data`'sı `CampaignStatus`'tur. Olaylar:
+  - `snapshot` — bağlantı açılınca **ilk** olay, tam olarak bir kez.
+  - `status` — durum 1 sn'de bir yoklanır; sonuç son gönderilenden (`updated_at` hariç) farklıysa gönderilir, aynıysa gönderilmez (en fazla saniyede bir).
+  - `completed` — kampanya `completed` olunca **son** olay (`state: "completed"`, `queued = sending = 0`, `sent + failed = total`); ardından sunucu bağlantıyı kapatır. Kampanya bağlanırken zaten `completed` ise `snapshot`'ın hemen ardından gelir.
+- Ardışık olaylarda `sent` ve `failed` azalmaz. 15 sn'de bir `: keepalive` yorum satırı gelir (olay sayılmaz). `Last-Event-ID` desteklenmez; yeniden bağlanan istemci yeni bir `snapshot` alır. Bilinmeyen kampanyada akış açılmaz, **404** JSON döner.
+- Ekran (takip sayfası `page-tracking`): `delivery-counters` öğesinin `data-state`'i `completed` (kampanya tamamlandı) › `stale` (bağlantı açık değil) › `live` sırasıyla belirlenir. Kanal `<c>` ∈ `sms|email` için `delivery-count-<c>-<k>` ve toplam için `delivery-count-total-<k>` (`<k>` ∈ `total|queued|sending|sent|failed`) öğelerinin `data-value`'su ilgili sayaçtır; `stale` iken `delivery-stale-note`, `completed` iken `delivery-completed-title` ve `failed > 0` ise `delivery-failed-link` görünür.
 
 ### REQ-TRK-02 — Metrics endpoint'i · Faz P5 · [DOK] + VARSAYIM format
 - `GET /metrics`, Prometheus metin biçiminde gönderilen, başarısız, yeniden denenen ve kuyruktaki teslimat sayaçlarını içerir.
+- API sürecinin (`:8080`) `GET /metrics` yanıtı `Content-Type: text/plain; version=0.0.4; charset=utf-8` ile şu serileri içerir (değerler veritabanındaki teslimatlardan türetilir; hiç teslimat yokken de her etiket kombinasyonu `0` ile yayımlanır):
+  - `scc_deliveries_sent_total{channel}` — `sent` teslimat sayısı.
+  - `scc_deliveries_failed_total{channel, reason}` — `failed` teslimat sayısı; `reason` ∈ `provider_rejected`, `max_attempts_exceeded`, `rate_limit_budget_exhausted`, `content_too_long`, `recipient_unavailable`.
+  - `scc_delivery_retries_total{channel}` — planlanan yeniden deneme sayısı (5xx/408/timeout/bağlantı **ve** 429), teslimatların `retry_count` toplamı.
+  - `scc_deliveries_queued{channel}` — `queued` teslimat sayısı (yeniden deneme bekleyenler dahil).
+  - `scc_deliveries_in_flight{channel}` — `sending` teslimat sayısı.
+  - `channel` ∈ `sms`, `email`.
+- Tamamlanmış bir kampanyadan sonra (başka kampanya yokken) her kanal `c` için: `Σ_reason scc_deliveries_failed_total{channel=c}` + `scc_deliveries_sent_total{channel=c}` = o kanaldaki teslimat sayısı; `scc_deliveries_queued{channel=c}` = 0 ve `scc_deliveries_in_flight{channel=c}` = 0. Gönderimden hemen sonraki `queued` değeri sabit değer olarak test edilmez.
 
 ### REQ-TRK-03 — Health check endpoint'leri · Faz P2 · [DOK] + VARSAYIM yollar
 - `GET /healthz` süreç ayaktaysa 200 döner.
@@ -247,6 +283,8 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 
 - `ANTHROPIC_API_KEY` tanımsızken tüm testler geçer; testlerde gerçek Anthropic uç noktasına ağ çağrısı yapılamaz.
 - Sahte LLM, senaryo seçilebilir ve deterministik olandır (geçerli çıktı, bozuk JSON, şema ihlali, limit aşan içerik, yarıda kesilen stream, enjeksiyon içeren brief).
+- Senaryo, mock modunda segment üretimi (`POST /api/campaigns/{campaign_id}/segment`) ve içerik üretimi (`POST /api/campaigns/{campaign_id}/content`) isteklerinde `X-Mock-LLM-Scenario: <ad>` başlığıyla seçilir; başlık yoksa `MOCK_LLM_SCENARIO` ortam değişkeni (varsayılan `ok`) kullanılır. Etkin sağlayıcı `claude` iken başlık yok sayılır. Bilinmeyen ad (mock modunda) **422** `validation_failed`, alan yolu `header.X-Mock-LLM-Scenario`, kod `invalid_value`; LLM çağrılmaz. Adlar büyük/küçük harf duyarlıdır; `GET /api/config` mock modunda `mock_scenarios` listesini döner.
+- Kapalı senaryo listesi (14): `ok`, `invalid_json`, `schema_violation`, `over_limit_sms`, `over_limit_subject`, `unknown_variable`, `injection_attempt`, `truncated_stream`, `then_ok_after_repair`, `always_invalid`, `sql_in_value`, `html_in_content`, `llm_unavailable`, `stalled_stream`. `stalled_stream`: segment üretiminde geçerli kural verir; içerik üretiminde ilk `delta`'yı gönderip istemci bağlantıyı kapatana kadar bekler (son olay yok; bu süre boyunca kampanyanın üretim kilidi tutulur).
 
 ### REQ-AI-03 — Key yoksa uygulama sahte LLM ile çalışır · Faz P2 · VARSAYIM
 > "Geliştirme sırasında mock bir LLM ile çalışabilir …"
@@ -273,10 +311,28 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 
 - Mock provider; yapılandırılabilir oranlarda 5xx, gecikme ve 429 döner; oranlar ortam değişkeniyle ayarlanır ve sabit tohumla yeniden üretilebilir.
 - Gerçek bir SMS/email servisini taklit eden bir HTTP arayüzü sunar (gönderim isteği → kabul/ret).
+- Gönderim uç noktaları: `POST /v1/sms/messages` (gövde `{"to", "body"}`) ve `POST /v1/email/messages` (gövde `{"to", "subject", "text", "html"}`); `Content-Type: application/json` ve `Idempotency-Key` başlığı zorunludur. Varsayılan adres `:8090`; `GET /healthz` → 200 `{"status":"ok"}`.
+- Yanıtlar (hata gövdesi `{"error": {"code", "message"}}`):
+  - **202** `{"id": "msg_<32 hex>", "status": "accepted", "channel", "idempotency_key", "duplicate": false}` — kabul.
+  - **400** `missing_idempotency_key` (başlık yok), `invalid_body` (JSON bozuk/eksik alan), `invalid_recipient` (REQ-SND-05).
+  - **429** `rate_limited` + `Retry-After: <tam sayı saniye>` — hız sınırı (REQ-MOCK-02) veya rastgele 429.
+  - **500** / **503** `internal_error` — rastgele hata.
+  - Yanıt yok ("yanıt kayboldu"): mesaj kabul edilip kaydedilir, bağlantı yanıt yazılmadan kapanır; istemci bağlantı hatası görür.
+- Ortam değişkenleri: `MOCK_PROVIDER_SEED` (`1`, rastgele kararların tohumu), `MOCK_PROVIDER_ERROR_RATE` (`0.05`, 5xx olasılığı; `500` ve `503` eşit), `MOCK_PROVIDER_RATE_LIMIT_RATE` (`0.02`, hız sınırından bağımsız rastgele 429), `MOCK_PROVIDER_LOST_RESPONSE_RATE` (`0`, kabul edip yanıtı kaybetme), `MOCK_PROVIDER_LATENCY_MIN` / `MOCK_PROVIDER_LATENCY_MAX` (`20ms` / `200ms`, düzgün dağılımlı gecikme), `MOCK_PROVIDER_RETRY_AFTER_SECONDS` (`1`), `MOCK_PROVIDER_ADDR` (`:8090`), `MOCK_PROVIDER_ADMIN` (`false`). Oranlar [0,1] aralığındadır ve toplamları 1'i aşamaz; geçersiz değerde süreç çıkış kodu 1 ile kapanır.
+- Determinizm: aynı tohum ve aynı kanal içi istek varış sırası aynı karar (hata türü + gecikme) dizisini verir; SMS ve email kararları birbirinden bağımsızdır.
+- Senaryolu mod (yalnız `MOCK_PROVIDER_ADMIN=true`; kapalıyken `/admin/*` → 404), testlerin tam yanıt dizisi zorlaması için:
+  - `POST /admin/scripts` → 204; gövde `{"channel", "to" (isteğe bağlı), "responses": [{"status": 202|400|408|429|500|503, "retry_after" (isteğe bağlı), "delay_ms" (isteğe bağlı), "lost_response" (isteğe bağlı, yalnız 202 ile)}]}`. Öğeler sırayla (önce `channel`+`to` eşleşen, yoksa yalnız `channel` kuyruğu) tüketilir; senaryo öğesi tüketen isteğe hız sınırı ve rastgele karar uygulanmaz, böylece ör. `429, 500, 202` dizisi birebir üretilir.
+  - `DELETE /admin/scripts` → 204 (senaryoları siler); `POST /admin/reset` → 204 (mesajlar, istek kaydı, idempotency deposu, hız penceresi ve senaryolar temizlenir; rastgele üreteçler tohumdan yeniden kurulur).
+  - `GET /admin/messages` → 200 `{"items": [{"id", "channel", "to", "idempotency_key", "accepted_at", "request_count"}]}` — kabul edilmiş tekil mesajlar.
+  - `GET /admin/requests` → 200 `{"items": [{"seq", "channel", "idempotency_key", "to", "received_at", "status", "replayed"}]}` — değerlendirilen her istek, varış sırasıyla (`seq` 1'den); kayıp yanıtta `status` = `0`.
 
 ### REQ-MOCK-02 — Kendi hız sınırı ve idempotency · Faz P5 · VARSAYIM
 - Mock provider kanal başına 100/sn'yi aşan isteğe `Retry-After` ile 429 döner.
 - Aynı `Idempotency-Key` ile gelen ikinci istek mesajı tekrar kabul etmez; ilk sonucu döndürür.
+- Hız sınırı kanal başına kayan penceredir: aynı kanalda son 1 saniyede (`(now − 1s, now]`) sınır adımına ulaşmış istek sayısı `MOCK_PROVIDER_RATE_LIMIT_PER_SECOND` (varsayılan `100`) veya üstündeyse yanıt **429** `rate_limited` + `Retry-After: <MOCK_PROVIDER_RETRY_AFTER_SECONDS>`'dır. SMS ve email sayaçları bağımsızdır.
+- Tekrar (replay): daha önce **202** ile kabul edilmiş anahtarla gelen istek **202**, ilk kabulün aynı gövdesi (yalnız `"duplicate": true`) ve `Idempotent-Replayed: true` başlığıyla döner; `GET /admin/messages`'taki kayıt sayısı artmaz (yalnız `request_count` artar). Replay hız sınırına, senaryoya ve hata enjeksiyonuna tabi değildir, gecikme uygulanmaz.
+- Yalnız 202 sonuçları saklanır: 4xx/5xx/429 alan anahtarla sonraki istek yeniden değerlendirilir.
+- Aynı anahtar farklı kanal veya farklı `to` ile gelirse **409** `idempotency_key_reused`.
 
 ## Arayüz (UI)
 
@@ -288,6 +344,10 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 
 ### REQ-SEC-01 — Loglarda kişisel veri yok · Faz P5 · VARSAYIM
 - Teslimat loglarında müşteri kimliği geçer; e-posta adresi ve telefon numarası geçmez.
+- Denetlenen çıktı worker'ın JSON yapılandırılmış teslimat log kayıtlarıdır (`msg` değerleri): `delivery sent` (INFO; `delivery_id`, `campaign_id`, `customer_id`, `channel`, `attempt`, `http_status`), `delivery retry scheduled` (WARN; aynı alanlar + `next_attempt_at`, `reason` = `http_<kod>` / `timeout` / `connection_error`), `delivery failed` (ERROR; aynı alanlar + `failure_reason`).
+- Bu kayıtlarda `to`, `phone`, `email`, `body` anahtarı bulunmaz; hiçbir değerde `@example.` veya `+90500000` geçmez; alıcının adı ve mesaj gövdesi yer almaz.
+- Mock provider log'ları `to`, gövde veya konu içermez; yalnız kanal, `idempotency_key` ve durum kodu yazar.
+- `GET /api/campaigns/{campaign_id}/deliveries` yanıtı alıcı adresi (telefon, e-posta) içermez.
 
 ### REQ-SEC-02 — Uygulama veritabanı rolü en az yetkili · Faz P2 · VARSAYIM
 - Uygulamanın veritabanı rolü şema değiştiremez (ör. `DROP TABLE` yetki hatası verir).
