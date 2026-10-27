@@ -4,7 +4,7 @@
 import { Info, RotateCcw, Unplug } from '@lucide/vue'
 import { computed } from 'vue'
 
-import type { ContentPhase, FieldError, FieldKey } from '@/api/types'
+import type { ContentPhase, FieldError, FieldKey, LlmProvider } from '@/api/types'
 import type { MessageId } from '@/i18n'
 import { t } from '@/i18n'
 import { cn } from '@/lib/utils'
@@ -19,8 +19,9 @@ const props = withDefaults(
     text: string
     phase: ContentPhase
     errors?: FieldError[]
+    provider?: LlmProvider | null
   }>(),
-  { errors: () => [] },
+  { errors: () => [], provider: null },
 )
 const emit = defineEmits<{ regenerate: [] }>()
 
@@ -31,6 +32,8 @@ const LABEL: Record<FieldKey, MessageId> = {
 }
 
 const busy = computed(() => props.phase === 'streaming' || props.phase === 'retrying')
+// Waiting state: stream open (or being corrected) but no text yet (REQ-CNT-04).
+const waiting = computed(() => busy.value && props.text === '')
 const badge = computed(() =>
   props.phase === 'streaming' || props.phase === 'retrying' || props.phase === 'idle'
     ? 'draft'
@@ -63,7 +66,24 @@ const badge = computed(() =>
       <Info class="size-4" aria-hidden="true" />
       {{ t('stream.retrying') }}
     </p>
+    <div
+      v-if="waiting"
+      :data-testid="`streaming-text-waiting-${field}`"
+      class="flex flex-col gap-2"
+    >
+      <p class="text-body-sm text-accent-heading">
+        {{ t(provider === 'claude' ? 'stream.waiting.claude' : 'stream.waiting') }}
+      </p>
+      <div aria-hidden="true" class="flex flex-col gap-2">
+        <span
+          v-for="w in ['w-full', 'w-5/6', 'w-2/3']"
+          :key="w"
+          :class="cn('h-3 animate-pulse rounded-pill bg-track motion-reduce:animate-none', w)"
+        />
+      </div>
+    </div>
     <p
+      v-else
       :class="
         cn(
           'min-h-6 text-body whitespace-pre-wrap break-words text-ink-900',

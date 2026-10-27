@@ -76,10 +76,11 @@ func Load(getenv func(string) string) (Config, error) {
 		DispatchBatchSize:     l.integer("DISPATCH_BATCH_SIZE", 50, 1),
 		DeliveryLease:         l.duration("DELIVERY_LEASE", 60*time.Second, false),
 		Retry: delivery.RetryConfig{
-			MaxAttempts:     l.integer("RETRY_MAX_ATTEMPTS", retry.MaxAttempts, 1),
+			// Upper bounds = the deliveries CHECKs (failed_attempts <= 5, rate_limited_count <= 20).
+			MaxAttempts:     l.boundedInteger("RETRY_MAX_ATTEMPTS", retry.MaxAttempts, 1, retry.MaxAttempts),
 			BaseDelay:       l.duration("RETRY_BASE_DELAY", retry.BaseDelay, false),
 			MaxDelay:        l.duration("RETRY_MAX_DELAY", retry.MaxDelay, false),
-			MaxRateLimited:  l.integer("RETRY_MAX_RATE_LIMITED", retry.MaxRateLimited, 1),
+			MaxRateLimited:  l.boundedInteger("RETRY_MAX_RATE_LIMITED", retry.MaxRateLimited, 1, retry.MaxRateLimited),
 			RateLimitWindow: l.duration("RETRY_RATE_LIMIT_WINDOW", retry.RateLimitWindow, false),
 		},
 		WorkerRandSeed: l.int64("WORKER_RAND_SEED", 0),
@@ -117,6 +118,16 @@ func (l *loader) integer(name string, def, minValue int) int {
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < minValue {
+		l.invalid(name, nil)
+		return def
+	}
+	return n
+}
+
+// boundedInteger is integer with an inclusive upper bound.
+func (l *loader) boundedInteger(name string, def, minValue, maxValue int) int {
+	n := l.integer(name, def, minValue)
+	if n > maxValue {
 		l.invalid(name, nil)
 		return def
 	}

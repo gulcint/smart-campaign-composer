@@ -8,7 +8,8 @@
 #   scc_test  - migrated + seeded by the test container itself, for integration tests
 #               (TEST_DATABASE_URL / TEST_MIGRATE_DATABASE_URL); tests may migrate it down/up
 #               without disturbing the API.
-# The mock provider (E2E_MOCKPROVIDER_URL) runs with its admin endpoints enabled.
+# The mock provider (E2E_MOCKPROVIDER_URL) runs with its admin endpoints enabled; the worker
+# sends the `scc` database's deliveries to it.
 
 name: scc-test
 
@@ -78,6 +79,23 @@ services:
       # No random 429s: an E2E 429 then means the dispatcher broke 100/s (REQ-SND-02).
       MOCK_PROVIDER_RATE_LIMIT_RATE: "0"
 
+  worker:
+    <<: *app
+    command: ["worker"]
+    # Requests already started finish (PROVIDER_TIMEOUT 10s) and are recorded before exit.
+    stop_grace_period: 20s
+    environment:
+      DATABASE_URL: postgres://scc_app:scc_app_test@db:5432/scc?sslmode=disable
+      WORKER_HTTP_ADDR: ":8081"
+      PROVIDER_BASE_URL: http://mockprovider:8090
+      # Fixed jitter seed: retry delays are reproducible between runs.
+      WORKER_RAND_SEED: "1"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      mockprovider:
+        condition: service_started
+
   # Vitest for web/tests (docs/contracts/ui.md §0): Node image of web/Dockerfile, no services.
   web-test:
     build:
@@ -107,4 +125,6 @@ services:
       api:
         condition: service_started
       mockprovider:
+        condition: service_started
+      worker:
         condition: service_started
