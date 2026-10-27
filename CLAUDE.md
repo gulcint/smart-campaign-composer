@@ -59,10 +59,11 @@ Git kuralları (ayrıntı `docs/PLAN.md` §1–2):
 
 ## Test yazarı
 
-Testleri yalnızca `test-writer` ajanı yazar (`.claude/agents/test-writer.md`, kuralları `.claude/skills/writing-tests/SKILL.md`). Kaynakları: case dokümanı, `docs/requirements.md`, `docs/contracts/**` — implementasyon asla.
+Testleri yalnızca `test-writer` ajanı yazar (`.claude/agents/test-writer.md`, kuralları `.claude/skills/writing-tests/SKILL.md`). **Tek test-vakası kaynağı `docs/requirements.md`** (REQ kabul ölçütleri); `docs/contracts/**` ve case dokümanı yalnızca bir gereksinimin gözlemlenebilir davranışını ifade etmek için gereken ad/şekil/ifadeyi verir, bağımsız vaka kaynağı değildir — implementasyon asla.
 - Çalıştırma: `scripts/test-writer-worktree.sh origin/slice/p<N>-<x> test/p<N>-<y>` (implementasyon dizinleri olmadan sparse worktree açar), sonra o dizinde `claude --agent test-writer`.
 - `scripts/claude/test-writer-guard.sh` ajana özel PreToolUse hook'u: `cmd/`, `internal/`, `migrations/`, `web/src/` okunamaz; yalnızca test dosyaları yazılabilir; Bash yalnızca güvenli git/ls komutları ve hedefi test yolu/`docs/` olan `grep`/`rg`.
 - Sözleşme eksikse test yazarı imza uydurmaz, soruyu sahibe döner.
+- Sözleşmede/`DECISIONS.md`'de olup REQ'i olmayan davranış için test yazılmaz; test yazarı "REQ eksik" diye sahibe bildirir, sahip/mimar önce REQ'i ekler. Review bulgusu test gerektiriyorsa önce REQ ölçütü eklenir; çözülebilir `// REQ-…` yorumu olmayan test review'da reddedilir (skill §1, `docs/PLAN.md` §3.1).
 - Bir kural tek dosyada yaşar: yazmadan önce REQ ID'si test yollarında aranır, varsa mevcut test genişletilir; review bulguları yeni satır/alt test olur, `round2`/`fix`/`review` adlı dosya açılmaz (skill §3.1, `docs/PLAN.md` §4.5, `docs/requirements.md` §İzlenebilirlik `Test katmanı`).
 
 ## Çoklu ajan orkestrasyonu

@@ -240,7 +240,7 @@ Kodu yazan, review eden ve testi yazan ayrı bağlamlardır; hiçbiri kendi işi
 |---|---|---|---|---|
 | **Sahip** | Proje sahibi (insan) | Her şey | Karar | Sözleşme onayı (`contracts-v1`), repo oluşturma, VARSAYIM kabulü. Merge yetkisini, `ci-ok` yeşilken orkestratöre devretti (2026-10-26); **her PR'ı okuyup açıklayabilmek** (merge'ü beklemeden, faz kapanışına kadar) |
 | **Mimar** | `architect` / `planner` | Doküman, kod | `docs/` | REQ kataloğu, OpenAPI, şemalar, DSL, Go arayüz imzaları, `DECISIONS.md` — koddan önce |
-| **Test yazarı** | `test-engineer`, **ayrı Claude Code session'ı + sparse checkout'lu ayrı worktree** | Yalnızca case dokümanı (mutlak yol), `docs/requirements.md`, `docs/contracts/**` | `**/*_test.go`, `test/**`, `testdata/**`, `web/tests/**` (frontend testleri `web/src` dışında) | Dokümandaki ister ve kısıtlardan test; implementasyona asla bakmaz |
+| **Test yazarı** | `test-engineer`, **ayrı Claude Code session'ı + sparse checkout'lu ayrı worktree** | `docs/requirements.md` (tek test-vakası kaynağı); `docs/contracts/**` ve case dokümanı (mutlak yol) yalnızca ad/şekil/ifade için | `**/*_test.go`, `test/**`, `testdata/**`, `web/tests/**` (frontend testleri `web/src` dışında) | Yalnızca `docs/requirements.md` kabul ölçütlerinden test; REQ'i olmayan davranış için test yazmaz, "REQ eksik" diye sahibe bildirir; implementasyona asla bakmaz |
 | **Kodu yazan** | `executor` | Doküman, sözleşmeler, testler | `cmd/`, `internal/`, `migrations/`, `web/src/` | Testleri yeşile çevirir; test dosyalarını değiştiremez. **Tek istisna:** `testdata/seed/manifest.json`'ı seed kodu üretir, kodu yazan commit'ler; test yazarı yazamaz, yalnızca okur (`docs/contracts/seed.md`) |
 | **Reviewer** | `code-reviewer` (+ güvenlikte `security-reviewer`) | Her şey | PR yorumu/raporu | Kodu sözleşmeye, testleri dokümana, ikisini güvenlik listesine göre inceler |
 | **Doğrulayıcı** | `verifier` | Her şey | Rapor | Faz kapısında kanıtla son onay |
@@ -253,7 +253,8 @@ Kodu yazan, review eden ve testi yazan ayrı bağlamlardır; hiçbiri kendi işi
 4. CI rol job'ı: `test/*` implementasyona, `feat/*`/`fix/*` testlere dokunamaz.
 5. Çatışmada test koda uydurulmaz: sahip karar verir → mimar `docs/`'u düzeltir → test yazarı testi buna göre günceller, ya da kod düzeltilir.
 6. Yazmadan önce mevcut testi bul: test yazarı REQ ID'sini yalnızca test yollarında arar (Grep aracı `glob: "*_test.go"` / `path: "web/tests"` ya da hedefi test yolu olan shell `grep`/`rg`; guard `cmd/`, `internal/`, `migrations/`, `web/src/`, `.` ve stdin'i engeller). Test varsa yeni dosya açılmaz, mevcut test genişletilir (§4.5 dosya düzeni).
-7. Dürüst sınır: ajanın dosya okuması her ortamda tam engellenemez; worktree izolasyonu + CI path kontrolü + reviewer'ın "bu test implementasyon detayına mı bağlı?" kontrolü birlikte uygulanır.
+7. **Tek kaynak: `docs/requirements.md`.** Test vakaları yalnızca REQ kabul ölçütlerinden çıkar; sözleşmeler ve case dokümanı bir gereksinimin gözlemlenebilir davranışını ifade etmek için gereken ad/şekil/ifadeyi sağlar, bağımsız vaka kaynağı değildir. Sözleşmede veya `DECISIONS.md`'de olup REQ'i olmayan davranış için test yazılmaz; test yazarı "REQ eksik" diye sahibe bildirir, sahip/mimar önce REQ'i ekler, sonra test yazılır. Review bulgusu test gerektiriyorsa önce REQ ölçütü eklenir. Çözülebilir bir `// REQ-…` yorumu (ID `docs/requirements.md`'de, test o ölçütü sınıyor) taşımayan test review'da reddedilir.
+8. Dürüst sınır: ajanın dosya okuması her ortamda tam engellenemez; worktree izolasyonu + CI path kontrolü + reviewer'ın "bu test implementasyon detayına mı bağlı?" kontrolü birlikte uygulanır.
 
 ### 3.2 Faz kapısı kontrol listesi
 
@@ -353,7 +354,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 | Eşzamanlılık | `-race`; goroutine sızıntısı için `goleak` (VARSAYIM) |
 | Çalıştırma | CI'da `-count=1 -shuffle=on -race`; flaky test karantinaya alınmaz, düzeltilir |
 
-**Test dosyası düzeni:** dosya adı özellik/REQ alanına göre verilir, review turuna göre asla (`round2`, `fix`, `review` ekleri yasak; `scripts/hooks/check-test-files.sh` pre-commit'te reddeder). Test adları ve `// REQ-…` yorumları REQ ID'sini taşır ki grep bulsun. Review bulguları mevcut dosyada yeni table-driven satır veya yeni alt test olur. Yeni dosya yalnızca yeni bir test katmanı ya da henüz dosyası olmayan yeni bir alan için açılır ve `docs/requirements.md` §İzlenebilirlik tablosuna yazılır.
+**Test dosyası düzeni:** dosya adı özellik/REQ alanına göre verilir, review turuna göre asla (`round2`, `fix`, `review` ekleri yasak; `scripts/hooks/check-test-files.sh` pre-commit'te reddeder). Test adları ve `// REQ-…` yorumları REQ ID'sini taşır ki grep bulsun; yorum `docs/requirements.md`'deki bir kabul ölçütüne çözülmezse test reddedilir (§3.1 madde 7). Review bulguları mevcut dosyada yeni table-driven satır veya yeni alt test olur. Yeni dosya yalnızca yeni bir test katmanı ya da henüz dosyası olmayan yeni bir alan için açılır ve `docs/requirements.md` §İzlenebilirlik tablosuna yazılır.
 
 **Kapsam:** domain paketleri için %80 satır (VARSAYIM); asıl ölçü REQ eşlemesinin tam olması. **Fixture:** `testdata/`; golden dosyaları yalnızca test yazarı `-update` ile günceller.
 

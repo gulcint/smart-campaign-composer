@@ -1,6 +1,6 @@
 # Gereksinimler
 
-Test yazarının ve mimarın tek gereksinim kaynağı. Case dokümanının (`Smart Campaign Composer Case.html`, repoda yok) ilgili cümleleri her gereksinimin altına **birebir** alıntılandı; test yazarı dokümanı görmeden bu dosyayla çalışabilir.
+Test yazarının ve mimarın tek gereksinim kaynağı. **Test vakaları yalnızca buradan çıkar; önemli olup burada olmayan davranış önce sahip/mimar tarafından REQ olarak eklenir, sonra test edilir.** Case dokümanının (`Smart Campaign Composer Case.html`, repoda yok) ilgili cümleleri her gereksinimin altına **birebir** alıntılandı; test yazarı dokümanı görmeden bu dosyayla çalışabilir.
 
 **Etiketler:** **[DOK]** dokümanda yazan · **[DOK çıkarımı]** dokümandan doğrudan çıkan, ayrıntısı bizim yorumumuz · **VARSAYIM** dokümanda olmayan, projenin kararı (`DECISIONS.md`'ye taşınır).
 

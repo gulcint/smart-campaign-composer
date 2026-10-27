@@ -1,26 +1,38 @@
 ---
 name: writing-tests
-description: Rules for writing Smart Campaign Composer tests from the case document and contracts only — REQ traceability, Go table-driven style, determinism (clock, randomness, network, DB, LLM), test layers, make test contract and the test writer's git workflow. Use when writing, reviewing or planning any test in this repo.
+description: Rules for writing Smart Campaign Composer tests from docs/requirements.md acceptance criteria only — REQ traceability, Go table-driven style, determinism (clock, randomness, network, DB, LLM), test layers, make test contract and the test writer's git workflow. Use when writing, reviewing or planning any test in this repo.
 ---
 
 # Writing tests for Smart Campaign Composer
 
-Tests measure whether the implementation satisfies the case. They are derived from the
-**case document and the contracts**, never from the implementation (docs/PLAN.md §3.1, §4).
+Tests measure whether the implementation satisfies the case. They are derived **only from the
+acceptance criteria in `docs/requirements.md`**, never from the implementation and never from
+contracts or the case document as an independent source (docs/PLAN.md §3.1, §4).
 
 ## 1. Sources you may use — and nothing else
 
+`docs/requirements.md` is the **only source of test cases**. The other sources supply the names,
+shapes and wording needed to express a requirement's observable behaviour; none of them adds a
+case of its own.
+
 | Source | Path | Use it for |
 |---|---|---|
-| Case document (gitignored) | `<main repo>/Smart Campaign Composer Case.html` | What the product must do; the final word |
-| Requirements catalog | `docs/requirements.md` | REQ IDs, one per behavior |
-| Contracts | `docs/contracts/**` | The only surfaces tests may touch |
+| Requirements catalog | `docs/requirements.md` | **The only source of cases**: REQ IDs and their acceptance criteria |
+| Contracts | `docs/contracts/**` | Names, signatures, fields, `data-testid`s of the surfaces tests may touch |
+| Case document (gitignored) | `<main repo>/Smart Campaign Composer Case.html` | Exact wording of the sentence a REQ quotes; the final word if a REQ contradicts it (report it) |
 | Plan | `docs/PLAN.md` §0.4, §0.5, §4, §5 | Retry policy, stream protocol, test rules, seed manifest |
 | Existing tests | `**/*_test.go`, `test/**`, `testdata/**`, `web/tests/**` | Style, shared helpers, and the file to extend (§3.1) |
 
 The contract surfaces are: HTTP API (OpenAPI), SSE events (PLAN §0.5), Go interface
 signatures (`docs/contracts/go-interfaces.md`), observable DB results, and the UI contract
 (`docs/contracts/ui.md`: components, props, `data-testid`s).
+
+**If a behaviour has no REQ, do not test it: report "REQ eksik".** When a contract,
+`DECISIONS.md` or the case document describes behaviour that matters but no REQ acceptance
+criterion covers, write no test. Tell the owner "REQ eksik" with the source sentence; the
+owner or architect adds the REQ first, then you test it. A review finding that needs a test
+needs a REQ criterion first. In review, a test without a `// REQ-…` comment that resolves to an
+acceptance criterion in `docs/requirements.md` is rejected.
 
 **If a contract you need does not exist or is ambiguous, stop.** Do not invent a function
 name, field, endpoint or error. Write down the question (what the doc says, what is missing,
@@ -48,9 +60,9 @@ Quoted requirements every suite must cover (IDs from `docs/requirements.md`):
 
 ## 3. Traceability
 
-- Every test function starts with a comment naming its requirement(s): `// REQ-CNT-01`.
+- Every test function starts with a comment naming its requirement(s): `// REQ-CNT-01`. The ID must exist in `docs/requirements.md` and the test must check one of its acceptance criteria; otherwise review rejects it.
 - One behavior per subtest; a REQ may have many tests, a test should rarely cover many REQs.
-- When you finish, report the REQ → test mapping and any REQ you could not cover and why.
+- When you finish, report the REQ → test mapping, any REQ you could not cover and why, and every "REQ eksik" item.
 
 ### 3.1 One home per rule: extend, do not scatter
 
