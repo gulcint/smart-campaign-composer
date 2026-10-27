@@ -358,14 +358,17 @@ func (s *service) Preview(ctx context.Context, id string, q PreviewQuery) (Previ
 	if err != nil {
 		return Preview{}, err
 	}
-	if c.Segment == nil {
-		return Preview{}, fmt.Errorf("%w: campaign has no segment", ErrInvalidState)
-	}
+	// README §5.4: 404 content_version_not_found comes before 409 invalid_state.
 	var v ContentVersion
 	if q.ContentVersionID != "" {
 		if v, err = s.GetContentVersion(ctx, id, q.ContentVersionID); err != nil {
 			return Preview{}, err
 		}
+	}
+	if c.Segment == nil {
+		return Preview{}, fmt.Errorf("%w: campaign has no segment", ErrInvalidState)
+	}
+	if q.ContentVersionID != "" {
 		if v.Status != ContentValidated {
 			return Preview{}, ErrContentNotValidated
 		}
