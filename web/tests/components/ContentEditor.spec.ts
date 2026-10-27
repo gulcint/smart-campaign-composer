@@ -5,7 +5,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import ContentEditor from '@/components/ContentEditor.vue'
 import { t } from '@/i18n/index'
-import type { Content } from '@/api/types'
+import type { Content, FieldError } from '@/api/types'
 import { P, V2, content, fieldError, sel } from '../helpers/p4'
 
 let wrapper: VueWrapper | undefined
@@ -271,7 +271,15 @@ describe('ContentEditor inline error ids (REQ-APR-02, ui.md §3.14 e, §4)', () 
     expect(el.getAttribute('aria-invalid')).toBe('true')
   }
 
-  it.each([
+  interface IdCase {
+    name: string
+    channel: 'sms' | 'email'
+    errors: FieldError[]
+    fields: string[]
+    codes: Record<string, string[]>
+  }
+
+  const idCases: IdCase[] = [
     {
       name: 'path "" plus an error of the SMS body',
       channel: 'sms',
@@ -297,7 +305,9 @@ describe('ContentEditor inline error ids (REQ-APR-02, ui.md §3.14 e, §4)', () 
       fields: ['email-subject', 'email-body'],
       codes: { 'email-subject': ['subject_too_long'], 'email-body': ['payload_too_large'] },
     },
-  ])(
+  ]
+
+  it.each(idCases)(
     '$name: unique ids, aria-describedby resolves to one element each',
     ({ channel, errors, fields, codes }) => {
       mountEditor({ channel, fieldErrors: errors, dirty: true })
@@ -307,7 +317,7 @@ describe('ContentEditor inline error ids (REQ-APR-02, ui.md §3.14 e, §4)', () 
         const shown = [...document.querySelectorAll(sel(`inline-error-${f}`))].map((el) =>
           el.getAttribute('data-code'),
         )
-        for (const code of (codes as Record<string, string[]>)[f] ?? []) {
+        for (const code of codes[f] ?? []) {
           expect(shown).toContain(code)
         }
       }

@@ -68,10 +68,20 @@ describe('SmsPreview (REQ-APR-01, REQ-CNT-03)', () => {
     )
   })
 
-  it('shows the sample position 1-based', () => {
-    const w = mountSms({ preview: preview({ sample_index: 4, sample_count: 584 }) })
-    expect(w.get(sel('sms-preview-sample')).text()).toBe(t('preview.sample', { i: 5, n: 584 }))
-  })
+  // D49: the UI walks only the first min(sample_count, 5) samples.
+  it.each([
+    { index: 4, count: 584, i: 5, n: 5 },
+    { index: 0, count: 584, i: 1, n: 5 },
+    { index: 0, count: 5, i: 1, n: 5 },
+    { index: 2, count: 3, i: 3, n: 3 },
+    { index: 0, count: 1, i: 1, n: 1 },
+  ])(
+    'shows the sample position 1-based over min(sample_count, 5): index $index of $count => $i/$n',
+    ({ index, count, i, n }) => {
+      const w = mountSms({ preview: preview({ sample_index: index, sample_count: count }) })
+      expect(w.get(sel('sms-preview-sample')).text()).toBe(t('preview.sample', { i, n }))
+    },
+  )
 
   it('next-sample emits; disabled when there is at most one sample', async () => {
     const w = mountSms({ preview: preview() })

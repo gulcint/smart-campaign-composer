@@ -182,6 +182,32 @@ describe('ContentPage streaming (REQ-CNT-04)', () => {
   })
 })
 
+// ui.md §3.14 d2 (D48): an invalid LLM draft over the limit is loaded into the editor as is by
+// content-edit-draft; the counter shows the real count and over-limit.
+describe('ContentPage over-limit draft (REQ-CNT-01, D48)', () => {
+  it('content-edit-draft loads a 406-rune SMS draft untrimmed: 406/160 over-limit, −246', async () => {
+    const long = 'x'.repeat(406)
+    const s = controllableStream()
+    const fetchMock = vi.fn(async () => sseResponse(s.stream))
+    const { w } = await mountContent(
+      { camp: { value: campaign('audience_ready', null) } },
+      { fetch: fetchMock },
+    )
+    await w.get(sel('content-regenerate')).trigger('click')
+    s.push(invalid(1, false, [fieldError('sms.body', 'sms_too_long', 160, 406)]))
+    s.push(delta(2, 'sms', 'body', long))
+    s.push(invalid(2, true, [fieldError('sms.body', 'sms_too_long', 160, 406)], V2))
+    s.close()
+    await vi.waitFor(() => expect(w.find(sel('content-edit-draft')).exists()).toBe(true))
+    await w.get(sel('content-edit-draft')).trigger('click')
+    await flushPromises()
+    expect((w.get(sel('editor-sms-body')).element as HTMLTextAreaElement).value).toBe(long)
+    expect(w.get(sel('char-counter-value-sms-body')).attributes('data-count')).toBe('406')
+    expect(w.get(sel('char-counter-sms-body')).attributes('data-state')).toBe('over-limit')
+    expect(w.get(sel('char-counter-over-sms-body')).text()).toContain('−246')
+  })
+})
+
 describe('ContentPage save (REQ-APR-01, REQ-APR-02, REQ-APR-03)', () => {
   it('sends the full content with X-Expected-Version = latest id; the next save uses the new id', async () => {
     const setup: Setup = { camp: { value: campaign('content_ready', version(V1, 1)) } }
@@ -214,12 +240,13 @@ describe('ContentPage save (REQ-APR-01, REQ-APR-02, REQ-APR-03)', () => {
       },
     }
     const { w } = await mountContent(setup)
-    await typeSMS(w, 'a'.repeat(161))
+    // 150 template runes (D48 caps typing at 160); the server still reports the substituted length.
+    await typeSMS(w, '{{first_name}}' + 'a'.repeat(136))
     await clickSave(w)
     expect(w.get(sel('inline-error-sms-body')).attributes('data-code')).toBe('sms_too_long')
     expect(w.get(sel('editor-save')).attributes('aria-disabled')).not.toBe('true')
     expect((w.get(sel('editor-sms-body')).element as HTMLTextAreaElement).value).toBe(
-      'a'.repeat(161),
+      '{{first_name}}' + 'a'.repeat(136),
     )
   })
 
@@ -403,4 +430,53 @@ describe('ContentPage regenerate and locked states (REQ-CNT-04, REQ-APR-01)', ()
     await typeSMS(w, 'Kaydedilmemiş')
     expect(w.get(sel('content-to-approval')).attributes('aria-disabled')).toBe('true')
   })
+})
+
+// D49 (ui.md §1.1 preview triggers, §3.15; openapi previewContent): sms-preview-next requests
+// sample_index = (i + 1) mod min(sample_count, 5) — the UI walks only the first 5 samples.
+describe('ContentPage next sample (REQ-APR-01, D49)', () => {
+  function requestedIndex(path: string, opts?: { query?: Record<string, string | number> }) {
+    const fromQuery = opts?.query?.sample_index
+    const fromPath = new URLSearchParams(path.split('?')[1] ?? '').get('sample_index')
+    return Number(fromQuery ?? fromPath ?? 0)
+  }
+
+  async function mountWithSample(index: number, count: number) {
+    const requested: number[] = []
+    const a = fakeApi({
+      [`GET ${C}`]: () => campaign('content_ready', version(V1, 1)),
+      [`GET ${C}/preview`]: () => preview({ sample_index: index, sample_count: count }),
+    })
+    const client = {
+      request(method: string, path: string, opts?: { query?: Record<string, string | number> }) {
+        if (method.toUpperCase() === 'GET' && path.split('?')[0]?.endsWith('/preview')) {
+          requested.push(requestedIndex(path, opts))
+        }
+        return a.client.request(method, path, opts as never)
+      },
+    }
+    const r = await mountPage(ContentPage, 'content', {
+      api: client,
+      fetch: vi.fn(async () => sseResponse(controllableStream().stream)),
+    })
+    wrapper = r.wrapper
+    return { w: r.wrapper, requested }
+  }
+
+  it.each([
+    { index: 0, count: 584, want: 1 },
+    { index: 4, count: 584, want: 0 },
+    { index: 2, count: 3, want: 0 },
+  ])(
+    'from sample_index $index of $count, next requests sample_index=$want',
+    async ({ index, count, want }) => {
+      const { w, requested } = await mountWithSample(index, count)
+      expect(requested.length).toBeGreaterThanOrEqual(1)
+      const before = requested.length
+      await w.get(sel('sms-preview-next')).trigger('click')
+      await flushPromises()
+      await vi.waitFor(() => expect(requested.length).toBeGreaterThan(before))
+      expect(requested[requested.length - 1]).toBe(want)
+    },
+  )
 })

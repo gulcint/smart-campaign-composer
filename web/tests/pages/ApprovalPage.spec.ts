@@ -166,3 +166,51 @@ describe('ApprovalPage (REQ-APR-01)', () => {
     )
   })
 })
+
+// D49 (ui.md §1.1 preview triggers, §3.15; openapi previewContent): sms-preview-next requests
+// sample_index = (i + 1) mod min(sample_count, 5) — the UI walks only the first 5 samples.
+describe('ApprovalPage next sample (REQ-APR-01, D49)', () => {
+  function requestedIndex(path: string, opts?: { query?: Record<string, string | number> }) {
+    const fromQuery = opts?.query?.sample_index
+    const fromPath = new URLSearchParams(path.split('?')[1] ?? '').get('sample_index')
+    return Number(fromQuery ?? fromPath ?? 0)
+  }
+
+  async function mountWithSample(index: number, count: number) {
+    const requested: number[] = []
+    const a = fakeApi({
+      [`GET ${C}`]: () => campaign('content_ready', version(V1, 3)),
+      [`GET ${C}/preview`]: () => preview({ sample_index: index, sample_count: count }),
+    })
+    const client = {
+      request(method: string, path: string, opts?: { query?: Record<string, string | number> }) {
+        if (method.toUpperCase() === 'GET' && path.split('?')[0]?.endsWith('/preview')) {
+          requested.push(requestedIndex(path, opts))
+        }
+        return a.client.request(method, path, opts as never)
+      },
+    }
+    const r = await mountPage(ApprovalPage, 'approval', { api: client })
+    wrapper = r.wrapper
+    return { w: r.wrapper, requested }
+  }
+
+  it.each([
+    { index: 0, count: 584, want: 1 },
+    { index: 3, count: 584, want: 4 },
+    { index: 4, count: 584, want: 0 },
+    { index: 2, count: 3, want: 0 },
+    { index: 1, count: 3, want: 2 },
+  ])(
+    'from sample_index $index of $count, next requests sample_index=$want',
+    async ({ index, count, want }) => {
+      const { w, requested } = await mountWithSample(index, count)
+      expect(requested.length).toBeGreaterThanOrEqual(1)
+      const before = requested.length
+      await w.get(sel('sms-preview-next')).trigger('click')
+      await flushPromises()
+      await vi.waitFor(() => expect(requested.length).toBeGreaterThan(before))
+      expect(requested[requested.length - 1]).toBe(want)
+    },
+  )
+})
