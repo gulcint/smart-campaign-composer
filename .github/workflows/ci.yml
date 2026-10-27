@@ -8,7 +8,8 @@ name: ci
 on:
   pull_request:
     # labeled/unlabeled: re-run when the api-breaking-ok label changes.
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # edited: the PR title is the squash subject, so fixing it must re-run pr-policy.
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   push:
     branches: [main]
 
