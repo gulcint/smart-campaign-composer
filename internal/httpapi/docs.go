@@ -1,10 +1,9 @@
 package httpapi
 
 import (
-	"bytes"
 	"embed"
 	"net/http"
-	"time"
+	"strconv"
 )
 
 // Interactive documentation (docs/API.md, DECISIONS.md D36): GET /docs is a Swagger UI page,
@@ -56,8 +55,11 @@ func writeDocFile(w http.ResponseWriter, r *http.Request, contentType, cacheCont
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Content-Security-Policy", docsCSP)
-	// ServeContent sets Content-Length and answers 200; the zero modtime means no Last-Modified.
-	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
+	// The whole body, always: the spec defines only 200 here, so a Range request must not turn
+	// into 206/416/multipart (which http.ServeContent would do). HEAD gets the headers only.
+	h.Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body) //nolint:gosec // embedded read-only files with a fixed content type, no request data
 }
 
 func (a *api) getAPIDocs(w http.ResponseWriter, r *http.Request) {

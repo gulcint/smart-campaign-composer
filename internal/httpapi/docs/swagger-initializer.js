@@ -6,4 +6,6 @@ window.ui = SwaggerUIBundle({
   deepLinking: true,
   presets: [SwaggerUIBundle.presets.apis],
   layout: 'BaseLayout',
+  // No call to validator.swagger.io: it would leave the origin (connect-src 'self') and leak the URL.
+  validatorUrl: null,
 })
