@@ -8,6 +8,9 @@ pre-commit:
     - name: forbidden-files
       run: scripts/hooks/check-forbidden-files.sh
 
+    - name: test-file-names
+      run: scripts/hooks/check-test-files.sh
+
     - name: gitleaks
       run: gitleaks git --pre-commit --staged --redact --no-banner -c .gitleaks.toml
 

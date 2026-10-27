@@ -2,9 +2,10 @@
 //
 // It serves the system endpoints (/healthz, /readyz, /metrics, /api/config), the
 // interactive documentation (/docs, /openapi.yaml; docs.go), the audience slice (campaign
-// create/get/list, segment generation, rule counting) and the cross-cutting behaviour every route shares: X-Request-ID, the 64 KiB body
-// limit, JSON 404/405 errors, error mapping, HTTP metrics and panic recovery. The
-// content, approval and delivery routes are added by the P4/P5 slices.
+// create/get/list, segment generation, rule counting), the content + approval slice (SSE content
+// generation, versions, edits, approval, preview; content.go) and the cross-cutting behaviour every
+// route shares: X-Request-ID, the 64 KiB body limit, JSON 404/405 errors, error mapping, HTTP
+// metrics and panic recovery. The delivery routes are added by the P5 slice.
 package httpapi
 
 import (
@@ -98,6 +99,14 @@ var routeTable = []struct {
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}"}, handlerOf((*api).getCampaign)},
 	{Route{http.MethodPost, "/api/campaigns/{campaign_id}/segment"}, handlerOf((*api).generateSegment)},
 	{Route{http.MethodPost, "/api/segments/count"}, handlerOf((*api).countSegment)},
+
+	// Content + approval slice (P4; content.go).
+	{Route{http.MethodPost, "/api/campaigns/{campaign_id}/content"}, handlerOf((*api).generateContent)},
+	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/content-versions"}, handlerOf((*api).listContentVersions)},
+	{Route{http.MethodPost, "/api/campaigns/{campaign_id}/content-versions"}, handlerOf((*api).editContent)},
+	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/content-versions/{version_id}"}, handlerOf((*api).getContentVersion)},
+	{Route{http.MethodPost, "/api/campaigns/{campaign_id}/approve"}, handlerOf((*api).approveContent)},
+	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/preview"}, handlerOf((*api).previewContent)},
 }
 
 func handlerOf(m func(*api, http.ResponseWriter, *http.Request)) func(*api) http.Handler {
@@ -299,6 +308,11 @@ func (a *api) middleware(next http.Handler) http.Handler {
 				}
 				a.deps.Logger.Error("http handler panic", slog.String("request_id", id),
 					slog.String("method", r.Method), slog.String("path", r.URL.Path))
+				if w.streaming {
+					// An open event stream cannot take a JSON error body or a second status; the
+					// SSE handler reports its own failures as a terminal event.
+					return
+				}
 				writeError(w, r, http.StatusInternalServerError, "internal_error", "internal error")
 			}
 		}()

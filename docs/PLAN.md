@@ -252,7 +252,8 @@ Kodu yazan, review eden ve testi yazan ayrı bağlamlardır; hiçbiri kendi işi
 3. Testler yalnızca sözleşme yüzeylerine yazılır: HTTP API (OpenAPI), SSE olayları (0.5), Go arayüz imzaları, DB'de gözlemlenebilir sonuçlar ve **UI sözleşmesi** (`docs/contracts/ui.md`). Frontend testleri bileşenleri yalnızca sözleşmedeki props ve `data-testid`'ler üzerinden sürer (R2).
 4. CI rol job'ı: `test/*` implementasyona, `feat/*`/`fix/*` testlere dokunamaz.
 5. Çatışmada test koda uydurulmaz: sahip karar verir → mimar `docs/`'u düzeltir → test yazarı testi buna göre günceller, ya da kod düzeltilir.
-6. Dürüst sınır: ajanın dosya okuması her ortamda tam engellenemez; worktree izolasyonu + CI path kontrolü + reviewer'ın "bu test implementasyon detayına mı bağlı?" kontrolü birlikte uygulanır.
+6. Yazmadan önce mevcut testi bul: test yazarı REQ ID'sini yalnızca test yollarında arar (Grep aracı `glob: "*_test.go"` / `path: "web/tests"` ya da hedefi test yolu olan shell `grep`/`rg`; guard `cmd/`, `internal/`, `migrations/`, `web/src/`, `.` ve stdin'i engeller). Test varsa yeni dosya açılmaz, mevcut test genişletilir (§4.5 dosya düzeni).
+7. Dürüst sınır: ajanın dosya okuması her ortamda tam engellenemez; worktree izolasyonu + CI path kontrolü + reviewer'ın "bu test implementasyon detayına mı bağlı?" kontrolü birlikte uygulanır.
 
 ### 3.2 Faz kapısı kontrol listesi
 
@@ -351,6 +352,8 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 | LLM | Yalnızca `llm.Mock` (fixture tabanlı, deterministik stream sırası) |
 | Eşzamanlılık | `-race`; goroutine sızıntısı için `goleak` (VARSAYIM) |
 | Çalıştırma | CI'da `-count=1 -shuffle=on -race`; flaky test karantinaya alınmaz, düzeltilir |
+
+**Test dosyası düzeni:** dosya adı özellik/REQ alanına göre verilir, review turuna göre asla (`round2`, `fix`, `review` ekleri yasak; `scripts/hooks/check-test-files.sh` pre-commit'te reddeder). Test adları ve `// REQ-…` yorumları REQ ID'sini taşır ki grep bulsun. Review bulguları mevcut dosyada yeni table-driven satır veya yeni alt test olur. Yeni dosya yalnızca yeni bir test katmanı ya da henüz dosyası olmayan yeni bir alan için açılır ve `docs/requirements.md` §İzlenebilirlik tablosuna yazılır.
 
 **Kapsam:** domain paketleri için %80 satır (VARSAYIM); asıl ölçü REQ eşlemesinin tam olması. **Fixture:** `testdata/`; golden dosyaları yalnızca test yazarı `-update` ile günceller.
 

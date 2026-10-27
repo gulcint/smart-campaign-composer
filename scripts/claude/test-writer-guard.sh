@@ -5,7 +5,8 @@
 #   Read / Grep         : no implementation paths; Grep must be scoped to allowed roots or *_test.go
 #   Glob                : allowed (file names only, no contents)
 #   Write / Edit        : test paths only
-#   Bash                : allowlist of git / file-listing commands that cannot print implementation
+#   Bash                : allowlist of git / file-listing commands that cannot print implementation;
+#                         grep/rg only with explicit test/docs targets; no substitution or redirection
 # Exit 2 = block; stderr is shown to the agent.
 set -euo pipefail
 set -f
@@ -48,6 +49,10 @@ case "$tool" in
 
   Bash)
     cmd=$(jq -r '.tool_input.command // empty' <<<"$input")
+    # Command substitution, process substitution and redirection would run or read
+    # anything behind an allowed command name (e.g. echo $(cat internal/x.go)).
+    [[ "$cmd" == *'$('* || "$cmd" == *'`'* || "$cmd" == *'<'* || "$cmd" == *'>'* ]] \
+      && block "command substitution and redirection are not allowed (use git commit -m, not a heredoc)"
     while IFS= read -r seg; do
       seg="${seg#"${seg%%[![:space:]]*}"}"
       [[ -z "$seg" ]] && continue
@@ -55,6 +60,38 @@ case "$tool" in
       w=($seg)
       case "${w[0]}" in
         ls|pwd|mkdir|gofmt|echo|wc) ;;
+        grep|rg)
+          # Only test paths and docs (docs/PLAN.md §3.1): every target must be named, relative,
+          # without '..', and inside a test root; no target means stdin or the whole tree.
+          [[ "$seg" == *'$'* ]] && block "variables are not allowed in ${w[0]} targets"
+          targets=() pattern_given=0 opts_done=0 skip=0
+          for a in "${w[@]:1}"; do
+            if (( skip )); then skip=0; continue; fi
+            if (( ! opts_done )); then
+              [[ "$a" =~ ^-[^-]*f ]] && block "${w[0]} -f reads a pattern file from outside test paths"
+              case "$a" in
+                --) opts_done=1; continue ;;
+                --file|--file=*|--pre|--pre=*|--pre-glob*) block "${w[0]} $a can read or run files outside test paths" ;;
+                -e|--regexp) pattern_given=1; skip=1; continue ;;
+                -e*|--regexp=*) pattern_given=1; continue ;;
+                -g|-t|-T|-A|-B|-C|-m|-M|-j|-d|-D|--glob|--iglob|--type|--type-not|--max-count|--context|--after-context|--before-context|--max-columns|--threads|--include|--exclude|--exclude-dir)
+                  skip=1; continue ;;
+                -*) continue ;;
+              esac
+            fi
+            if (( ! pattern_given )); then pattern_given=1; continue; fi
+            targets+=("$a")
+          done
+          (( ${#targets[@]} )) || block "${w[0]} needs explicit test paths (test, testdata, web/tests, docs, *_test.go); stdin and the working directory are not allowed"
+          for t in "${targets[@]}"; do
+            t="${t//\"/}"; t="${t//\'/}"; t="${t#./}"
+            [[ "$t" == /* || "$t" == '~'* || "/$t/" == */../* || "/$t" =~ /\.env ]] \
+              && block "${w[0]} target '$t' is outside the test paths"
+            [[ "$t" =~ ^(test|testdata|web/tests|docs)(/.*)?$ || "$t" =~ (^|/)testdata(/|$) \
+               || "$t" == *_test.go || "$t" == DECISIONS.md ]] \
+              || block "${w[0]} may only search test paths and docs (test, testdata, web/tests, docs, *_test.go, DECISIONS.md), not '$t'"
+          done
+          ;;
         git)
           case "${w[1]:-}" in
             status|add|commit|push|fetch|rev-parse) ;;

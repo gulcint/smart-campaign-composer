@@ -30,4 +30,25 @@ export const api = {
     c.request<Ok<'generateSegment', 200>>('POST', `${campaignPath(id)}/segment`, {
       body: {} satisfies BodyOf<'generateSegment'>,
     }),
+
+  /** editContent — POST /api/campaigns/{campaign_id}/content-versions (REQ-APR-02, REQ-APR-03, D40) */
+  editContent: (c: ApiClient, id: string, body: BodyOf<'editContent'>, expectedVersion: string) =>
+    c.request<Ok<'editContent', 201>>('POST', `${campaignPath(id)}/content-versions`, {
+      body,
+      headers: { 'X-Expected-Version': expectedVersion },
+    }),
+
+  /** previewContent — GET /api/campaigns/{campaign_id}/preview (REQ-APR-01, REQ-CNT-03) */
+  previewContent: (c: ApiClient, id: string, sampleIndex = 0) =>
+    c.request<Ok<'previewContent', 200>>('GET', `${campaignPath(id)}/preview`, {
+      query: { sample_index: sampleIndex },
+    }),
+
+  /** approveContent — POST /api/campaigns/{campaign_id}/approve (REQ-APR-01) */
+  approveContent: (c: ApiClient, id: string, body: BodyOf<'approveContent'>) =>
+    c.request<Ok<'approveContent', 200>>('POST', `${campaignPath(id)}/approve`, { body }),
+
+  /** sendCampaign — POST /api/campaigns/{campaign_id}/send (REQ-SND-01) */
+  sendCampaign: (c: ApiClient, id: string, body: BodyOf<'sendCampaign'>) =>
+    c.request<Ok<'sendCampaign', 202>>('POST', `${campaignPath(id)}/send`, { body }),
 }

@@ -12,16 +12,11 @@ package contract
 //     once by the E2E suite under OPENAPI_VALIDATE=strict (test/e2e TestMain);
 //   - at a phase gate (slice -> main) the list may not contain that phase's operations.
 //
-// Phase P3 (audience slice) implements, in openapi.yaml order: getHealthz, getReadyz, getMetrics,
+// Phase P3 (audience slice) implemented, in openapi.yaml order: getHealthz, getReadyz, getMetrics,
 // getConfig, createCampaign, listCampaigns, getCampaign, generateSegment, countSegment.
+// Phase P4 (content + approval slice) implements generateContent, listContentVersions, editContent,
+// getContentVersion, approveContent and previewContent (test/e2e/content_test.go calls each one).
 var NotImplemented = map[string]string{
-	// P4 — content + approval slice (REQ-CNT, REQ-APR, REQ-UI-01).
-	"generateContent":     "P4",
-	"listContentVersions": "P4",
-	"editContent":         "P4",
-	"getContentVersion":   "P4",
-	"approveContent":      "P4",
-	"previewContent":      "P4",
 	// P5 — send + tracking slice (REQ-SND, REQ-TRK-01).
 	"sendCampaign":         "P5",
 	"getCampaignStatus":    "P5",
