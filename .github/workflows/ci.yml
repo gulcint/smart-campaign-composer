@@ -135,15 +135,24 @@ jobs:
     env:
       # A boolean derived from PR labels, passed through env (never interpolated into the script).
       API_BREAKING_OK: ${{ contains(github.event.pull_request.labels.*.name, 'api-breaking-ok') }}
+      # Base branch of the PR (e.g. slice/p3-audience); empty on push. Used via env only.
+      PR_BASE_REF: ${{ github.base_ref }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # api-breaking compares against origin/main
+          fetch-depth: 0 # full history and all branches, so origin/<base> exists
+      - name: choose the api-breaking base
+        run: |
+          # A PR is compared with its own base branch; a push to main with origin/main (script default).
+          if [ -n "$PR_BASE_REF" ]; then
+            git fetch --no-tags origin "+refs/heads/$PR_BASE_REF:refs/remotes/origin/$PR_BASE_REF"
+            echo "API_BASE=origin/$PR_BASE_REF" >> "$GITHUB_ENV"
+          fi
       - name: api-lint (redocly, pinned image, errors and warnings fail)
         run: make api-lint
       - name: check-contract-copies (embedded spec == docs/contracts)
         run: make check-contract-copies
-      - name: api-breaking (oasdiff vs origin/main; label api-breaking-ok lets intentional changes through)
+      - name: api-breaking (oasdiff vs the PR base, origin/main on push; label api-breaking-ok lets intentional changes through)
         run: |
           if [ "$API_BREAKING_OK" = "true" ]; then
             make api-breaking || echo "::warning::breaking API changes accepted by the api-breaking-ok label; justify them in the PR and DECISIONS.md"
