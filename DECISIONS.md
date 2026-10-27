@@ -2,7 +2,7 @@
 
 Önemli kararlar ve nedenleri. Her faz kapısında güncellenir (`docs/PLAN.md` §3.2). Her karar: **bağlam → karar → neden → alternatifler/bedel**. "Doküman" case dokümanıdır; dokümanda olmayan her şey VARSAYIM olarak işaretlidir. Ayrıntılı gereksinimler `docs/requirements.md`, ad sözleşmeleri `docs/contracts/`.
 
-Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D36–D45).
+Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D36–D45; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
 
 ---
 
@@ -167,11 +167,11 @@ Sahibin P1 kararı (README §9 #5) REQ-CNT-05'e açıkça yazıldı: değişken 
 ### D39 — Aynı sürümü tekrar onaylamak idempotenttir ve denetimi tekrarlamaz
 `approveContent`, durum zaten `approved` ve sürüm hâlâ en son ise 200 ve değişmemiş kampanyayı döner; yeni `approvals` satırı yok, `approved_at` sabit, onay-anı en kötü durum denetimi yeniden çalışmaz. Neden: çift tıklama/yeniden deneme güvenli olmalı, ama bu denetim müşteri verisi değiştiyse bir onayı sessizce 422'ye çevirirdi. Bedel: onaydan sonra veri değişimi ancak onay-anında (ilk onay) yakalanır; gönderim anındaki alıcı bazlı denetim (REQ-CNT-05) ikinci güvencedir.
 
-### D40 — Düzenlemede iyimser eşzamanlılık belirteci yok; kilitle sıralanır
-- **Bağlam:** İki düzenleme veya düzenleme-onay yarışı olabilir.
-- **Karar:** Tüm yazmalar `campaigns` satırı `FOR UPDATE` altında tek transaction'dır; iki düzenleme sırayla başarılı olur (ardışık numara, sonuncusu en son), onay-düzenleme yarışı ya onay-sonra-düşer ya düzenleme-sonra-onay-409'dur. Kimlik yoktur, 500 üretilmez. `expected_version` alanı eklenmedi.
-- **Neden:** Gövde şeması LLM aracıyla paylaşılan kapalı bir şema (`content.schema.json`); ona alan eklemek model şemasını ve doğrulamayı karıştırırdı. Geri alınamaz eylemi (onay) zaten sürüm kimliğine bağlıyız (`stale_content_version`); sürümler değişmez olduğundan "kayıp güncelleme" veri kaybı değil, geçmişte kalan bir sürümdür. Tek kullanıcılı yerel demo.
-- **Bedel:** Eski bir sekmedeki düzenleme başka sekmedeki yeni sürümün üstüne yazılabilir (eskisi geçmişte durur). Gerçek çok kullanıcılı üründe `If-Match`/`expected_version` gerekir.
+### D40 — Düzenlemede iyimser eşzamanlılık: `X-Expected-Version` zorunlu (sahip kararı)
+- **Bağlam:** İlk taslak "iyimser belirteç yok, kilitle sıralanır" demişti (sonuncu yazan kazanır, eskiler geçmişte kalır). Sahip bunu reddetti: eski bir sekme veya açık bir editör, başkasının (ya da yeniden üretimin) yeni sürümünü sessizce geçersiz kılmamalı.
+- **Karar:** `editContent` isteği `X-Expected-Version` **başlığını zorunlu** taşır: kampanyanın en son `validated` sürümünün kimliği (güncel segment revizyonunda en yüksek `version_number`), yoksa `none`. `invalid` taslak sürüm sayılmaz: taslaktan düzeltme yapan editör son `validated` kimliğini (yoksa `none`) gönderir. Değer güncel en son sürümden farklıysa **409 `content_edit_conflict`**, hiçbir şey saklanmaz, gövde `error.current_version {id, version_number}` taşır (UI "yenile" sunar). Karşılaştırma ve ekleme tek transaction'da, `campaigns` satırı kilidi altında yapılır. Başlık eksik → 422 `schema_violation`, biçim bozuk → 422 `invalid_value` (yol `header.X-Expected-Version`). Yeniden üretim yeni `validated` sürüm yarattığı için açık editör 409 alır; başarısız yeniden üretim almaz. Başarılı bir isteğin ağ yüzünden tekrarı da 409'dur (sunucu tekilleştirmez); UI güncel sürümün içeriğini kendi metniyle karşılaştırıp eşitse başarı sayar.
+- **Neden başlık, zarf değil:** Gövde `content.schema.json` (LLM aracı ve düzenleme ortak şeması) olarak kalır; zarf alan yollarını (`sms.body` → `content.sms.body`) ve UI/test eşlemelerini değiştirirdi. `If-Match` değil: standart 412/ETag anlamı ve tırnaklı değer gerektirirdi; ayrı kod ve gövde istendi. Ayrı kod (`stale_content_version` yeniden kullanılmadı): onay/gönderimdeki "bu sürüm artık en son değil" anlamıyla karışmasın ve gövdesi `current_version` taşısın.
+- **Bedel:** `editContent` istek sözleşmesi kırıcı değişti (zorunlu başlık; `oasdiff` ERR, PR `api-breaking-ok` ister — uç nokta henüz uygulanmadığı için istemci yok); her istemci (UI, testler) taban sürümü izlemek zorunda; çakışma durumu için ek UI (§3.14 g). Eski ilk-taslak kararı (kilitle sıralama, iki düzenleme de başarılı) geçersizdir.
 
 ### D41 — Üretim kilidi `sendCampaign`'i de kapsar
 `approved` bir kampanyada yeniden üretim akarken başka bir istemci gönderimi başlatırsa durum `sending` olurdu ve akış sonunda `content_validated` geçişi (yalnız `audience_ready|content_ready|approved`'dan geçerli) başarısız olurdu. Karar: kilit tutulurken gönderim de 409 `generation_in_progress` alır (openapi `SendConflict`'e eklendi; `oasdiff` yalnız `response-property-enum-value-added` uyarısı verir, kırıcı değildir). Bedel: takılı bir akış gönderimi en çok 120 sn engeller.
@@ -200,7 +200,6 @@ PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `in
 | Gerçek Claude istemcisi için otomatik test yok | Sözleşme gerçek istemciyi test binary'sinde yasaklar; strict araçlar ve onarım turu elle doğrulandı (D23, D32) |
 | `seed.Generate` 9999'dan fazla kullanıcıyı kabul eder | Yalnız komut satırı reddeder (telefon bloğu 4 hane); mimar `go-interfaces.md`'ye hata ekleyebilir |
 | Manifest sayıları `segment.Match` ile değil el yazısı değerlendirmeyle | P3'te `segment.Match`'e geçilecek, manifest aynı kalmalı |
-| Düzenlemede iyimser eşzamanlılık yok (D40) | Eski sekmeden kaydedilen düzenleme yeni sürümün üstüne yazılabilir; sürümler değişmez, geçmişte kalır. Çok kullanıcılı üründe `expected_version` gerekir |
 | Email gövdesi 5000 sınırı onayda yeniden denetlenmez (D36) | Doğrulama anında denetlenir; yalnız SMS ve konu için onay-anı denetimi var |
 | Kampanya kilidi tek süreç içinde çalışır | `generateSegment` kilidi süreç içidir; birden fazla API kopyası planlanırsa veritabanı kilidine (`SaveSegment`'in `FOR UPDATE`'i zaten korur) taşınmalı |
 | Kitle taraması eşleşen satırları Go'ya çeker | Seed ölçeğinde (5000) yeterli; üç en uzun değer SQL'de toplanarak ölçeklenebilir |

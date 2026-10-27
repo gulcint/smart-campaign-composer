@@ -310,15 +310,31 @@ paths:
         longest values (REQ-CNT-01/05). Invalid content => 422 and NOTHING is stored; field paths are
         `sms.body`, `email.subject`, `email.body` (a missing or unknown key is `schema_violation` at that
         path, an empty/whitespace-only value is `required`; at most one error per field).
+        Optimistic concurrency (owner decision, DECISIONS D40): the REQUIRED header `X-Expected-Version`
+        names the version the editor is based on: the id of the campaign's latest content version
+        (`Campaign.latest_content_version.id`: highest version_number among VALIDATED versions of the
+        current segment revision) as the client last saw it, or the literal `none` when there was none.
+        An `invalid` draft never counts as a version here: an editor seeded from an invalid draft sends the
+        latest validated id (or `none`). Missing header => 422 `schema_violation`, path
+        `header.X-Expected-Version`; neither a UUID nor `none` => 422 `invalid_value`, same path (both
+        before the body is read). If it differs from the CURRENT latest version (read under the campaign
+        row lock, in the same transaction that inserts) => 409 `content_edit_conflict` whose body carries
+        `error.current_version` {id, version_number} (both null when none exists); NOTHING is stored.
+        A regeneration (`validated`) or another edit creates a new latest version, so an editor open on the
+        old one gets this 409; a failed regeneration (`invalid` draft) does not. Retrying an edit that
+        actually succeeded also yields 409 (its base is no longer latest): the server never de-duplicates;
+        the client compares the current version's content with its text (ui.md §3.23).
         Use-case order: 404 `campaign_not_found`, 409 `generation_in_progress`, 409 `invalid_state`
-        (draft, sending, completed), then validation. Allowed states: audience_ready, content_ready,
-        approved. On success, in one transaction: new version
+        (draft, sending, completed), 409 `content_edit_conflict`, then content validation (422). Allowed
+        states: audience_ready, content_ready, approved. On success, in one transaction: new version
         (status validated, source edit, version_number = highest existing number of ANY status + 1,
         never reused, not reset by a new segment revision), state `content_ready`,
         active approval revoked (`content_changed`). Identical text still creates a new version.
-        Two racing edits both succeed with consecutive numbers (serialized by the campaign row lock);
-        the later one is the latest. Existing versions are never modified.
+        Two racing edits from the same base: one succeeds, the other gets 409 `content_edit_conflict`
+        (serialized by the campaign row lock). Existing versions are never modified.
         The response carries `worst_case` (post-substitution lengths) for the UI's second counter line.
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
       requestBody:
         required: true
         content:
@@ -332,7 +348,7 @@ paths:
               schema: { $ref: '#/components/schemas/ContentVersion' }
         '400': { $ref: '#/components/responses/MalformedRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/GenerationConflict' }
+        '409': { $ref: '#/components/responses/EditConflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -595,6 +611,17 @@ components:
       required: false
       description: '>= 0, default 0. Negative => 422 invalid_value (path query.offset).'
       schema: { type: integer, minimum: 0, default: 0 }
+    ExpectedVersion:
+      name: X-Expected-Version
+      in: header
+      required: true
+      description: |
+        editContent precondition: id of the latest content version the editor is based on, or `none`
+        (see editContent). Missing => 422 `schema_violation`; malformed => 422 `invalid_value`
+        (path `header.X-Expected-Version`); mismatch => 409 `content_edit_conflict`.
+      schema:
+        type: string
+        pattern: '^(none|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$'
     MockScenario:
       name: X-Mock-LLM-Scenario
       in: header
@@ -654,6 +681,22 @@ components:
             allOf:
               - $ref: '#/components/schemas/ErrorResponse'
               - properties: { error: { properties: { code: { enum: [invalid_state, content_not_validated, stale_content_version, generation_in_progress] }, fields: { not: {} } } } }
+    EditConflict:
+      description: |
+        editContent 409: `invalid_state`, `generation_in_progress`, or `content_edit_conflict` (stale
+        `X-Expected-Version`); the last one carries `error.current_version`.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties:
+                  error:
+                    oneOf:
+                      - required: [code]
+                        properties: { code: { enum: [invalid_state, generation_in_progress] }, fields: { not: {} }, current_version: { not: {} } }
+                      - required: [code, current_version]
+                        properties: { code: { const: content_edit_conflict }, fields: { not: {} }, current_version: { type: object } }
     GenerationConflict:
       description: '`invalid_state` or `generation_in_progress`.'
       content:
@@ -1213,11 +1256,19 @@ components:
             code:
               type: string
               enum: [malformed_request, not_found, method_not_allowed, campaign_not_found, content_version_not_found, customer_not_found,
-                     invalid_state, content_not_validated, stale_content_version, generation_in_progress,
+                     invalid_state, content_not_validated, stale_content_version, content_edit_conflict, generation_in_progress,
                      payload_too_large, validation_failed, llm_invalid_output, llm_unavailable, internal_error]
             message: { type: string, description: 'English; never contains secrets, SQL or DB error text' }
             fields:
               type: array
               description: Present (non-empty) for validation_failed and llm_invalid_output; absent otherwise (pinned per response in components.responses).
               items: { $ref: '#/components/schemas/FieldError' }
+            current_version:
+              description: 'Present only for `content_edit_conflict` (the CURRENT latest validated version of the campaign; both members null when it has none), so the client can offer a reload.'
+              type: object
+              additionalProperties: false
+              required: [id, version_number]
+              properties:
+                id: { type: [string, 'null'], format: uuid }
+                version_number: { type: [integer, 'null'], minimum: 1 }
             request_id: { type: string, minLength: 1, description: Same value as the X-Request-ID response header }

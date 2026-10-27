@@ -72,7 +72,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 
 `fields` yalnız `validation_failed` ve `llm_invalid_output`'ta bulunur (boş olmayan dizi). `message` asla sır, SQL veya DB hata metni içermez.
 
-### 5.1 Üst düzey `error.code` (kapalı liste, 15)
+### 5.1 Üst düzey `error.code` (kapalı liste, 16)
 
 | Kod | HTTP | Ne zaman |
 |---|---|---|
@@ -85,6 +85,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `invalid_state` | 409 | Kampanya durumu işleme izin vermiyor (onaysız gönderim, `sending`/`completed`'da düzenleme/üretim, ikinci gönderim, …) |
 | `content_not_validated` | 409 | `validated` olmayan sürümü onaylama/önizleme |
 | `stale_content_version` | 409 | En son sürüm olmayanı onaylama; onaylanandan farklı sürümle gönderim |
+| `content_edit_conflict` | 409 | `editContent`: `X-Expected-Version` güncel en son sürümle eşleşmiyor; gövde `error.current_version {id, version_number}` taşır |
 | `generation_in_progress` | 409 | Aynı kampanyada segment/içerik üretimi sürerken üretim, içerik düzenleme, onay veya gönderim isteği (kilit istemci koptuğunda veya en geç 120 sn sonra bırakılır) |
 | `payload_too_large` | 413 | Gövde > 64 KiB |
 | `validation_failed` | 422 | Brief, içerik, segment kuralı, sorgu parametresi (`invalid_value`, path `query.<ad>`), senaryo başlığı veya onay-anı en kötü durum doğrulaması |
@@ -127,6 +128,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `*validation.Error` | 422 `validation_failed` (fields = `Fields`) |
 | `campaign.ErrCampaignNotFound` / `ErrContentVersionNotFound` / `ErrCustomerNotFound` | 404 ilgili kod |
 | `campaign.ErrInvalidState` / `ErrContentNotValidated` / `ErrStaleContentVersion` / `ErrGenerationInProgress` | 409 ilgili kod |
+| `*campaign.EditConflictError` (`errors.Is(err, campaign.ErrContentEditConflict)`) | 409 `content_edit_conflict` + `error.current_version` |
 | `composer.ErrInvalidOutput` | 502 `llm_invalid_output` (fields = son denemenin hataları) |
 | `llm.ErrUnavailable` | 502 `llm_unavailable` |
 | (router) bilinmeyen yol / desteklenmeyen metot | 404 `not_found` / 405 `method_not_allowed` |
@@ -134,7 +136,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 
 ### 5.4 Kontrol sırası ve P4 hata matrisi
 
-**Genel sıra** (P3'te uygulandı; her işlemde ilk başarısızlık kazanır): (1) path'teki UUID biçimsiz → 404 `campaign_not_found`; (2) yalnız `generateSegment`/`generateContent`: mock modunda bilinmeyen `X-Mock-LLM-Scenario` → 422 `invalid_value` (`header.X-Mock-LLM-Scenario`); (3) sorgu/gövde: okunamaz, JSON değil veya `Content-Type` JSON değil → 400; > 65536 bayt → 413; bilinmeyen/eksik/yanlış tipli alan veya biçimsiz kimlik → 422; (4) kullanım durumu: bilinmeyen kampanya → 404, ardından işlemin kendi sırası (aşağıda ve openapi açıklamalarında). Dolayısıyla bilinmeyen kampanyaya biçimsiz gövde gönderilirse 404 değil 400/413/422 döner.
+**Genel sıra** (P3'te uygulandı; her işlemde ilk başarısızlık kazanır): (1) path'teki UUID biçimsiz → 404 `campaign_not_found`; (2) yalnız `generateSegment`/`generateContent`: mock modunda bilinmeyen `X-Mock-LLM-Scenario` → 422 `invalid_value` (`header.X-Mock-LLM-Scenario`); (2b) yalnız `editContent`: `X-Expected-Version` başlığı eksik → 422 `schema_violation`, UUID/`none` değil → 422 `invalid_value` (yol `header.X-Expected-Version`); (3) sorgu/gövde: okunamaz, JSON değil veya `Content-Type` JSON değil → 400; > 65536 bayt → 413; bilinmeyen/eksik/yanlış tipli alan veya biçimsiz kimlik → 422; (4) kullanım durumu: bilinmeyen kampanya → 404, ardından işlemin kendi sırası (aşağıda ve openapi açıklamalarında). Dolayısıyla bilinmeyen kampanyaya biçimsiz gövde gönderilirse 404 değil 400/413/422 döner.
 
 P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
 
@@ -150,8 +152,8 @@ P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
 | | 200 SSE, son `invalid` | `invalid_json`, `schema_violation`, `truncated_output`, `no_tool_call` (yol alan adı veya `""`); `sms_too_long`, `subject_too_long`, `email_body_too_long`, `unknown_variable`, `malformed_variable`, `required`; `llm_unavailable`, `internal_error` (yol `""`) | `StreamingText` `invalid` |
 | `editContent` | 400, 413 | `generateContent` ile aynı | toast / satır içi |
 | | 404 `campaign_not_found` | | sayfa |
-| | 409 `generation_in_progress` › `invalid_state` | `invalid_state`: `draft`, `sending`, `completed` | toast |
-| | 422 `validation_failed` | `schema_violation` (eksik/fazla/yanlış tipli alan; yol alan veya fazla anahtar adı), `required` (boş/yalnız boşluk), `malformed_variable`, `unknown_variable`, `sms_too_long`, `subject_too_long`, `email_body_too_long` (yollar `sms.body`, `email.subject`, `email.body`) | satır içi |
+| | 409 `generation_in_progress` › `invalid_state` › `content_edit_conflict` | `invalid_state`: `draft`, `sending`, `completed`; `content_edit_conflict`: `X-Expected-Version` ≠ güncel en son `validated` sürüm (`error.current_version`) | toast / `editor-conflict` |
+| | 422 `validation_failed` | `schema_violation` (yol `header.X-Expected-Version`: başlık eksik), `invalid_value` (aynı yol: biçim bozuk); içerik: `schema_violation` (eksik/fazla/yanlış tipli alan; yol alan veya fazla anahtar adı), `required` (boş/yalnız boşluk), `malformed_variable`, `unknown_variable`, `sms_too_long`, `subject_too_long`, `email_body_too_long` (yollar `sms.body`, `email.subject`, `email.body`) | satır içi |
 | `approveContent` | 400, 413 | | toast |
 | | 404 `campaign_not_found` › `content_version_not_found` | sürüm yok veya başka kampanyanın | sayfa / toast |
 | | 409 `generation_in_progress` › `content_not_validated` › `invalid_state` › `stale_content_version` | sıra openapi `approveContent`; `invalid_state`: `content_ready`/`approved` dışı | toast; `stale` → `ApprovalBar stale` |
@@ -271,7 +273,7 @@ Hepsi `DECISIONS.md`'ye gerekçesiyle yazılır.
 13. **HTTP 200 sonrası `llm_unavailable`**: düzeltme denemesi yok, son `invalid`, durum değişmez.
 14. Sahte LLM'in adı her yerde **`llm.Mock`**.
 15. **OpenAPI elle yazılan doğruluk kaynağıdır; kod ona uyar** (P3, sahip onayı). Spec çok dosyalı kalır (`openapi.yaml` + `schemas/*.schema.json`, göreli `$ref`); Redocly ve libopenapi-validator ikisi de demetlemeden çözer (P3'te denendi), bu yüzden `make api-bundle` yok. Testler spec'i diskten okur (`OPENAPI_SPEC_PATH`, konteynerde `/src/docs/contracts/openapi.yaml`); `go:embed` `../docs`'u gömemediği için `internal/httpapi/openapi/` altında birebir kopya tutulur ve `make check-contract-copies` `cmp` ile denetler ([go-interfaces §httpapi](go-interfaces.md#internalhttpapi)). Kapılar §11'de.
-16. **P4 sözleşme sertleştirmesi** (`DECISIONS.md` D36–D45): `Parse` yapı / `Validate` içerik ayrımı ve `required`; değişken söz dizimi tablosu; en kötü durum kümesi = eşleşen tüm müşteriler; sürümler değişmez, numara `invalid` taslaklar dahil artar; aynı sürümü tekrar onaylamak idempotent (denetim tekrarlanmaz); düzenlemede `expected_version` yok (kilitle sıralama); üretim kilidi `sendCampaign`'i de kapsar; SSE olay şemaları openapi bileşeni; kontrol sırası §5.4; içerik akışı sonuçlarının test katmanları (llm-tools §3.5); sayfa kompozisyonları (ui.md §3.23–3.24).
+16. **P4 sözleşme sertleştirmesi** (`DECISIONS.md` D36–D45): `Parse` yapı / `Validate` içerik ayrımı ve `required`; değişken söz dizimi tablosu; en kötü durum kümesi = eşleşen tüm müşteriler; sürümler değişmez, numara `invalid` taslaklar dahil artar; aynı sürümü tekrar onaylamak idempotent (denetim tekrarlanmaz); düzenlemede **zorunlu** `X-Expected-Version` (iyimser eşzamanlılık, sahip kararı) ve `content_edit_conflict`; üretim kilidi `sendCampaign`'i de kapsar; SSE olay şemaları openapi bileşeni; kontrol sırası §5.4; içerik akışı sonuçlarının test katmanları (llm-tools §3.5); sayfa kompozisyonları (ui.md §3.23–3.24).
 
 ## 10. Açık noktalar
 

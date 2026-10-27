@@ -226,14 +226,28 @@ export interface paths {
          *     longest values (REQ-CNT-01/05). Invalid content => 422 and NOTHING is stored; field paths are
          *     `sms.body`, `email.subject`, `email.body` (a missing or unknown key is `schema_violation` at that
          *     path, an empty/whitespace-only value is `required`; at most one error per field).
+         *     Optimistic concurrency (owner decision, DECISIONS D40): the REQUIRED header `X-Expected-Version`
+         *     names the version the editor is based on: the id of the campaign's latest content version
+         *     (`Campaign.latest_content_version.id`: highest version_number among VALIDATED versions of the
+         *     current segment revision) as the client last saw it, or the literal `none` when there was none.
+         *     An `invalid` draft never counts as a version here: an editor seeded from an invalid draft sends the
+         *     latest validated id (or `none`). Missing header => 422 `schema_violation`, path
+         *     `header.X-Expected-Version`; neither a UUID nor `none` => 422 `invalid_value`, same path (both
+         *     before the body is read). If it differs from the CURRENT latest version (read under the campaign
+         *     row lock, in the same transaction that inserts) => 409 `content_edit_conflict` whose body carries
+         *     `error.current_version` {id, version_number} (both null when none exists); NOTHING is stored.
+         *     A regeneration (`validated`) or another edit creates a new latest version, so an editor open on the
+         *     old one gets this 409; a failed regeneration (`invalid` draft) does not. Retrying an edit that
+         *     actually succeeded also yields 409 (its base is no longer latest): the server never de-duplicates;
+         *     the client compares the current version's content with its text (ui.md §3.23).
          *     Use-case order: 404 `campaign_not_found`, 409 `generation_in_progress`, 409 `invalid_state`
-         *     (draft, sending, completed), then validation. Allowed states: audience_ready, content_ready,
-         *     approved. On success, in one transaction: new version
+         *     (draft, sending, completed), 409 `content_edit_conflict`, then content validation (422). Allowed
+         *     states: audience_ready, content_ready, approved. On success, in one transaction: new version
          *     (status validated, source edit, version_number = highest existing number of ANY status + 1,
          *     never reused, not reset by a new segment revision), state `content_ready`,
          *     active approval revoked (`content_changed`). Identical text still creates a new version.
-         *     Two racing edits both succeed with consecutive numbers (serialized by the campaign row lock);
-         *     the later one is the latest. Existing versions are never modified.
+         *     Two racing edits from the same base: one succeeds, the other gets 409 `content_edit_conflict`
+         *     (serialized by the campaign row lock). Existing versions are never modified.
          *     The response carries `worst_case` (post-substitution lengths) for the UI's second counter line.
          */
         post: operations["editContent"];
@@ -792,11 +806,17 @@ export interface components {
         ErrorResponse: {
             error: {
                 /** @enum {string} */
-                code: "malformed_request" | "not_found" | "method_not_allowed" | "campaign_not_found" | "content_version_not_found" | "customer_not_found" | "invalid_state" | "content_not_validated" | "stale_content_version" | "generation_in_progress" | "payload_too_large" | "validation_failed" | "llm_invalid_output" | "llm_unavailable" | "internal_error";
+                code: "malformed_request" | "not_found" | "method_not_allowed" | "campaign_not_found" | "content_version_not_found" | "customer_not_found" | "invalid_state" | "content_not_validated" | "stale_content_version" | "content_edit_conflict" | "generation_in_progress" | "payload_too_large" | "validation_failed" | "llm_invalid_output" | "llm_unavailable" | "internal_error";
                 /** @description English; never contains secrets, SQL or DB error text */
                 message: string;
                 /** @description Present (non-empty) for validation_failed and llm_invalid_output; absent otherwise (pinned per response in components.responses). */
                 fields?: components["schemas"]["FieldError"][];
+                /** @description Present only for `content_edit_conflict` (the CURRENT latest validated version of the campaign; both members null when it has none), so the client can offer a reload. */
+                current_version?: {
+                    /** Format: uuid */
+                    id: string | null;
+                    version_number: number | null;
+                };
                 /** @description Same value as the X-Request-ID response header */
                 request_id: string;
             };
@@ -983,6 +1003,30 @@ export interface components {
                 };
             };
         };
+        /**
+         * @description editContent 409: `invalid_state`, `generation_in_progress`, or `content_edit_conflict` (stale
+         *     `X-Expected-Version`); the last one carries `error.current_version`.
+         */
+        EditConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"] & {
+                    error?: {
+                        /** @enum {unknown} */
+                        code: "invalid_state" | "generation_in_progress";
+                        fields?: unknown;
+                        current_version?: unknown;
+                    } | {
+                        /** @constant */
+                        code: "content_edit_conflict";
+                        fields?: unknown;
+                        current_version: Record<string, never>;
+                    };
+                };
+            };
+        };
         /** @description `invalid_state` or `generation_in_progress`. */
         GenerationConflict: {
             headers: {
@@ -1136,6 +1180,12 @@ export interface components {
         Limit: number;
         /** @description >= 0, default 0. Negative => 422 invalid_value (path query.offset). */
         Offset: number;
+        /**
+         * @description editContent precondition: id of the latest content version the editor is based on, or `none`
+         *     (see editContent). Missing => 422 `schema_violation`; malformed => 422 `invalid_value`
+         *     (path `header.X-Expected-Version`); mismatch => 409 `content_edit_conflict`.
+         */
+        ExpectedVersion: string;
         /**
          * @description Honored ONLY when the effective LLM provider is `mock`; ignored when `claude`.
          *     Unknown value in mock mode => 422 validation_failed, field path `header.X-Mock-LLM-Scenario`,
@@ -1483,7 +1533,14 @@ export interface operations {
     editContent: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /**
+                 * @description editContent precondition: id of the latest content version the editor is based on, or `none`
+                 *     (see editContent). Missing => 422 `schema_violation`; malformed => 422 `invalid_value`
+                 *     (path `header.X-Expected-Version`); mismatch => 409 `content_edit_conflict`.
+                 */
+                "X-Expected-Version": components["parameters"]["ExpectedVersion"];
+            };
             path: {
                 campaign_id: components["parameters"]["CampaignId"];
             };
@@ -1506,7 +1563,7 @@ export interface operations {
             };
             400: components["responses"]["MalformedRequest"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["GenerationConflict"];
+            409: components["responses"]["EditConflict"];
             413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["ValidationFailed"];
             500: components["responses"]["InternalError"];

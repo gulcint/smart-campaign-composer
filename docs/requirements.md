@@ -55,7 +55,7 @@ Kampanya düzeyinde `failed` durumu **yoktur**; tek tek teslimat hataları `fail
 | Kod | Ne zaman |
 |---|---|
 | 404 | Bilinmeyen kampanya |
-| 409 | Durum çatışması: onaysız gönderim; `validated` olmayan içeriği onaylama; son sürüm olmayanı onaylama; `sending`/`completed` durumunda düzenleme; onaydan sonra eski sürümle gönderim; aynı kampanyada üretim sürerken üretim/düzenleme/onay/gönderim isteği (`generation_in_progress`) |
+| 409 | Durum çatışması: bayat taban sürümle düzenleme (`content_edit_conflict`); onaysız gönderim; `validated` olmayan içeriği onaylama; son sürüm olmayanı onaylama; `sending`/`completed` durumunda düzenleme; onaydan sonra eski sürümle gönderim; aynı kampanyada üretim sürerken üretim/düzenleme/onay/gönderim isteği (`generation_in_progress`) |
 | 413 | İstek gövdesi 64 KiB'tan büyük |
 | 422 | Doğrulama hatası: boş veya çok uzun brief, geçersiz içerik, izinsiz değişken, limit aşımı (onay anında dahil) |
 | 502 | LLM'den, düzeltme denemesinden sonra bile geçerli çıktı alınamadı veya LLM erişilemiyor. Akış (SSE) uç noktalarında HTTP 200 sonrası bunun karşılığı son `invalid` olayıdır |
@@ -157,6 +157,7 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 
 - Onaylanmamış kampanyada gönderim isteği **409** döner ve hiçbir teslimat kaydı oluşmaz.
 - Pazarlamacı SMS gövdesini ve email konusu/gövdesini düzenleyebilir; her düzenleme yeni bir içerik sürümü üretir.
+- **Düzenleme iyimser eşzamanlıdır (sahip kararı):** düzenleme isteği, düzenlemenin dayandığı sürümü `X-Expected-Version` başlığıyla bildirmek **zorundadır** (kampanyanın en son `validated` sürümünün kimliği, yoksa `none`; `invalid` taslak sürüm sayılmaz). Başlık eksikse 422, biçimi bozuksa 422; güncel en son sürümden farklıysa **409 `content_edit_conflict`** döner, hiçbir sürüm saklanmaz ve gövde güncel sürümün kimliğini ve numarasını (`error.current_version`) taşır. Aynı isteği başarıdan sonra tekrarlamak da 409'dur (sunucu tekilleştirmez).
 - Önizleme, bir örnek alıcı için render edilmiş içeriği gösterir. Örnek alıcı deterministiktir: kuralla eşleşen kümenin müşteri kimliğine (UUID metin sırası) göre `sample_index`'inci üyesi (varsayılan 0); aynı istek her zaman aynı alıcıyı ve aynı çıktıyı verir. Çıktı düz metindir; email gövdesinin HTML karşılığı yalnız backend'in kaçışlayarak ürettiği `email.html`'dir (REQ-UI-01).
 
 ### REQ-APR-02 — Düzenlenen içerik yeniden doğrulanır · Faz P4 · [DOK çıkarımı]
@@ -168,7 +169,7 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 - Onay kaydı bir içerik sürümüne bağlıdır; onay isteği sürüm kimliğini taşır. Sürümler **değişmezdir**: düzenleme veya yeniden üretim eskisini güncellemez, yeni sürüm ekler; eski sürümler silinmez ve listelenebilir. `version_number` kampanya başına 1'den artar, yeniden kullanılmaz, segment yeniden üretilince sıfırlanmaz ve saklanan `invalid` taslaklar da numara tüketir (doğrulanmış sürümlerde boşluk olabilir).
 - Yalnız kampanyanın **en son doğrulanmış** sürümü (güncel segment revizyonunda en yüksek `version_number`'lı `validated`) onaylanabilir; daha eskisini onaylamak **409** (`stale_content_version`), `invalid` sürümü onaylamak **409** (`content_not_validated`) döner. Aynı sürümü ikinci kez onaylamak idempotenttir: 200, aynı onay kaydı, yeni kayıt yok, `approved_at` değişmez, onay-anı denetimi yeniden çalışmaz.
 - Düzenleme (`validated` sürüm üretir) ve başarılı yeniden üretim onayı düşürür; başarısız yeniden üretim (son `invalid`) ve geçersiz düzenleme (422, hiçbir şey saklanmaz) düşürmez.
-- Aynı kampanyada iki düzenleme yarışırsa ikisi de sırayla başarılı olur (ardışık `version_number`; son yazılan "en son"dur, öncekiler korunur). Onay, düzenleme ile yarışırsa sonuç sıralıdır: ya onay önce gelir ve düzenleme onu düşürür, ya düzenleme önce gelir ve onay 409 `stale_content_version` alır. Aynı sürüm numarası iki kez üretilemez ve eşzamanlılık hiçbir zaman 500 üretmez.
+- Aynı kampanyada aynı taban sürümden iki düzenleme yarışırsa **biri** başarılı olur, diğeri 409 `content_edit_conflict` alır (karşılaştırma ve ekleme tek transaction'da, satır kilidi altında); yeniden üretim yeni bir `validated` sürüm oluşturduğundan açık bir editördeki eski taban da 409 alır, başarısız yeniden üretim (`invalid` taslak) almaz. Onay, düzenleme ile yarışırsa sonuç sıralıdır: ya onay önce gelir ve düzenleme onu düşürür, ya düzenleme önce gelir ve onay 409 `stale_content_version` alır. Aynı sürüm numarası iki kez üretilemez ve eşzamanlılık hiçbir zaman 500 üretmez.
 - Onaylı kampanyada içerik düzenlenirse onay düşer: kampanya `content_ready`'ye döner, gönderim **409** verir, yeniden onay gerekir. Bu aşamada henüz teslimat kaydı yoktur (kayıtlar gönderim isteğiyle oluşur).
 - `sending` veya `completed` durumunda içerik düzenleme **409** ile reddedilir.
 - Segment kuralı içerik oluştuktan sonra yeniden üretilirse kampanya `audience_ready`'ye döner; içerik ve onay geçersiz olur.

@@ -212,6 +212,7 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 | İşlem | Aynı transaction'daki yazmalar |
 |---|---|
 | Segment üretimi (P3) | `segment_*`/`audience_*`/`longest_*` yazılır, `segment_revision + 1`; etkin onay varsa `revoked_at`, `revoke_reason = 'segment_changed'` ve `approved_content_version_id = NULL`; durum `audience_ready` |
+| `editContent` ön koşulu | Satır kilidi altında, ekleme ile **aynı** transaction'da: `X-Expected-Version` = güncel `segment_revision`'daki en yüksek `version_number`'lı `validated` satırın `id`'si (satır yoksa `none`) değilse hiçbir yazma yapılmaz ve 409 `content_edit_conflict` döner (karşılaştırma ile ekleme arasına başka yazma giremez) |
 | İçerik `validated` (LLM `validated` olayı veya `editContent`) | yeni `content_versions` satırı (`status = 'validated'`, `source` = `llm`/`edit`, `segment_revision` = güncel, `worst_case_*` dolu, `validation_errors = '[]'`); durum `content_ready`; etkin onay varsa `revoke_reason = 'content_changed'` ve `approved_content_version_id = NULL` |
 | Saklanabilir son `invalid` taslak (LLM) | yalnız yeni `content_versions` satırı (`status = 'invalid'`, `source = 'llm'`, `validation_errors` dolu); `campaigns` ve `approvals` satırlarına dokunulmaz |
 | Diğer son `invalid` sonuçları, kopan akış, 422 ile reddedilen düzenleme | hiçbir yazma yok |

@@ -753,7 +753,22 @@ var (
 	ErrContentNotValidated    = errors.New("campaign: content not validated")     // 409 content_not_validated
 	ErrStaleContentVersion    = errors.New("campaign: stale content version")     // 409 stale_content_version
 	ErrGenerationInProgress   = errors.New("campaign: generation in progress")    // 409 generation_in_progress
+	ErrContentEditConflict    = errors.New("campaign: content edit conflict")     // 409 content_edit_conflict
 )
+
+// ExpectedVersionNone is the X-Expected-Version value meaning "the editor saw no latest validated version".
+const ExpectedVersionNone = "none"
+
+// EditConflictError is returned by EditContent when the expected version is not the current latest
+// validated version. errors.Is(err, ErrContentEditConflict) is true. Current is the CURRENT latest
+// validated version of the current segment revision; both members are nil when there is none.
+type EditConflictError struct {
+	CurrentID            *string `json:"id"`
+	CurrentVersionNumber *int    `json:"version_number"`
+}
+
+func (*EditConflictError) Error() string
+func (*EditConflictError) Is(target error) bool // target == ErrContentEditConflict
 
 // ---- Domain structs: JSON encoding of each is EXACTLY the OpenAPI schema of the same name ----
 
@@ -959,12 +974,16 @@ type Service interface {
 	// the returned run releases when Stream returns (any outcome) or when ctx is cancelled.
 	StartContentGeneration(ctx context.Context, id string) (ContentRun, error)
 	// EditContent: ErrCampaignNotFound -> ErrGenerationInProgress -> ErrInvalidState (draft, sending,
-	// completed) -> content.Parse + content.Validate against the CURRENT segment's longest values
-	// (*validation.Error => 422, nothing stored). Success, in ONE transaction under the campaign row
-	// lock: next version_number, status validated, source edit, segment_revision = current, state
+	// completed) -> *EditConflictError (expectedVersionID, a UUID or ExpectedVersionNone, is not the
+	// id of the CURRENT latest validated version of the current segment revision, or not "none" while
+	// there is none; compared under the row lock) -> content.Parse + content.Validate against the
+	// CURRENT segment's longest values (*validation.Error => 422, nothing stored). The handler
+	// validates the X-Expected-Version header format (422) before calling. Success, in ONE
+	// transaction under the same campaign row lock (the comparison and the insert cannot interleave
+	// with another write): next version_number, status validated, source edit, segment_revision = current, state
 	// content_ready (EventContentValidated), active approval revoked ("content_changed"). No
 	// de-duplication: saving text identical to the latest version still creates a new version.
-	EditContent(ctx context.Context, id string, raw []byte) (ContentVersion, error)
+	EditContent(ctx context.Context, id, expectedVersionID string, raw []byte) (ContentVersion, error)
 	ListContentVersions(ctx context.Context, id string) ([]ContentVersion, error)
 	GetContentVersion(ctx context.Context, id, versionID string) (ContentVersion, error)
 	// Approve: openapi approveContent "Checks, in this order". Idempotent for the already approved
@@ -1536,7 +1555,7 @@ Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clo
 | `content` | `ErrSMSTooLong`, `ErrSubjectTooLong`, `ErrEmailBodyTooLong`, `ErrUnknownVariable`, `ErrMalformedVariable`, `ErrWorstCaseTooLong` |
 | `llm` | `ErrUnavailable`, `ErrTruncated`, `ErrNoToolCall`, `ErrInvalidMode`, `ErrMissingAPIKey`, `ErrRealClientForbidden`, `ErrUnknownScenario`, `ErrUnknownTool` |
 | `composer` | `ErrInvalidOutput` |
-| `campaign` | `ErrCampaignNotFound`, `ErrContentVersionNotFound`, `ErrCustomerNotFound`, `ErrInvalidState`, `ErrContentNotValidated`, `ErrStaleContentVersion`, `ErrGenerationInProgress` |
+| `campaign` | `ErrCampaignNotFound`, `ErrContentVersionNotFound`, `ErrCustomerNotFound`, `ErrInvalidState`, `ErrContentNotValidated`, `ErrStaleContentVersion`, `ErrGenerationInProgress`, `ErrContentEditConflict` |
 | `delivery` | `ErrLeaseLost`, `ErrInvalidConfig` |
 | `provider` | `ErrTimeout`, `ErrConnection` |
 | `mockprovider` | `ErrInvalidConfig` |
