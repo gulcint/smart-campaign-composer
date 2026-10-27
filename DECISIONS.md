@@ -2,7 +2,7 @@
 
 Önemli kararlar ve nedenleri. Her faz kapısında güncellenir (`docs/PLAN.md` §3.2). Her karar: **bağlam → karar → neden → alternatifler/bedel**. "Doküman" case dokümanıdır; dokümanda olmayan her şey VARSAYIM olarak işaretlidir. Ayrıntılı gereksinimler `docs/requirements.md`, ad sözleşmeleri `docs/contracts/`.
 
-Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D36–D45; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
+Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D37–D46; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
 
 ---
 
@@ -162,7 +162,7 @@ Dört yeni operasyon (`getApiDocs`, `getApiDocsAsset`, `getOpenApiSpec`, `getCon
 
 P4 başlamadan önce üç rolün (test yazarı, Go, Vue) birbirine sormadan çalışabilmesi için sözleşmeler tarandı; boşluklar `docs/contracts/` ve `docs/requirements.md`'de kapatıldı. Burada yalnız davranışı belirleyen kararlar var.
 
-### D36 — Tek içerik doğrulayıcısı: `Parse` yapıyı, `Validate` içeriği denetler
+### D46 — Tek içerik doğrulayıcısı: `Parse` yapıyı, `Validate` içeriği denetler
 - **Bağlam:** `content.schema.json` `minLength: 1` taşıyor, ama `required` (alan var, değeri boş) ile `schema_violation` (anahtar eksik/fazla/yanlış tip) ayrı kodlar; Parse'ı "şemaya göre" yazan biri boş dizeyi `schema_violation` yapardı ve boş-değerli LLM taslağı hiç saklanamazdı.
 - **Karar:** `Parse` yalnız yapı ve tip denetler (`minLength` uygulamaz); boş/yalnız boşluk değer `Validate`'te `required` olur. Alan başına en çok bir hata (öncelik `required` › `malformed_variable` › `unknown_variable` › uzunluk); hatalı alanda uzunluk denetlenmez. Değişken söz dizimi tablosu `go-interfaces.md` §content'te. Email gövdesi sınırı 5000 rune (dokümanda yok, VARSAYIM); yalnız doğrulama anında denetlenir, onayda yalnız SMS ve konu yeniden denetlenir.
 - **Neden:** Aynı doğrulayıcı LLM çıktısı ve elle düzenleme için (REQ-APR-02); kodlar testlerin ve arayüzün tek anlaşma noktası.
@@ -210,6 +210,6 @@ PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `in
 | Gerçek Claude istemcisi için otomatik test yok | Sözleşme gerçek istemciyi test binary'sinde yasaklar; strict araçlar ve onarım turu elle doğrulandı (D23, D32) |
 | `seed.Generate` 9999'dan fazla kullanıcıyı kabul eder | Yalnız komut satırı reddeder (telefon bloğu 4 hane); mimar `go-interfaces.md`'ye hata ekleyebilir |
 | Manifest sayıları `segment.Match` ile değil el yazısı değerlendirmeyle | P3'te `segment.Match`'e geçilecek, manifest aynı kalmalı |
-| Email gövdesi 5000 sınırı onayda yeniden denetlenmez (D36) | Doğrulama anında denetlenir; yalnız SMS ve konu için onay-anı denetimi var |
+| Email gövdesi 5000 sınırı onayda yeniden denetlenmez (D46) | Doğrulama anında denetlenir; yalnız SMS ve konu için onay-anı denetimi var |
 | Kampanya kilidi tek süreç içinde çalışır | `generateSegment` kilidi süreç içidir; birden fazla API kopyası planlanırsa veritabanı kilidine (`SaveSegment`'in `FOR UPDATE`'i zaten korur) taşınmalı |
 | Kitle taraması eşleşen satırları Go'ya çeker | Seed ölçeğinde (5000) yeterli; üç en uzun değer SQL'de toplanarak ölçeklenebilir |
