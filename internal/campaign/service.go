@@ -293,12 +293,13 @@ func (s *service) GenerateSegment(ctx context.Context, id string) (SegmentResult
 	}
 	defer release()
 
-	// Everything after the lease is taken (LLM, count, longest values, save) ends at the lease's
-	// deadline; SaveSegment also refuses once the lease is no longer this generation's.
+	// The work after the lease is taken (LLM, count, longest values) ends at the lease's deadline.
+	// The save is not cancelled by it (a deadline during COMMIT could report an error for a stored
+	// segment); SaveSegment instead refuses under the row lock once the lease is no longer ours.
 	workCtx, cancel := context.WithTimeout(ctx, lease.ExpiresAt.Sub(s.d.Clock.Now()))
 	defer cancel()
 	expired := func(err error) error {
-		if ctx.Err() == nil && (workCtx.Err() != nil || errors.Is(err, errLeaseLost)) {
+		if errors.Is(err, errLeaseLost) || (ctx.Err() == nil && workCtx.Err() != nil) {
 			return fmt.Errorf("%w: generation exceeded %s", llm.ErrUnavailable, MaxGenerationDuration)
 		}
 		return err
@@ -326,7 +327,7 @@ func (s *service) GenerateSegment(ctx context.Context, id string) (SegmentResult
 	if err != nil {
 		return SegmentResult{}, expired(err)
 	}
-	saved, err := s.d.Store.SaveSegment(workCtx, id, SegmentWrite{
+	saved, err := s.d.Store.SaveSegment(context.WithoutCancel(ctx), id, SegmentWrite{
 		Rule: out.Rule, Audience: aud, LongestValues: longest, ReferenceTime: ref,
 		LLMAttempts: out.Attempts, GeneratedAt: s.now(), LeaseToken: lease.Token,
 	})
