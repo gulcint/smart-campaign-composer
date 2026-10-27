@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -12,6 +14,10 @@ import (
 // statusRetryMillis is the EventSource reconnect delay sent once at the start of the stream.
 const statusRetryMillis = 3000
 
+// maxStatusPollFailures consecutive failed status reads end the stream (D54): the client then
+// shows the counters as stale and reconnects with its own backoff instead of looking live.
+const maxStatusPollFailures = 5
+
 // ---- GET /api/campaigns/{campaign_id}/events (SSE) ----
 
 // streamCampaignEvents is the live delivery status stream (sse-events.md §2, REQ-TRK-01):
@@ -19,13 +25,15 @@ const statusRetryMillis = 3000
 // StatusPollInterval on the injected clock the status is read again: a change (ignoring
 // updated_at) becomes a `status` event, a completed campaign the final `completed` event, after
 // which the stream ends. A keepalive comment goes out every HeartbeatInterval. One goroutine (the
-// handler's) does all the writing and returns on client disconnect, so nothing outlives the request.
+// handler's) does all the writing and returns on client disconnect or server shutdown, so nothing
+// outlives the request. maxStatusPollFailures failed reads in a row end the stream (D54).
 func (a *api) streamCampaignEvents(w http.ResponseWriter, r *http.Request) {
 	id, ok := campaignID(w, r)
 	if !ok {
 		return
 	}
-	ctx := r.Context()
+	ctx, cancel := a.streamContext(r.Context())
+	defer cancel()
 	last, err := a.deps.Service.Status(ctx, id)
 	if err != nil {
 		a.writeServiceError(w, r, err)
@@ -54,6 +62,9 @@ func (a *api) streamCampaignEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log := a.deps.Logger.With(slog.String("request_id", r.Header.Get("X-Request-ID")),
+		slog.String("campaign_id", id))
+	failures := 0
 	poll := a.deps.Clock.After(a.deps.StatusPollInterval)
 	beat := a.deps.Clock.After(a.deps.HeartbeatInterval)
 	for {
@@ -67,14 +78,29 @@ func (a *api) streamCampaignEvents(w http.ResponseWriter, r *http.Request) {
 			beat = a.deps.Clock.After(a.deps.HeartbeatInterval)
 		case <-poll:
 			cur, err := a.deps.Service.Status(ctx, id)
-			switch {
-			case ctx.Err() != nil:
+			if ctx.Err() != nil {
 				return
-			case err != nil:
-				// A failed read (e.g. a database blip) is not a status change: keep the stream
-				// open and try again on the next tick; the client still has the last counters.
-				a.deps.Logger.Warn("status poll failed", slog.String("request_id", r.Header.Get("X-Request-ID")),
-					slog.String("campaign_id", id), slog.String("error", err.Error()))
+			}
+			if err != nil {
+				// A failed read (e.g. a database blip) is not a status change. Logged once per
+				// outage, not once per tick; after maxStatusPollFailures in a row the stream ends.
+				failures++
+				if failures == 1 {
+					log.Warn("status poll failed", slog.String("error", err.Error()))
+				}
+				if failures >= maxStatusPollFailures {
+					log.Error("status stream closed after repeated poll failures",
+						slog.Int("failures", failures), slog.String("error", err.Error()))
+					return
+				}
+				poll = a.deps.Clock.After(a.deps.StatusPollInterval)
+				continue
+			}
+			if failures > 0 {
+				log.Info("status poll recovered", slog.Int("failures", failures))
+				failures = 0
+			}
+			switch {
 			case cur.State == campaign.StateCompleted:
 				_ = emit("completed", cur)
 				return
@@ -90,14 +116,11 @@ func (a *api) streamCampaignEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // statusChanged reports whether b differs from a in anything but updated_at (sse-events.md §2.1).
+// The comparison is on the JSON the client receives, so a field added to CampaignStatus counts
+// automatically and timestamps compare by their wire form.
 func statusChanged(a, b campaign.CampaignStatus) bool {
-	return a.State != b.State || a.Counts != b.Counts || a.ByChannel != b.ByChannel ||
-		!sameTime(a.SendingStartedAt, b.SendingStartedAt) || !sameTime(a.CompletedAt, b.CompletedAt)
-}
-
-func sameTime(a, b *time.Time) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.Equal(*b)
+	a.UpdatedAt, b.UpdatedAt = time.Time{}, time.Time{}
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	return errA != nil || errB != nil || !bytes.Equal(ja, jb)
 }
