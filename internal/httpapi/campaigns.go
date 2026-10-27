@@ -141,14 +141,25 @@ func (a *api) countSegment(w http.ResponseWriter, r *http.Request) {
 
 // ---- helpers ----
 
-// campaignID returns the path's campaign id; a malformed UUID is "not found" (openapi).
+// campaignID returns the path's campaign id in lower-case canonical form (D47a); a malformed UUID
+// is "not found" (openapi).
 func campaignID(w http.ResponseWriter, r *http.Request) (string, bool) {
-	id := r.PathValue("campaign_id")
-	if _, err := uuid.Parse(id); err != nil || len(id) != 36 {
+	id, ok := canonicalUUID(r.PathValue("campaign_id"))
+	if !ok {
 		writeError(w, r, http.StatusNotFound, "campaign_not_found", "campaign not found")
 		return "", false
 	}
 	return id, true
+}
+
+// canonicalUUID accepts the 36-character UUID form (path, body and query ids, openapi format
+// uuid) in any letter case and returns its lower-case canonical spelling (D47a).
+func canonicalUUID(s string) (string, bool) {
+	u, err := uuid.Parse(s)
+	if err != nil || len(s) != 36 {
+		return "", false
+	}
+	return u.String(), true
 }
 
 // scenarioContext applies X-Mock-LLM-Scenario when the effective provider is the mock; with the
