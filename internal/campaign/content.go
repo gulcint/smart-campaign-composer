@@ -49,7 +49,9 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 	// genCtx carries the request's values (the mock scenario) and ends when the request is
 	// cancelled, when the run finishes or after MaxGenerationDuration on the injected clock.
 	genCtx, cancel := context.WithCancelCause(ctx)
-	context.AfterFunc(genCtx, release)
+	// Until Stream takes over, the lock ends with genCtx (e.g. the handler never streams). Stream
+	// stops this before persisting, so a timeout can never release the lock mid-transaction.
+	stopRelease := context.AfterFunc(genCtx, release)
 	timer := s.d.Clock.After(MaxGenerationDuration)
 	go func() {
 		select {
@@ -71,7 +73,7 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 		}
 		return nil, err
 	}
-	return &contentRun{s: s, id: id, genCtx: genCtx, cancel: cancel, release: release, sess: sess}, nil
+	return &contentRun{s: s, id: id, genCtx: genCtx, cancel: cancel, release: release, stopRelease: stopRelease, sess: sess}, nil
 }
 
 // contentRun is the ContentRun of the service.
@@ -81,8 +83,10 @@ type contentRun struct {
 	genCtx  context.Context
 	cancel  context.CancelCauseFunc
 	release func() // idempotent; also called by context.AfterFunc when genCtx ends
-	sess    *composer.ContentSession
-	once    sync.Once
+	// stopRelease detaches release from genCtx; false means it already ran (genCtx ended).
+	stopRelease func() bool
+	sess        *composer.ContentSession
+	once        sync.Once
 }
 
 // Stream consumes the generation, persists its result and emits the terminal event.
@@ -120,7 +124,11 @@ func (r *contentRun) Stream(ctx context.Context, emit func(composer.Event) error
 	if ctx.Err() != nil {
 		return ctx.Err() // client gone: nothing stored
 	}
-	if err != nil || r.genCtx.Err() != nil {
+	// From here on only Stream's defer releases the lock: a timeout firing while finish is inside
+	// the save transaction must not let another generation or edit in. If the release already ran,
+	// genCtx has ended and the run is treated as cancelled/timed out.
+	released := !r.stopRelease()
+	if err != nil || released || r.genCtx.Err() != nil {
 		if errors.Is(context.Cause(r.genCtx), errGenerationTimeout) {
 			return emit(composer.InvalidEvent{Attempt: attempt, Final: true, Errors: []validation.FieldError{{
 				Path: "", Code: validation.CodeLLMUnavailable,
