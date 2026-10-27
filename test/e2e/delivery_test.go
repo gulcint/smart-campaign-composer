@@ -121,8 +121,8 @@ func str(p *string) string {
 
 // ---- campaign helpers ----
 
-// approvedCampaign creates an example-brief campaign and takes it to approved with the ok content.
-func approvedCampaign(t *testing.T, api string, m manifestDoc) (id, versionID string) {
+// dlvApprovedCampaign creates an example-brief campaign and takes it to approved with the ok content.
+func dlvApprovedCampaign(t *testing.T, api string, m manifestDoc) (id, versionID string) {
 	t.Helper()
 	id = audienceReady(t, api, m)
 	v := generate(t, api, id, "ok").validated
@@ -444,7 +444,7 @@ type campaignRun struct {
 func runCampaign(t *testing.T, api string, m manifestDoc) campaignRun {
 	t.Helper()
 	var r campaignRun
-	r.id, r.versionID = approvedCampaign(t, api, m)
+	r.id, r.versionID = dlvApprovedCampaign(t, api, m)
 	r.metricsBefore = scrapeMetrics(t, api)
 	r.send = sendCampaign(t, api, r.id, r.versionID)
 	if r.send.CampaignID != r.id || r.send.State != "sending" || r.send.ContentVersionID != r.versionID {
