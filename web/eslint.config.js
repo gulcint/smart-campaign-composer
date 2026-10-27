@@ -6,7 +6,10 @@ import pluginVue from 'eslint-plugin-vue'
 import globals from 'globals'
 
 export default withVueTs(
-  { name: 'scc/ignores', ignores: ['dist/**', 'coverage/**', 'node_modules/**'] },
+  {
+    name: 'scc/ignores',
+    ignores: ['dist/**', 'coverage/**', 'node_modules/**', 'src/api/schema.gen.ts'],
+  },
   { name: 'scc/files', files: ['**/*.{ts,mts,vue}'] },
   pluginVue.configs['flat/recommended'],
   vueTsConfigs.recommended,
@@ -28,7 +31,7 @@ export default withVueTs(
   },
   {
     name: 'scc/node-files',
-    files: ['*.config.{js,ts}'],
+    files: ['*.config.{js,ts}', 'scripts/**/*.mjs'],
     languageOptions: { globals: { ...globals.node } },
   },
   skipFormatting,
