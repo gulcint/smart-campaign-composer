@@ -128,6 +128,18 @@ PLAN §6'daki CodeQL (#17) ve imaj dosya sistemi / `docker history` taraması (#
 ### D29 — Compose `.env`'i isteğe bağlı okur
 `api` servisi `env_file: .env` (`required: false`) kullanır. `.env` yoksa mock LLM; varsa ve key doluysa gerçek Claude. Yerelde "key'siz çalışır" kontrolü için `.env` anahtarı boşaltılmalı veya temiz klon kullanılmalıdır. `make test` etkilenmez (`compose.test.yml` `.env` okumaz).
 
+### D30 — Sözleşme önce, kod onu izler: API/doküman sapma koruması (sahip onayı, 2026-10-27)
+`docs/contracts/openapi.yaml` elle yazılan tek doğruluk kaynağı kalır. Koddan spec üretimi ve sunucu kodu üretimi reddedildi: sapmayı yeni sözleşme yapar, SSE'ye uymaz, test yazarının spec'ten test yazma kuralını bozar. Bunun yerine CI'da dört kontrol: E2E'deki her istek ve yanıtın spec'e karşı doğrulanması (`OPENAPI_VALIDATE=strict`, libopenapi-validator), router rotaları ile spec yollarının çift yönlü eşleşmesi (`api-routes`, `httpapi.Routes()`), spec lint (`api-lint`, Redocly) ve `main`'e karşı kırıcı değişiklik (`api-breaking`, oasdiff), ayrıca frontend tiplerinin spec'ten üretilmesi (`api-types-check`). Sınır: yalnızca E2E'nin çağırdığı işlemleri görür, bunu "her işlem en az bir kez çağrılmalı" kuralı azaltır; davranış anlamı (hata kodu anlamı, retry, idempotency, SSE semantiği) insan incelemesinde kalır. SSE olay şemaları P4'te, `/docs` (Swagger UI/Redoc) P6'da.
+
+### D31 — Başlıkta Insider One logosu (sahip kararı, 2026-10-27)
+Sahip, `assets/InsiderOneLogo.jpeg` dosyasının web arayüzünde kullanılmasına izin verdi. Dosya `web/public/brand/` altına kopyalandı; diğer iki pazarlama görseli repoya girmez. Marka adı hakları Insider One'a aittir, logo yalnızca bu vaka çalışmasının arayüzünde kullanılır.
+
+### D32 — Onarım turu gerçek API ile doğrulandı (2026-10-27)
+Strict araçla "önceki geçersiz çıktı sahte `tool_use` olarak yeniden oynatılır + `is_error` `tool_result`" biçimi, ekstra anahtarlı çıktı ve boş `{}` ile `claude-sonnet-5-5` üzerinde denendi: ikisi de HTTP 200, geçerli `tool_use` döndü. D23'teki açık soru ("onarım turu reddedilebilir mi") kapandı.
+
+### D33 — Agent'lar için veri kaybettiren git komutları engellidir
+P2'de `git worktree remove --force` commit edilmemiş test dosyalarını sildi (nesne deposundan kurtarıldı). `scripts/claude/guard-git.sh` artık `worktree remove --force`, `branch -D`, `clean -f`, `reset --hard`, `checkout -f|--`, `switch -f`, `restore` (yalnız `--staged` serbest), `stash drop|clear` komutlarını engeller; silme için `scripts/worktree-remove.sh`. Testler `make test-hooks`.
+
 ---
 
 ## Bilinen sınırlar ve riskler
@@ -139,6 +151,6 @@ PLAN §6'daki CodeQL (#17) ve imaj dosya sistemi / `docker history` taraması (#
 | Pazarlamacı brief'i güncelleyemez | API brief güncellemeyi desteklemiyor; "brief'i düzenle" yeni kampanya başlatır |
 | Gerçek ölçek (milyonlar) | PostgreSQL kuyruğu bu proje için yeterli, ölçek yolu `Queue` arayüzü (D1) |
 | Yapılmayan bonuslar | Zamanlanmış gönderim, A/B varyantları, dile göre içerik: çekirdek akış sağlam olunca ayrı REQ'lerle; bitmeyenler README'de belirtilecek |
-| Gerçek Claude istemcisi için otomatik test yok | Sözleşme gerçek istemciyi test binary'sinde yasaklar; elle `llm-smoke` doğrulaması + P3'te onarım turu (`then_ok_after_repair`) gerçek API ile denenecek |
+| Gerçek Claude istemcisi için otomatik test yok | Sözleşme gerçek istemciyi test binary'sinde yasaklar; strict araçlar ve onarım turu elle doğrulandı (D23, D32) |
 | `seed.Generate` 9999'dan fazla kullanıcıyı kabul eder | Yalnız komut satırı reddeder (telefon bloğu 4 hane); mimar `go-interfaces.md`'ye hata ekleyebilir |
 | Manifest sayıları `segment.Match` ile değil el yazısı değerlendirmeyle | P3'te `segment.Match`'e geçilecek, manifest aynı kalmalı |
