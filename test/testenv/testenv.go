@@ -11,7 +11,7 @@
 //     binary), it prints a message to stderr and exits with code 1 (REQ-DLV-02).
 //  2. It replaces http.DefaultTransport with a guard that refuses every request to a host
 //     that is neither loopback nor one of the compose.test.yml services named by
-//     E2E_API_URL / E2E_MOCKPROVIDER_URL / E2E_WEB_URL, so tests cannot reach the Anthropic API or any other
+//     E2E_API_URL / E2E_MOCKPROVIDER_URL, so tests cannot reach the Anthropic API or any other
 //     real host (REQ-AI-02, docs/PLAN.md §4.5 "guard transport").
 package testenv
 
@@ -36,7 +36,7 @@ import (
 var ErrOutboundBlocked = errors.New("testenv: outbound network request blocked in tests")
 
 // allowedHostEnv lists the variables (docs/contracts/README.md §7) whose URL hosts tests may reach.
-var allowedHostEnv = []string{"E2E_API_URL", "E2E_MOCKPROVIDER_URL", "E2E_WEB_URL"}
+var allowedHostEnv = []string{"E2E_API_URL", "E2E_MOCKPROVIDER_URL"}
 
 // Main installs the network guard, refuses a real LLM client and then runs the tests.
 func Main(m *testing.M) { MainThen(m, nil) }
