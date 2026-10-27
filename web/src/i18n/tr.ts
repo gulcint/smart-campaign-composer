@@ -116,6 +116,44 @@ export const tr = {
   'counter.worstCase': 'Kişiselleştirme sonrası en fazla: {n}',
   'stream.retrying': 'Model çıktısı düzeltiliyor…',
   'stream.interrupted': 'Akış yarıda kesildi',
+  'stream.regenerate': 'Yeniden üret',
+  'stream.errors': 'Doğrulama hataları',
+
+  // --- Content page (P4) ---
+  'content.title': 'İçerik',
+  'content.subtitle': 'Claude’un önerdiği mesajları incele, düzenle ve kaydet.',
+  'content.generate': 'İçeriği üret',
+  'content.regenerate': 'Yeniden üret',
+  'content.editDraft': 'Taslağı düzenle',
+  'content.empty': 'Bu kampanya için henüz içerik üretilmedi.',
+  'content.toApproval': 'Önizle ve onayla',
+  'content.previewTitle': 'Önizleme',
+  'content.invalidNote':
+    'Model iki denemede de geçerli içerik üretemedi. Yeniden üretebilir ya da taslağı düzeltebilirsin.',
+  'content.live.streaming': 'İçerik üretiliyor',
+  'content.live.retrying': 'Model çıktısı düzeltiliyor',
+  'content.live.validated': 'İçerik doğrulandı',
+  'content.live.invalid': 'İçerik doğrulamadan geçmedi',
+  'content.live.interrupted': 'Akış yarıda kesildi',
+  'tabs.channels': 'Kanallar',
+  'tabs.sms': 'SMS',
+  'tabs.email': 'Email',
+  'tabs.hasErrors': 'Hata var',
+
+  // --- Content editor (P4) ---
+  'editor.smsBody': 'SMS metni',
+  'editor.emailSubject': 'Email konusu',
+  'editor.emailBody': 'Email gövdesi',
+  'editor.variables': 'Değişken ekle',
+  'editor.save': 'Kaydet ve doğrula',
+  'editor.shortcut': 'Kaydetmek için Ctrl/⌘ + Enter',
+  'editor.lockedNote': 'Gönderim başladı; içerik artık düzenlenemez.',
+  'editor.invalidVariables': 'İzin verilmeyen değişkenler',
+  'editor.conflict.title': 'İçerik başka bir yerde değişti (sürüm {n}).',
+  'editor.conflict.reload': 'Son sürümü yükle',
+  'editor.conflict.keepMine': 'Metnimi koru',
+  'editor.conflict.keepMineWarning':
+    'Metnini korursan diğer sekmedeki değişiklik geçmişte kalır, yeni sürüm senin metnin olur. Eski sürüm silinmez.',
 
   // --- Approval (P4, required ids) ---
   'approval.reason.no_content': 'Henüz doğrulanmış içerik yok',
@@ -125,6 +163,15 @@ export const tr = {
   'approval.reason.dirty': 'Kaydedilmemiş düzenleme var',
   'approval.reason.state': 'Kampanya durumu onaya uygun değil',
   'approval.staleNote': 'Onay düştü, yeniden onayla',
+  'approval.title': 'Onay',
+  'approval.subtitle': 'Son sürümü gözden geçir, onayla ve gönder.',
+  'approval.version': 'Sürüm {n}',
+  'approval.edit': 'Düzenle',
+  'approval.audience': 'Kitle',
+  'approval.approve': 'Onayla',
+  'approval.send': 'Gönder',
+  'approval.approvedNote': 'Onaylandı',
+  'approval.readyNote': 'İki kanal doğrulandı',
 
   // --- Confirm dialog ---
   'confirm.approve.title': 'İçeriği onayla',
@@ -141,6 +188,11 @@ export const tr = {
   'preview.emailFrameTitle': 'Email önizlemesi',
   'preview.fallbackRecipient': 'Değerli müşterimiz',
   'preview.sample': 'Örnek {i}/{n}',
+  'preview.next': 'Sonraki örnek',
+  'preview.recipient': 'Alıcı',
+  'preview.empty': 'Önizleme için doğrulanmış içerik gerekiyor.',
+  'preview.error': 'Önizleme alınamadı.',
+  'preview.subject': 'Konu',
 
   // --- Tracking (P5, required ids) ---
   'feed.empty': 'Henüz olay yok',
@@ -152,6 +204,8 @@ export const tr = {
   'connection.lost': 'Bağlantı koptu, yeniden bağlanılıyor…',
   'toast.close': 'Kapat',
   'toast.region': 'Bildirimler',
+  'toast.contentSaved': 'İçerik kaydedildi ve doğrulandı.',
+  'toast.approved': 'İçerik onaylandı.',
 
   // --- Empty states / pages ---
   'empty.campaign_not_found.title': 'Kampanya bulunamadı',
