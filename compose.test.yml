@@ -76,17 +76,6 @@ services:
       MOCK_PROVIDER_ADDR: ":8090"
       MOCK_PROVIDER_ADMIN: "true"
 
-  # The served web image (nginx + SPA), for nginx-level E2E tests (E2E_WEB_URL, contracts README §7).
-  # No host port: the test container reaches it by service name. nginx proxies to `api` by name.
-  web:
-    build:
-      context: ./web
-      target: runtime
-    image: scc-web:test-runtime
-    depends_on:
-      api:
-        condition: service_started
-
   # Vitest for web/tests (docs/contracts/ui.md §0): Node image of web/Dockerfile, no services.
   web-test:
     build:
@@ -105,7 +94,6 @@ services:
       TEST_DATABASE_URL: postgres://scc_app:scc_app_test@db:5432/scc_test?sslmode=disable
       TEST_MIGRATE_DATABASE_URL: postgres://scc_migrator:scc_migrator_test@db:5432/scc_test?sslmode=disable
       E2E_API_URL: http://api:8080
-      E2E_WEB_URL: http://web:8080
       E2E_MOCKPROVIDER_URL: http://mockprovider:8090
       # Drift guard (contracts README §11): the E2E client validates every response against the
       # spec read from disk; the Dockerfile test stage copies the sources (docs/ included) to /src.
@@ -117,6 +105,4 @@ services:
       api:
         condition: service_started
       mockprovider:
-        condition: service_started
-      web:
         condition: service_started

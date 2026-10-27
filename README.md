@@ -117,23 +117,12 @@ Yerelde `.env` dosyasına Claude anahtarı koyarsanız sistem gerçek Claude'u k
 
 Bugün denenebilecek olan: `docker compose up` bitince tarayıcıda <http://127.0.0.1:8081> adresini açın (bu port başka bir programda doluysa `.env` dosyasına `WEB_PORT=8082` gibi boş bir port yazın; API için `API_PORT` aynı şekilde çalışır; hangi portun açıldığını `docker compose ps` gösterir) ve örnek brief'i yazın ("Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder"); sistem segment kuralını ve kanal başına kaç kişiye ulaşılacağını gösterir. Anahtar yoksa cevabı sahte LLM verir, `.env`'ye anahtar koyarsanız gerçek Claude cevaplar. Henüz yapılamayanlar: mesaj içeriği üretimi ve onay (P4), gönderim ve canlı takip (P5).
 
-## API dokümanı
-
-API'yi okumak ve denemek için `docker compose up` sonrası tarayıcıda <http://127.0.0.1:8081/docs> adresini açın (port doluysa `WEB_PORT`; API'ye doğrudan <http://127.0.0.1:8080/docs>). Sayfa Swagger UI'dır: her uç noktayı listeler, "Try it out" ile gerçek API'yi çağırır. Ham sözleşme `/openapi.yaml` adresindedir.
-
-- Doküman elle yazılmış [`docs/contracts/openapi.yaml`](docs/contracts/openapi.yaml) dosyasından gelir; doküman koddan ayrıca üretilmez, API'nin içine gömülen kopya CI'da birebir aynılığa karşı denetlenir. CI, kodun bu dosyadan sapmasını engeller (rota eşitliği, her istek ve cevabın şemaya göre doğrulanması, lint, kırıcı değişiklik kontrolü).
-- Swagger UI repoda tutulur, CDN'den yüklenmez; sayfa internetsiz açılır.
-- P4 ve P5 uç noktaları sözleşmede yazılıdır ama henüz kodlanmamıştır; denenirse `404 not_found` döner.
-
-Kullanım ayrıntıları ve beş adımlı akışın uç noktaları: [`docs/API.md`](docs/API.md).
-
 ## Nereden okunur
 
 - [`DECISIONS.md`](DECISIONS.md): önemli kararlar, gerekçeleri, bilinen sınırlar
 - [`docs/PLAN.md`](docs/PLAN.md): fazlar, git akışı, roller
 - [`docs/requirements.md`](docs/requirements.md): gereksinim kataloğu
 - [`docs/contracts/`](docs/contracts/README.md): API, veri ve LLM araç sözleşmeleri
-- [`docs/API.md`](docs/API.md): etkileşimli API dokümanı (Swagger UI); `docker compose up` sonrası <http://127.0.0.1:8081/docs>
 - [`DESIGN.md`](DESIGN.md): görsel sistem ve ekranlar
 - [`ai-sessions/INDEX.md`](ai-sessions/INDEX.md): temizlenmiş Claude session kayıtları
 - [`CLAUDE.md`](CLAUDE.md): proje kuralları ve ajan talimatları
