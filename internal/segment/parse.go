@@ -3,161 +3,451 @@ package segment
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"regexp"
 	"slices"
 	"strconv"
 
 	"github.com/gulcint/smart-campaign-composer/internal/validation"
 )
 
+// Parse limits. Parse walks the document once, token by token (linear in the input size), and
+// stops descending where Validate would reject anyway, so an adversarial document (deep nesting,
+// huge arrays, many unknown keys) cannot make it expensive.
+const (
+	// maxParseDepth: a group below this depth is not parsed; its depth-(MaxDepth+1) ancestor is
+	// reported as max_depth_exceeded at the same path Validate uses.
+	maxParseDepth = MaxDepth + 1
+	// maxParseConditions: up to this many conditions are parsed (so Validate can report
+	// max_conditions_exceeded); beyond it Parse retains no more nodes, only counts the rest in the
+	// same linear walk, and reports max_conditions_exceeded (with the exact count) itself.
+	maxParseConditions = MaxConditions + 1
+	// maxFieldErrors bounds the error list of one document.
+	maxFieldErrors = 20
+	// maxKeyRunes / invalidKey: an unknown property name is echoed into a field-error path only
+	// if it is a short identifier; anything else (it may be model output) becomes invalidKey.
+	maxKeyRunes = 64
+	invalidKey  = "_invalid_key_"
+)
+
+var identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // Parse decodes a document of the form {"rule": <group>} (the emit_segment_rule tool input and
 // the POST /api/segments/count body). Structural checks only: unknown keys, group/condition
 // mixing, non-string or missing field/op, a bare condition as root. Field and operator names,
-// value types and limits are Validate's job. Errors: *validation.Error matching
-// validation.ErrInvalidJSON or validation.ErrSchemaViolation.
+// value types and limits are Validate's job, except that Parse refuses to walk past the limits
+// (a group nested deeper than MaxDepth+1 => max_depth_exceeded; more than MaxConditions+1
+// conditions => max_conditions_exceeded). Errors: *validation.Error matching
+// validation.ErrInvalidJSON or validation.ErrSchemaViolation (or the two limit sentinels).
 func Parse(raw []byte) (Rule, error) {
 	if !json.Valid(raw) {
 		return Rule{}, &validation.Error{Fields: []validation.FieldError{{
 			Path: "", Code: validation.CodeInvalidJSON, Message: "segment rule is not valid JSON", Err: validation.ErrInvalidJSON,
 		}}}
 	}
-	p := &parser{}
-	var doc map[string]json.RawMessage
-	if jsonKind(raw) != '{' || json.Unmarshal(raw, &doc) != nil {
-		p.violation("", "document must be a JSON object with a rule property")
-		return Rule{}, p.err()
+	p := &parser{dec: json.NewDecoder(bytes.NewReader(raw))}
+	root, errs, err := p.document()
+	if err != nil {
+		// Unreachable for json.Valid input; keep a structural error rather than panicking.
+		return Rule{}, newError([]validation.FieldError{violation("", "document could not be read")})
 	}
-	for _, k := range sortedKeys(doc) {
-		if k != "rule" {
-			p.violation(k, "unknown property")
-		}
+	if p.tooMany {
+		limit, actual := MaxConditions, p.conds
+		errs = append(errs, validation.FieldError{
+			Path: "rule", Code: validation.CodeMaxConditionsExceeded,
+			Message: "segment rule has more than " + strconv.Itoa(MaxConditions) + " conditions",
+			Limit:   &limit, Actual: &actual, Err: ErrMaxConditionsExceeded,
+		})
 	}
-	ruleRaw, ok := doc["rule"]
-	if !ok {
-		p.violation("rule", "rule is missing")
-		return Rule{}, p.err()
-	}
-	root, isGroup := p.node(ruleRaw, "rule")
-	if root != nil && !isGroup {
-		p.violation("rule", "rule root must be a group (all, any or not)")
-	}
-	if err := p.err(); err != nil {
-		return Rule{}, err
+	if len(errs) > 0 {
+		return Rule{}, newError(errs)
 	}
 	return Rule{Root: *root}, nil
 }
 
-type parser struct{ fields []validation.FieldError }
-
-func (p *parser) violation(path, msg string) {
-	p.fields = append(p.fields, validation.FieldError{
-		Path: path, Code: validation.CodeSchemaViolation, Message: msg, Err: validation.ErrSchemaViolation,
-	})
+func newError(fields []validation.FieldError) *validation.Error {
+	if len(fields) > maxFieldErrors {
+		fields = fields[:maxFieldErrors]
+	}
+	return &validation.Error{Fields: fields}
 }
 
-func (p *parser) err() error {
-	if len(p.fields) == 0 {
-		return nil
-	}
-	return &validation.Error{Fields: p.fields}
+func violation(path, msg string) validation.FieldError {
+	return validation.FieldError{Path: path, Code: validation.CodeSchemaViolation, Message: msg, Err: validation.ErrSchemaViolation}
 }
 
-// node parses one group or condition object. It returns nil when the object is structurally
-// broken (an error was recorded) and reports whether it is a group.
-func (p *parser) node(raw json.RawMessage, path string) (*Node, bool) {
-	var obj map[string]json.RawMessage
-	if jsonKind(raw) != '{' || json.Unmarshal(raw, &obj) != nil {
-		p.violation(path, "must be a group or a condition object")
-		return nil, false
+// keyPath appends an unknown property name to path, replacing names that are not short
+// identifiers so that untrusted text is never echoed at length.
+func keyPath(path, key string) string {
+	if len([]rune(key)) > maxKeyRunes || !identifier.MatchString(key) {
+		key = invalidKey
 	}
-	var groupKeys, condKeys, otherKeys []string
-	for _, k := range sortedKeys(obj) {
-		switch k {
-		case "all", "any", "not":
-			groupKeys = append(groupKeys, k)
-		case "field", "op", "value":
-			condKeys = append(condKeys, k)
-		default:
-			otherKeys = append(otherKeys, k)
-		}
+	if path == "" {
+		return key
 	}
-	switch {
-	case len(groupKeys) > 0 && len(condKeys) > 0, len(groupKeys) > 1:
-		p.violation(path, "an object is either a group (exactly one of all, any, not) or a condition")
-		return nil, false
-	case len(otherKeys) > 0:
-		for _, k := range otherKeys {
-			p.violation(path+"."+k, "unknown property")
-		}
-		return nil, false
-	case len(groupKeys) == 1:
-		return p.group(obj, groupKeys[0], path), true
-	case len(condKeys) > 0:
-		return p.condition(obj, path), false
-	default:
-		p.violation(path, "must be a group or a condition object")
-		return nil, false
-	}
+	return path + "." + key
 }
 
-func (p *parser) group(obj map[string]json.RawMessage, key, path string) *Node {
-	raw := obj[key]
-	kpath := path + "." + key
-	if key == "not" {
-		child, _ := p.node(raw, kpath)
-		if child == nil {
-			return nil
+type parser struct {
+	dec     *json.Decoder
+	conds   int  // conditions parsed so far
+	tooMany bool // more than maxParseConditions conditions: the rest is skipped
+}
+
+// result of parsing one node object.
+type result struct {
+	node    *Node // nil when structurally broken
+	group   bool
+	errs    []validation.FieldError
+	tooDeep bool // the node is a group deeper than maxParseDepth (skipped, no errs)
+}
+
+// document parses the root object; errs follow the order unknown document keys (sorted), then
+// the rule's errors.
+func (p *parser) document() (*Node, []validation.FieldError, error) {
+	tok, err := p.dec.Token()
+	if err != nil {
+		return nil, nil, err
+	}
+	if tok != json.Delim('{') {
+		if err := p.skipRest(tok); err != nil {
+			return nil, nil, err
 		}
-		return &Node{Not: child}
+		return nil, []validation.FieldError{violation("", "document must be a JSON object with a rule property")}, nil
 	}
-	var items []json.RawMessage
-	if jsonKind(raw) != '[' || json.Unmarshal(raw, &items) != nil {
-		p.violation(kpath, key+" must be an array")
-		return nil
-	}
-	children := make([]Node, 0, len(items))
-	ok := true
-	for i, item := range items {
-		child, _ := p.node(item, kpath+"["+strconv.Itoa(i)+"]")
-		if child == nil {
-			ok = false
+	var unknown []string
+	var rule *result
+	for p.dec.More() {
+		key, err := p.key()
+		if err != nil {
+			return nil, nil, err
+		}
+		if key != "rule" {
+			unknown = appendKey(unknown, key)
+			if err := p.skipValue(); err != nil {
+				return nil, nil, err
+			}
 			continue
 		}
-		children = append(children, *child)
+		r, err := p.value("rule", 1)
+		if err != nil {
+			return nil, nil, err
+		}
+		rule = &r
 	}
-	if !ok {
-		return nil
+	if _, err := p.dec.Token(); err != nil { // '}'
+		return nil, nil, err
 	}
-	if key == "all" {
-		return &Node{All: children}
+	slices.Sort(unknown)
+	var errs []validation.FieldError
+	for _, k := range unknown {
+		errs = append(errs, violation(k, "unknown property"))
 	}
-	return &Node{Any: children}
+	if rule == nil {
+		return nil, append(errs, violation("rule", "rule is missing")), nil
+	}
+	errs = append(errs, rule.errs...)
+	if rule.node != nil && !rule.group {
+		errs = append(errs, violation("rule", "rule root must be a group (all, any or not)"))
+	}
+	if len(errs) > 0 || rule.node == nil {
+		return nil, errs, nil
+	}
+	return rule.node, nil, nil
 }
 
-func (p *parser) condition(obj map[string]json.RawMessage, path string) *Node {
-	field, okField := p.stringProp(obj, "field", path)
-	op, okOp := p.stringProp(obj, "op", path)
-	if !okField || !okOp {
-		return nil
+// value parses the value at path, which must be a group or condition object; depth is the depth
+// this node has if it is a group.
+func (p *parser) value(path string, depth int) (result, error) {
+	tok, err := p.dec.Token()
+	if err != nil {
+		return result{}, err
 	}
-	c := &Condition{Field: field, Op: op}
-	if v, ok := obj["value"]; ok {
-		c.Value = append(json.RawMessage(nil), bytes.TrimSpace(v)...)
+	if tok != json.Delim('{') {
+		if err := p.skipRest(tok); err != nil {
+			return result{}, err
+		}
+		return result{errs: []validation.FieldError{violation(path, "must be a group or a condition object")}}, nil
 	}
-	return &Node{Cond: c}
+	return p.object(path, depth)
 }
 
-func (p *parser) stringProp(obj map[string]json.RawMessage, key, path string) (string, bool) {
-	raw, ok := obj[key]
+// object parses one node object after its '{'. The classification (group, condition, mixed,
+// unknown keys) is decided on the full key set, exactly as before: children errors only count
+// when the object itself is a well-formed group.
+func (p *parser) object(path string, depth int) (result, error) {
+	var (
+		seen               = map[string]bool{}
+		unknown            []string
+		children           []Node
+		childErrs          []validation.FieldError
+		childBroken        bool
+		notChild           *Node
+		groupValueBad      bool // all/any value is not an array
+		field, op          string
+		fieldOK, opOK      bool
+		fieldSeen, opSeen  bool
+		value              json.RawMessage
+		depthExceeded      bool // a child group is too deep: report this node, skip the rest
+		groupKey           string
+		tooDeepGroupMarker bool
+	)
+	for p.dec.More() {
+		key, err := p.key()
+		if err != nil {
+			return result{}, err
+		}
+		if depthExceeded || tooDeepGroupMarker {
+			if err := p.skipValue(); err != nil {
+				return result{}, err
+			}
+			continue
+		}
+		switch key {
+		case "all", "any", "not":
+			seen[key] = true
+			groupKey = key
+			if depth > maxParseDepth {
+				// This node is a group nested too deep: do not walk it at all.
+				tooDeepGroupMarker = true
+				if err := p.skipValue(); err != nil {
+					return result{}, err
+				}
+				continue
+			}
+			kpath := path + "." + key
+			if key == "not" {
+				r, err := p.value(kpath, depth+1)
+				if err != nil {
+					return result{}, err
+				}
+				switch {
+				case r.tooDeep:
+					depthExceeded = true
+				case r.node == nil:
+					childBroken = true
+					childErrs = append(childErrs, r.errs...)
+				default:
+					notChild = r.node
+				}
+				continue
+			}
+			nodes, errs, broken, bad, deep, err := p.array(kpath, depth+1)
+			if err != nil {
+				return result{}, err
+			}
+			children, childErrs, childBroken, groupValueBad = nodes, append(childErrs, errs...), childBroken || broken, bad
+			if deep {
+				depthExceeded = true
+			}
+		case "field", "op":
+			seen[key] = true
+			s, ok, err := p.stringValue()
+			if err != nil {
+				return result{}, err
+			}
+			if key == "field" {
+				field, fieldOK, fieldSeen = s, ok, true
+			} else {
+				op, opOK, opSeen = s, ok, true
+			}
+		case "value":
+			seen[key] = true
+			var raw json.RawMessage
+			if err := p.dec.Decode(&raw); err != nil {
+				return result{}, err
+			}
+			value = append(json.RawMessage(nil), bytes.TrimSpace(raw)...)
+		default:
+			unknown = appendKey(unknown, key)
+			if err := p.skipValue(); err != nil {
+				return result{}, err
+			}
+		}
+	}
+	if _, err := p.dec.Token(); err != nil { // '}'
+		return result{}, err
+	}
+
+	if tooDeepGroupMarker {
+		return result{tooDeep: true}, nil
+	}
+	if depthExceeded {
+		limit, actual := MaxDepth, depth
+		return result{errs: []validation.FieldError{{
+			Path: path, Code: validation.CodeMaxDepthExceeded,
+			Message: "segment rule is nested deeper than " + strconv.Itoa(MaxDepth) + " groups",
+			Limit:   &limit, Actual: &actual, Err: ErrMaxDepthExceeded,
+		}}}, nil
+	}
+
+	groupKeys := 0
+	for _, k := range []string{"all", "any", "not"} {
+		if seen[k] {
+			groupKeys++
+		}
+	}
+	condKeys := seen["field"] || seen["op"] || seen["value"]
+	switch {
+	case groupKeys > 0 && condKeys, groupKeys > 1:
+		return result{errs: []validation.FieldError{violation(path, "an object is either a group (exactly one of all, any, not) or a condition")}}, nil
+	case len(unknown) > 0:
+		slices.Sort(unknown)
+		errs := make([]validation.FieldError, 0, len(unknown))
+		for _, k := range unknown {
+			errs = append(errs, violation(path+"."+k, "unknown property"))
+		}
+		return result{errs: errs}, nil
+	case groupKeys == 1:
+		if groupValueBad {
+			return result{group: true, errs: []validation.FieldError{violation(path+"."+groupKey, groupKey+" must be an array")}}, nil
+		}
+		if childBroken {
+			return result{group: true, errs: childErrs}, nil
+		}
+		switch groupKey {
+		case "not":
+			return result{node: &Node{Not: notChild}, group: true}, nil
+		case "all":
+			return result{node: &Node{All: children}, group: true}, nil
+		default:
+			return result{node: &Node{Any: children}, group: true}, nil
+		}
+	case condKeys:
+		var errs []validation.FieldError
+		if !fieldSeen {
+			errs = append(errs, violation(path+".field", "field is missing"))
+		} else if !fieldOK {
+			errs = append(errs, violation(path+".field", "field must be a string"))
+		}
+		if !opSeen {
+			errs = append(errs, violation(path+".op", "op is missing"))
+		} else if !opOK {
+			errs = append(errs, violation(path+".op", "op must be a string"))
+		}
+		if len(errs) > 0 {
+			return result{errs: errs}, nil
+		}
+		p.conds++
+		if p.conds > maxParseConditions {
+			p.tooMany = true
+		}
+		return result{node: &Node{Cond: &Condition{Field: field, Op: op, Value: value}}}, nil
+	default:
+		return result{errs: []validation.FieldError{violation(path, "must be a group or a condition object")}}, nil
+	}
+}
+
+// array parses the children of all/any. bad: the value is not an array. deep: a child group is
+// nested too deep (the rest of the array is skipped). Once too many conditions were seen, the
+// remaining elements are skipped.
+func (p *parser) array(path string, childDepth int) (nodes []Node, errs []validation.FieldError, broken, bad, deep bool, err error) {
+	tok, err := p.dec.Token()
+	if err != nil {
+		return nil, nil, false, false, false, err
+	}
+	if tok != json.Delim('[') {
+		return nil, nil, false, true, false, p.skipRest(tok)
+	}
+	nodes = []Node{}
+	for i := 0; p.dec.More(); i++ {
+		if deep {
+			if err := p.skipValue(); err != nil {
+				return nil, nil, false, false, false, err
+			}
+			continue
+		}
+		r, err := p.value(path+"["+strconv.Itoa(i)+"]", childDepth)
+		if err != nil {
+			return nil, nil, false, false, false, err
+		}
+		switch {
+		case r.tooDeep:
+			deep = true
+		case r.node == nil:
+			broken = true
+			if len(errs) < maxFieldErrors {
+				errs = append(errs, r.errs...)
+			}
+		case p.tooMany:
+			// Past the condition cap: keep walking (to count) but retain nothing.
+		default:
+			nodes = append(nodes, *r.node)
+		}
+	}
+	if _, err := p.dec.Token(); err != nil { // ']'
+		return nil, nil, false, false, false, err
+	}
+	return nodes, errs, broken, false, deep, nil
+}
+
+func (p *parser) key() (string, error) {
+	tok, err := p.dec.Token()
+	if err != nil {
+		return "", err
+	}
+	k, ok := tok.(string)
 	if !ok {
-		p.violation(path+"."+key, key+" is missing")
-		return "", false
+		return "", errors.New("segment: object key expected")
 	}
-	var s string
-	if jsonKind(raw) != '"' || json.Unmarshal(raw, &s) != nil {
-		p.violation(path+"."+key, key+" must be a string")
-		return "", false
+	return k, nil
+}
+
+// stringValue reads the next value; ok reports whether it is a JSON string.
+func (p *parser) stringValue() (string, bool, error) {
+	tok, err := p.dec.Token()
+	if err != nil {
+		return "", false, err
 	}
-	return s, true
+	if s, ok := tok.(string); ok {
+		return s, true, nil
+	}
+	return "", false, p.skipRest(tok)
+}
+
+// skipValue consumes the next value without building it.
+func (p *parser) skipValue() error {
+	tok, err := p.dec.Token()
+	if err != nil {
+		return err
+	}
+	return p.skipRest(tok)
+}
+
+// skipRest consumes the remainder of a value whose first token was tok.
+func (p *parser) skipRest(tok json.Token) error {
+	d, ok := tok.(json.Delim)
+	if !ok || d == '}' || d == ']' {
+		return nil
+	}
+	for depth := 1; depth > 0; {
+		t, err := p.dec.Token()
+		if err == io.EOF {
+			return io.ErrUnexpectedEOF
+		}
+		if err != nil {
+			return err
+		}
+		if d, ok := t.(json.Delim); ok {
+			if d == '{' || d == '[' {
+				depth++
+			} else {
+				depth--
+			}
+		}
+	}
+	return nil
+}
+
+// appendKey records an unknown key once (after replacing an untrusted name by invalidKey),
+// keeping at most maxFieldErrors of them.
+func appendKey(keys []string, k string) []string {
+	k = keyPath("", k)
+	if len(keys) >= maxFieldErrors || slices.Contains(keys, k) {
+		return keys
+	}
+	return append(keys, k)
 }
 
 // jsonKind returns the first significant byte of a JSON value: '{', '[', '"', 'n', 't', 'f' or a
@@ -168,13 +458,4 @@ func jsonKind(raw []byte) byte {
 		return 0
 	}
 	return t[0]
-}
-
-func sortedKeys(m map[string]json.RawMessage) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
 }
