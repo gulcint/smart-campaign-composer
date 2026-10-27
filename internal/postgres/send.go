@@ -17,7 +17,7 @@ import (
 // The worker's side of the queue (claim, lease, Mark*) is delivery.Store.
 
 // CreateDeliveries accepts a send under the campaign row lock (campaign.Store).
-func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID string, at time.Time, check func(campaign.LockedCampaign) error) (campaign.DeliveryTotals, campaign.State, error) {
+func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID string, now func() time.Time, check func(campaign.LockedCampaign) error) (campaign.DeliveryTotals, campaign.State, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return campaign.DeliveryTotals{}, "", fmt.Errorf("postgres: send: %w", err)
@@ -31,6 +31,7 @@ func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID stri
 	if err := check(lc.LockedCampaign); err != nil {
 		return campaign.DeliveryTotals{}, "", err
 	}
+	// Defensive: approved (checked above) implies a stored segment (campaigns_segment_present_check).
 	if !lc.HasSegment {
 		return campaign.DeliveryTotals{}, "", fmt.Errorf("%w: campaign has no segment", campaign.ErrInvalidState)
 	}
@@ -46,6 +47,9 @@ func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID stri
 	// current consent and contact columns. The compiled predicate holds only constant SQL and $n
 	// placeholders; this query's own parameters follow the rule's. The row id is the provider
 	// Idempotency-Key (REQ-SND-03).
+	// Read the clock only now that the row lock is held: a concurrent write to this campaign has
+	// committed with an earlier time, so updated_at never moves backwards.
+	at := now()
 	n := len(comp.Args)
 	p := func(i int) string { return "$" + strconv.Itoa(n+i) }
 	q := `WITH ins AS (
@@ -91,9 +95,19 @@ func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID stri
 // completeCampaignIfDone moves a sending campaign to completed when none of its deliveries is
 // queued or sending (db-schema.md §4 "Tamamlama"). It runs inside the caller's transaction: the
 // send acceptance calls it (no delivery at all), and every delivery.Store write that moves a
-// delivery to sent or failed must call it in the same transaction. It reports whether the
-// campaign was completed by this call.
+// delivery to sent or failed must call it in the same transaction, after that write. It reports
+// whether the campaign was completed by this call.
+//
+// It first locks the campaign row (a no-op when the caller already holds it), then checks in a
+// SEPARATE statement. Under READ COMMITTED each statement takes a fresh snapshot after the lock is
+// granted, so of two transactions finishing the last SMS and the last email delivery concurrently
+// the second one to get the lock sees the first one's committed delivery and completes the
+// campaign. In one statement both could see the other's delivery still sending and neither would
+// complete it.
 func completeCampaignIfDone(ctx context.Context, tx pgx.Tx, campaignID string, now time.Time) (bool, error) {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM campaigns WHERE id = $1 FOR UPDATE`, campaignID); err != nil {
+		return false, fmt.Errorf("postgres: complete campaign: %w", err)
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE campaigns SET state = 'completed', completed_at = $2, updated_at = $2
 		WHERE id = $1 AND state = 'sending' AND NOT EXISTS (
@@ -105,6 +119,10 @@ func completeCampaignIfDone(ctx context.Context, tx pgx.Tx, campaignID string, n
 	return tag.RowsAffected() == 1, nil
 }
 
+// readSnapshot is a read-only REPEATABLE READ transaction: every statement in it sees the same
+// snapshot, so values read by several queries agree with each other.
+var readSnapshot = pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
+
 // DeliveryStatus reads the campaign's delivery counters (openapi CampaignStatus).
 func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign.CampaignStatus, error) {
 	var (
@@ -112,7 +130,15 @@ func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign
 		state                string
 		sendingAt, completed *time.Time
 	)
-	err := s.db.QueryRow(ctx, `
+	// One snapshot for the campaign row and the counters: a response never pairs a state with
+	// counters from another moment (e.g. approved with non-zero counters).
+	tx, err := s.db.BeginTx(ctx, readSnapshot)
+	if err != nil {
+		return campaign.CampaignStatus{}, fmt.Errorf("postgres: campaign status: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // read-only: nothing to commit
+
+	err = tx.QueryRow(ctx, `
 		SELECT state, sending_started_at, completed_at,
 			greatest(updated_at, (SELECT max(updated_at) FROM deliveries WHERE campaign_id = $1))
 		FROM campaigns WHERE id = $1`, id).Scan(&state, &sendingAt, &completed, &st.UpdatedAt)
@@ -125,7 +151,7 @@ func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign
 	st.CampaignID, st.State = id, campaign.State(state)
 	st.SendingStartedAt, st.CompletedAt, st.UpdatedAt = utcPtr(sendingAt), utcPtr(completed), st.UpdatedAt.UTC()
 
-	rows, err := s.db.Query(ctx, `
+	rows, err := tx.Query(ctx, `
 		SELECT channel, status, count(*) FROM deliveries WHERE campaign_id = $1 GROUP BY channel, status`, id)
 	if err != nil {
 		return campaign.CampaignStatus{}, fmt.Errorf("postgres: campaign status: %w", err)
@@ -174,21 +200,33 @@ const deliveryColumns = `id::text, campaign_id::text, content_version_id::text, 
 // ListDeliveries returns one page of the campaign's deliveries. No recipient address is selected:
 // deliveries hold none and customers is not joined (REQ-SEC-01 spirit).
 func (s *CampaignStore) ListDeliveries(ctx context.Context, id string, f campaign.DeliveryFilter) ([]campaign.Delivery, int, error) {
-	if err := s.campaignExists(ctx, id); err != nil {
-		return nil, 0, err
+	// Existence, count and page in one snapshot, so total and items agree.
+	tx, err := s.db.BeginTx(ctx, readSnapshot)
+	if err != nil {
+		return nil, 0, fmt.Errorf("postgres: list deliveries: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // read-only: nothing to commit
+
+	var one int
+	err = tx.QueryRow(ctx, `SELECT 1 FROM campaigns WHERE id = $1`, id).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, campaign.ErrCampaignNotFound
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("postgres: read campaign: %w", err)
 	}
 	where := `WHERE campaign_id = $1 AND ($2 = '' OR status = $2) AND ($3 = '' OR channel = $3)
 		AND ($4 = '' OR customer_id = nullif($4, '')::uuid)`
 	args := []any{id, f.Status, f.Channel, f.CustomerID}
 	var total int
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM deliveries `+where, args...).Scan(&total); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM deliveries `+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("postgres: count deliveries: %w", err)
 	}
 	order := `customer_id, channel`
 	if f.Order == campaign.DeliveryOrderRecent {
 		order = `updated_at DESC, id`
 	}
-	rows, err := s.db.Query(ctx, `SELECT `+deliveryColumns+` FROM deliveries `+where+`
+	rows, err := tx.Query(ctx, `SELECT `+deliveryColumns+` FROM deliveries `+where+`
 		ORDER BY `+order+` LIMIT $5 OFFSET $6`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("postgres: list deliveries: %w", err)

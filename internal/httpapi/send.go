@@ -1,11 +1,11 @@
 package httpapi
 
 import (
+	"cmp"
 	"net/http"
 	"strconv"
 
 	"github.com/gulcint/smart-campaign-composer/internal/campaign"
-	"github.com/gulcint/smart-campaign-composer/internal/validation"
 )
 
 // ---- POST /api/campaigns/{campaign_id}/send ----
@@ -46,7 +46,8 @@ func (a *api) getCampaignStatus(w http.ResponseWriter, r *http.Request) {
 
 // ---- GET /api/campaigns/{campaign_id}/deliveries ----
 
-// listDeliveries: path (404) -> query (422 invalid_value, path query.<name>) -> Service.
+// listDeliveries: path (404) -> query (422 invalid_value, path query.<name>) -> Service. The
+// value rules are campaign.DeliveryFilterErrors, shared with the service.
 func (a *api) listDeliveries(w http.ResponseWriter, r *http.Request) {
 	id, ok := campaignID(w, r)
 	if !ok {
@@ -54,36 +55,11 @@ func (a *api) listDeliveries(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	f := campaign.DeliveryFilter{
-		Status: q.Get("status"), Channel: q.Get("channel"), CustomerID: q.Get("customer_id"), Order: q.Get("order"),
+		Status: q.Get("status"), Channel: q.Get("channel"), CustomerID: q.Get("customer_id"),
+		Order: cmp.Or(q.Get("order"), campaign.DeliveryOrderCustomer),
+		Limit: queryInt(q.Get("limit"), campaign.DefaultPageLimit), Offset: queryInt(q.Get("offset"), 0),
 	}
-	var fields []validation.FieldError
-	switch f.Status {
-	case "", "queued", "sending", "sent", "failed":
-	default:
-		fields = append(fields, invalidQuery("status", "status must be one of queued, sending, sent, failed"))
-	}
-	switch f.Channel {
-	case "", "sms", "email":
-	default:
-		fields = append(fields, invalidQuery("channel", "channel must be sms or email"))
-	}
-	switch f.Order {
-	case "", campaign.DeliveryOrderCustomer, campaign.DeliveryOrderRecent:
-	default:
-		fields = append(fields, invalidQuery("order", "order must be customer or recent"))
-	}
-	if f.CustomerID != "" {
-		if f.CustomerID, ok = canonicalUUID(f.CustomerID); !ok {
-			fields = append(fields, invalidQuery("customer_id", "customer_id must be a UUID"))
-		}
-	}
-	if f.Limit, ok = intQuery(q.Get("limit"), campaign.DefaultPageLimit, 1, campaign.MaxPageLimit); !ok {
-		fields = append(fields, invalidQuery("limit", "limit must be an integer between 1 and "+strconv.Itoa(campaign.MaxPageLimit)))
-	}
-	if f.Offset, ok = intQuery(q.Get("offset"), 0, 0, -1); !ok {
-		fields = append(fields, invalidQuery("offset", "offset must be a non-negative integer"))
-	}
-	if len(fields) > 0 {
+	if fields := campaign.DeliveryFilterErrors(&f); len(fields) > 0 {
 		writeFieldError(w, r, http.StatusUnprocessableEntity, "validation_failed", "request validation failed", fields)
 		return
 	}
@@ -93,4 +69,17 @@ func (a *api) listDeliveries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+// queryInt parses an optional integer query value; a non-integer becomes -1, which is out of range
+// for both limit and offset, so the shared check reports it.
+func queryInt(v string, def int) int {
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return -1
+	}
+	return n
 }

@@ -340,7 +340,7 @@ func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, e
 		return SendResult{}, err
 	}
 	id, versionID = v.CampaignID, v.ID // canonical (D47a)
-	totals, state, err := s.d.Store.CreateDeliveries(ctx, id, versionID, s.now(), func(lc LockedCampaign) error {
+	totals, state, err := s.d.Store.CreateDeliveries(ctx, id, versionID, s.now, func(lc LockedCampaign) error {
 		if err := lc.CheckNoGeneration(s.d.Clock.Now()); err != nil {
 			return err
 		}

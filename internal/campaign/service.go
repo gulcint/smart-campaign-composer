@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,18 +73,20 @@ type Store interface {
 	EndGeneration(ctx context.Context, id, token string) error
 
 	// CreateDeliveries accepts a send in ONE transaction under the campaign row lock: it passes the
-	// locked campaign to check and, when check returns nil, inserts one queued delivery
-	// (next_attempt_at = at) per (channel, customer) of the channel audiences of the stored rule at
+	// locked campaign to check and, when check returns nil, reads at := now() (after the lock is
+	// held, so updated_at never moves backwards behind a concurrent write) and inserts one queued
+	// delivery (next_attempt_at = at) per (channel, customer) of the channel audiences of the stored rule at
 	// the stored reference time with the CURRENT consent and contact data (segment-dsl.md §6,
 	// REQ-AUD-04), moves the campaign to sending (sending_started_at = at) and, when no delivery was
 	// created, on to completed. It returns the created counts and the resulting state. Errors:
 	// ErrCampaignNotFound, check's error; nothing is written on any error.
-	CreateDeliveries(ctx context.Context, id, versionID string, at time.Time, check func(LockedCampaign) error) (DeliveryTotals, State, error)
+	CreateDeliveries(ctx context.Context, id, versionID string, now func() time.Time, check func(LockedCampaign) error) (DeliveryTotals, State, error)
 	// DeliveryStatus returns the campaign's state, timestamps and delivery counters per channel and
-	// status. Unknown campaign => ErrCampaignNotFound.
+	// status, all read in one snapshot. Unknown campaign => ErrCampaignNotFound.
 	DeliveryStatus(ctx context.Context, id string) (CampaignStatus, error)
 	// ListDeliveries returns one page of the campaign's deliveries matching f (already validated;
-	// Order "customer" or "recent") and the filtered total. Unknown campaign => ErrCampaignNotFound.
+	// Order "customer" or "recent") and the filtered total, both from one snapshot. Unknown
+	// campaign => ErrCampaignNotFound.
 	ListDeliveries(ctx context.Context, id string, f DeliveryFilter) ([]Delivery, int, error)
 }
 
@@ -370,10 +374,17 @@ func (s *service) CountRule(ctx context.Context, raw []byte) (SegmentCount, erro
 
 // ---- delivery tracking ----
 
-// Delivery filter values (openapi listDeliveries).
+// Delivery filter values (openapi listDeliveries): the single source for the HTTP handler and the
+// service.
 const (
 	DeliveryOrderCustomer = "customer"
 	DeliveryOrderRecent   = "recent"
+)
+
+var (
+	deliveryStatuses = []string{"queued", "sending", "sent", "failed"}
+	deliveryChannels = []string{"sms", "email"}
+	deliveryOrders   = []string{DeliveryOrderCustomer, DeliveryOrderRecent}
 )
 
 func (s *service) Status(ctx context.Context, id string) (CampaignStatus, error) {
@@ -385,7 +396,7 @@ func (s *service) Status(ctx context.Context, id string) (CampaignStatus, error)
 }
 
 // ListDeliveries validates the filter (422 invalid_value, paths query.<name>) before looking the
-// campaign up (README §5.4: query before use case).
+// campaign up (README §5.4: query before use case). Zero Limit and empty Order take the defaults.
 func (s *service) ListDeliveries(ctx context.Context, id string, f DeliveryFilter) (DeliveryPage, error) {
 	id, ok := canonicalID(id)
 	if !ok {
@@ -394,8 +405,11 @@ func (s *service) ListDeliveries(ctx context.Context, id string, f DeliveryFilte
 	if f.Order == "" {
 		f.Order = DeliveryOrderCustomer
 	}
-	if err := validateDeliveryFilter(&f); err != nil {
-		return DeliveryPage{}, err
+	if f.Limit == 0 {
+		f.Limit = DefaultPageLimit
+	}
+	if fields := DeliveryFilterErrors(&f); len(fields) > 0 {
+		return DeliveryPage{}, &validation.Error{Fields: fields}
 	}
 	items, total, err := s.d.Store.ListDeliveries(ctx, id, f)
 	if err != nil {
@@ -407,25 +421,23 @@ func (s *service) ListDeliveries(ctx context.Context, id string, f DeliveryFilte
 	return DeliveryPage{Items: items, Total: total, Limit: f.Limit, Offset: f.Offset}, nil
 }
 
-// validateDeliveryFilter checks f and canonicalizes f.CustomerID (D47a).
-func validateDeliveryFilter(f *DeliveryFilter) error {
+// DeliveryFilterErrors checks f against openapi listDeliveries (empty Status, Channel, CustomerID
+// = no filter; Order must be set; Limit 1..MaxPageLimit; Offset >= 0) and canonicalizes
+// f.CustomerID (D47a). Errors are invalid_value with paths query.<name>, in parameter order.
+func DeliveryFilterErrors(f *DeliveryFilter) []validation.FieldError {
 	var fields []validation.FieldError
 	invalid := func(name, msg string) {
 		fields = append(fields, validation.FieldError{Path: "query." + name, Code: validation.CodeInvalidValue,
 			Message: msg, Err: validation.ErrInvalidValue})
 	}
-	switch f.Status {
-	case "", "queued", "sending", "sent", "failed":
-	default:
-		invalid("status", "status must be one of queued, sending, sent, failed")
+	if f.Status != "" && !slices.Contains(deliveryStatuses, f.Status) {
+		invalid("status", "status must be one of "+strings.Join(deliveryStatuses, ", "))
 	}
-	switch f.Channel {
-	case "", "sms", "email":
-	default:
-		invalid("channel", "channel must be sms or email")
+	if f.Channel != "" && !slices.Contains(deliveryChannels, f.Channel) {
+		invalid("channel", "channel must be one of "+strings.Join(deliveryChannels, ", "))
 	}
-	if f.Order != DeliveryOrderCustomer && f.Order != DeliveryOrderRecent {
-		invalid("order", "order must be customer or recent")
+	if !slices.Contains(deliveryOrders, f.Order) {
+		invalid("order", "order must be one of "+strings.Join(deliveryOrders, ", "))
 	}
 	if f.CustomerID != "" {
 		cid, ok := canonicalID(f.CustomerID)
@@ -435,15 +447,12 @@ func validateDeliveryFilter(f *DeliveryFilter) error {
 		f.CustomerID = cid
 	}
 	if f.Limit < 1 || f.Limit > MaxPageLimit {
-		invalid("limit", "limit must be between 1 and "+strconv.Itoa(MaxPageLimit))
+		invalid("limit", "limit must be an integer between 1 and "+strconv.Itoa(MaxPageLimit))
 	}
 	if f.Offset < 0 {
-		invalid("offset", "offset must not be negative")
+		invalid("offset", "offset must be a non-negative integer")
 	}
-	if len(fields) > 0 {
-		return &validation.Error{Fields: fields}
-	}
-	return nil
+	return fields
 }
 
 // ---- per-campaign generation lease ----
