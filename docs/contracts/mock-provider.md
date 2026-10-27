@@ -20,7 +20,8 @@ Gerçek bir SMS/email servisini taklit eden bağımsız HTTP servisi. Compose'da
 |---|---|---|---|
 | `202 Accepted` | `{"id":"msg_<32 hex>","status":"accepted","channel":"sms","idempotency_key":"…","duplicate":false}` | — | Mesaj kabul edildi |
 | `202 Accepted` (tekrar) | İlk kabulün **aynı** gövdesi, yalnız `"duplicate": true` | `Idempotent-Replayed: true` | Aynı `Idempotency-Key` daha önce **kabul edilmişse**; mesaj tekrar kabul edilmez, kayıt sayısı artmaz (REQ-MOCK-02) |
-| `400 Bad Request` | `{"error":{"code":"missing_idempotency_key"|"invalid_body"|"invalid_recipient","message":"…"}}` | — | Başlık yok; JSON bozuk/eksik alan; alıcı kurgusal değil (`to` SMS'te `^\+90500000[0-9]{4}$`, email'de `@example.com`/`@example.test` değilse) |
+| `400 Bad Request` | `{"error":{"code":"missing_idempotency_key"|"invalid_body"|"invalid_recipient","message":"…"}}` | — | Başlık yok; JSON bozuk/eksik alan veya `Content-Type` JSON değil (`invalid_body`); senaryolu `status: 400` (`invalid_body`); alıcı kurgusal değil (`to` SMS'te `^\+90500000[0-9]{4}$`, email'de `@example.com`/`@example.test` değilse) |
+| `408 Request Timeout` | `{"error":{"code":"request_timeout","message":"…"}}` | — | Yalnız senaryolu `status: 408` |
 | `409 Conflict` | `{"error":{"code":"idempotency_key_reused","message":"…"}}` | — | Aynı anahtar, farklı kanal veya farklı `to` ile geldi |
 | `429 Too Many Requests` | `{"error":{"code":"rate_limited","message":"…"}}` | `Retry-After: <MOCK_PROVIDER_RETRY_AFTER_SECONDS>` (tam sayı saniye) | Kanal hız sınırı aşıldı (§2) veya rastgele/senaryolu 429 |
 | `500` / `503` | `{"error":{"code":"internal_error","message":"…"}}` | — | Rastgele veya senaryolu hata |
@@ -62,8 +63,8 @@ Testlerin `429, 500, 202` gibi tam dizileri zorlaması için. Admin kapalıyken 
 |---|---|---|
 | `POST` | `/admin/scripts` | İstek: `{"channel":"sms","to":"+905000001234","responses":[{"status":429,"retry_after":"2"},{"status":500},{"status":202}]}` → `204`. `to` isteğe bağlıdır |
 | `DELETE` | `/admin/scripts` | Tüm senaryoları siler → `204` |
-| `GET` | `/admin/messages` | `200 {"items":[{"id","channel","to","idempotency_key","accepted_at","request_count"}]}` — kabul edilmiş tekil mesajlar (`accepted_at` artan); `request_count` = o anahtarla gelen toplam istek |
-| `GET` | `/admin/requests` | `200 {"items":[{"seq","channel","idempotency_key","to","received_at","status","replayed"}]}` — değerlendirilen her istek, varış sırasıyla (`seq` 1'den); `status` dönülen HTTP kodu, kayıp yanıtta `0` |
+| `GET` | `/admin/messages` | `200 {"items":[{"id","channel","to","idempotency_key","accepted_at","request_count"}]}` — kabul edilmiş tekil mesajlar (`accepted_at` artan); `request_count` = o anahtarla gelen **her** istek; doğrulamadan önce sayılır, sonucu ne olursa olsun (4xx/5xx/429/kayıp yanıt/replay/kabul) dahildir |
+| `GET` | `/admin/requests` | `200 {"items":[{"seq","channel","idempotency_key","to","received_at","status","replayed"}]}` — değerlendirilen her istek, varış sırasıyla (`seq` 1'den); `status` dönülen HTTP kodu, kayıp yanıtta `0`; `POST /admin/reset` kaydı temizlediği için `seq` yeniden 1'den başlar |
 | `POST` | `/admin/reset` | Mesajlar, istek kaydı, idempotency deposu, hız penceresi ve senaryolar temizlenir; rastgele üreteçler tohumdan yeniden kurulur → `204` |
 
 Senaryo yanıt öğesi: `{"status": 202|400|408|429|500|503, "retry_after": "<header değeri, isteğe bağlı>", "delay_ms": <int, isteğe bağlı, varsayılan 0>, "lost_response": <bool, isteğe bağlı>}`. `status: 202` gerçek kabul ve kayıt yapar; `lost_response: true` yalnızca `202` ile anlamlıdır (kabul + yanıtı kaybet).

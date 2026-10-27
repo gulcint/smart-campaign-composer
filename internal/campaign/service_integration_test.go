@@ -1716,3 +1716,227 @@ func TestService_ApproveRechecksWorstCaseWithCurrentCustomers(t *testing.T) {
 		})
 	}
 }
+
+// ---- generation lock across API processes (REQ-SND-01) ----
+
+// newPeer builds a second campaign service on the same database, the way a second API process would:
+// its own pool (testdb.App opens a new one), its own LLM client and the given clock. Nothing is shared
+// with the other service except the database.
+func newPeer(t *testing.T, c llm.Client, fc *clock.Fake) campaign.Service {
+	t.Helper()
+	pool := testdb.App(t)
+	ref := svcRef
+	return campaign.NewService(campaign.Deps{
+		Store:                postgres.NewCampaignStore(pool),
+		Audience:             postgres.NewAudience(pool),
+		LLM:                  c,
+		Clock:                fc,
+		SegmentReferenceTime: &ref,
+		Logger:               slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+}
+
+// audienceTotal is the number of delivery rows an accepted send must create: audience.sms +
+// audience.email of the campaign's segment.
+func (h *harness) audienceTotal(t *testing.T, id string) int {
+	t.Helper()
+	a := h.get(t, id).Segment.Audience
+	return a.SMS + a.Email
+}
+
+// REQ-SND-01
+// "Kural, aynı veritabanını kullanan birden fazla API sürecinde de geçerlidir (üretim işareti
+// veritabanında tutulur)": while service A holds a content generation open (stalled_stream), Send on
+// a second campaign.NewService instance B over the same database is campaign.ErrGenerationInProgress
+// and creates no delivery; the campaign state is unchanged. generation_in_progress comes before
+// invalid_state in the send check order, so a not-yet-approved campaign gets it too. Once A's client
+// goes away the lock is released for B as well: the approved campaign is sent (one row per audience
+// member and channel, state sending) and the unapproved one is now invalid_state.
+func TestService_GenerationLockBlocksSendAcrossProcesses(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		approve   bool
+		wantAfter error
+	}{
+		{name: "approved campaign is refused while generating and sent after release", approve: true},
+		{name: "content_ready campaign gets generation_in_progress before invalid_state", approve: false, wantAfter: campaign.ErrInvalidState},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := newMockHarness(t)
+			b := newPeer(t, llm.NewMock(llm.MockOptions{}), clock.NewFake(svcRef))
+			bg := context.Background()
+			id := a.audienceReady(t)
+			vid := a.edit(t, id, campaign.ExpectedVersionNone, okContent()).ID
+			wantState := campaign.StateContentReady
+			if tc.approve {
+				if _, err := a.svc.Approve(bg, id, vid); err != nil {
+					t.Fatalf("Approve() error = %v", err)
+				}
+				wantState = campaign.StateApproved
+			}
+
+			stop := a.stall(t, id)
+			_, sendErr := b.Send(bg, id, vid)
+			during := a.deliveryCount(t, id)
+			got, getErr := b.Get(bg, id)
+			stop()
+
+			if !errors.Is(sendErr, campaign.ErrGenerationInProgress) {
+				t.Fatalf("Send() on the other process during a generation error = %v, want %v", sendErr, campaign.ErrGenerationInProgress)
+			}
+			if during != 0 {
+				t.Fatalf("deliveries after the refused send = %d, want 0", during)
+			}
+			if getErr != nil || got.State != wantState {
+				t.Fatalf("Get() on the other process = state %s, %v; want %s (unchanged)", got.State, getErr, wantState)
+			}
+			if st := a.get(t, id).State; st != wantState {
+				t.Fatalf("state after the cancelled generation = %s, want %s", st, wantState)
+			}
+
+			_, err := b.Send(bg, id, vid)
+			if !errors.Is(err, tc.wantAfter) {
+				t.Fatalf("Send() on the other process after the lock was released error = %v, want %v", err, tc.wantAfter)
+			}
+			wantRows := 0
+			if tc.approve {
+				wantRows = a.audienceTotal(t, id)
+				if wantRows == 0 {
+					t.Fatal("test setup: the example brief audience is empty on both channels")
+				}
+				if st := a.get(t, id).State; string(st) != "sending" {
+					t.Fatalf("state after the accepted send = %s, want sending", st)
+				}
+			}
+			if n := a.deliveryCount(t, id); n != wantRows {
+				t.Fatalf("deliveries after the lock was released = %d, want %d", n, wantRows)
+			}
+		})
+	}
+}
+
+// REQ-SND-01, REQ-CNT-04
+// The database-held generation mark also refuses a second generation started on another process:
+// while A holds a content generation open, StartContentGeneration and GenerateSegment on instance B
+// (same database) are campaign.ErrGenerationInProgress (REQ-SND-01 check order for segment and content
+// generation), B's LLM is never called and nothing changes. After A's client goes away, B can generate.
+func TestService_SecondGenerationOnOtherProcessIsRefused(t *testing.T) {
+	t.Parallel()
+	a := newMockHarness(t)
+	okRaw := string(rawOf(t, okContent()))
+	bc := &blockingClient{mock: llm.NewMock(llm.MockOptions{}), raw: func(int) (string, bool) { return okRaw, true }}
+	b := newPeer(t, bc, clock.NewFake(svcRef))
+	bg := context.Background()
+	id := a.audienceReady(t)
+	v1 := a.edit(t, id, campaign.ExpectedVersionNone, editContent("başka süreç"))
+	rowsBefore := a.versionRows(t, id)
+
+	stop := a.stall(t, id)
+	startCtx, startCancel := context.WithCancel(scen(llm.ScenarioOK))
+	locked := map[string]error{}
+	_, locked["StartContentGeneration"] = b.StartContentGeneration(startCtx, id)
+	_, locked["GenerateSegment"] = b.GenerateSegment(scen(llm.ScenarioOK), id)
+	startCancel()
+	stop()
+
+	for op, err := range locked {
+		if !errors.Is(err, campaign.ErrGenerationInProgress) {
+			t.Errorf("%s on the other process during a generation error = %v, want %v", op, err, campaign.ErrGenerationInProgress)
+		}
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+	if n := bc.streamCalls(); n != 0 {
+		t.Fatalf("StreamContent calls on the other process = %d, want 0 (a refused start must not reach the LLM)", n)
+	}
+	if diff := cmp.Diff(rowsBefore, a.versionRows(t, id)); diff != "" {
+		t.Fatalf("refused generations changed the versions (-before +after):\n%s", diff)
+	}
+	c := a.get(t, id)
+	if c.State != campaign.StateContentReady || c.LatestContentVersion == nil || c.LatestContentVersion.ID != v1.ID {
+		t.Fatalf("after refused generations state/latest = %s/%+v, want content_ready/%s", c.State, c.LatestContentVersion, v1.ID)
+	}
+
+	run, err := b.StartContentGeneration(bg, id)
+	if err != nil {
+		t.Fatalf("StartContentGeneration() on the other process after the release error = %v, want nil", err)
+	}
+	var res streamResult
+	res.err = run.Stream(bg, func(ev composer.Event) error {
+		res.events = append(res.events, ev)
+		return nil
+	})
+	if res.err != nil {
+		t.Fatalf("Stream() on the other process error = %v", res.err)
+	}
+	if _, ok := asValidated(res.terminal(t)); !ok {
+		t.Fatalf("terminal event on the other process = %#v, want validated", res.terminal(t))
+	}
+}
+
+// REQ-SND-01, REQ-CNT-04
+// "Kilit en geç 120 sn sonra da bırakılır": both processes share one fake clock. A holds a generation
+// whose LLM stream never ends (and whose client never goes away). One nanosecond before
+// campaign.MaxGenerationDuration, Send on instance B is still campaign.ErrGenerationInProgress with
+// no delivery; once the clock reaches the limit A's generation ends and B's Send is accepted.
+func TestService_GenerationLockExpiresForOtherProcess(t *testing.T) {
+	t.Parallel()
+	bc := &blockingClient{mock: llm.NewMock(llm.MockOptions{})}
+	a := newHarness(t, bc)
+	b := newPeer(t, llm.NewMock(llm.MockOptions{}), a.clock)
+	bg := context.Background()
+	id := a.audienceReady(t)
+	vid := a.edit(t, id, campaign.ExpectedVersionNone, okContent()).ID
+	if _, err := a.svc.Approve(bg, id, vid); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+
+	streamCtx, streamCancel := context.WithCancel(bg)
+	defer streamCancel()
+	run, err := a.svc.StartContentGeneration(streamCtx, id)
+	if err != nil {
+		t.Fatalf("StartContentGeneration() error = %v", err)
+	}
+	done := make(chan streamResult, 1)
+	go func() {
+		var res streamResult
+		res.err = run.Stream(streamCtx, func(ev composer.Event) error {
+			res.events = append(res.events, ev)
+			return nil
+		})
+		done <- res
+	}()
+	wctx, wcancel := context.WithTimeout(bg, 10*time.Second)
+	defer wcancel()
+	if err := a.clock.BlockUntilWaiters(wctx, 1); err != nil {
+		t.Fatalf("the service registered no timer on the injected clock: %v", err)
+	}
+
+	a.clock.Advance(campaign.MaxGenerationDuration - time.Nanosecond)
+	if _, err := b.Send(bg, id, vid); !errors.Is(err, campaign.ErrGenerationInProgress) {
+		t.Fatalf("Send() on the other process 1ns before the limit error = %v, want %v (lock still held)", err, campaign.ErrGenerationInProgress)
+	}
+	if n := a.deliveryCount(t, id); n != 0 {
+		t.Fatalf("deliveries 1ns before the limit = %d, want 0", n)
+	}
+
+	a.clock.Advance(time.Nanosecond)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Stream did not end within 10s after the clock passed MaxGenerationDuration")
+	}
+	if st := a.get(t, id).State; st != campaign.StateApproved {
+		t.Fatalf("state after the timed-out generation = %s, want approved (unchanged)", st)
+	}
+	if _, err := b.Send(bg, id, vid); err != nil {
+		t.Fatalf("Send() on the other process after the limit error = %v, want nil (lock released)", err)
+	}
+	if n, want := a.deliveryCount(t, id), a.audienceTotal(t, id); n != want || n == 0 {
+		t.Fatalf("deliveries after the accepted send = %d, want %d (> 0)", n, want)
+	}
+}

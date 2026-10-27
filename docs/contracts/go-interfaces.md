@@ -1290,10 +1290,10 @@ func NewDispatcher(cfg DispatcherConfig, deps DispatcherDeps) (*Dispatcher, erro
 var ErrInvalidConfig = errors.New("delivery: invalid dispatcher config")
 
 // Run loops until ctx is done (returns ctx.Err()): acquires the channel lock (only the holder
-// sends), reclaims expired leases, claims due jobs and processes them. ChannelLock.Held is checked
-// before every batch and after each claim, before the batch's first Limiter.Wait; when the lock
-// is lost the batch is requeued, Leader() and scc_dispatcher_leader go to 0 and Run goes back to
-// acquiring the lock (D53).
+// sends), calls Store.ReclaimExpired(ctx, channel, now) before each pass, claims due jobs and
+// processes them. ChannelLock.Held is checked before every batch and after each claim, before the
+// batch's first Limiter.Wait; when the lock is lost the batch is requeued, Leader() and
+// scc_dispatcher_leader go to 0 and Run goes back to acquiring the lock (D53).
 func (d *Dispatcher) Run(ctx context.Context) error
 
 // Leader reports whether this dispatcher currently holds the channel's advisory lock (also
@@ -1301,7 +1301,8 @@ func (d *Dispatcher) Run(ctx context.Context) error
 func (d *Dispatcher) Leader() bool
 
 // ProcessOnce claims one batch at Clock.Now() and processes it to completion WITHOUT taking the
-// channel lock (test seam). Unit tests that run several dispatchers/ProcessOnce loops concurrently for
+// channel lock (test seam). It does NOT reclaim expired leases: a lease-expiry test calls
+// Store.ReclaimExpired(ctx, channel, now) explicitly, then ProcessOnce. Unit tests that run several dispatchers/ProcessOnce loops concurrently for
 // one channel MUST pass the same RateLimiter instance to all of them. For each job, in this order:
 //   1. !job.Consent || job.To == ""  => MarkFailed(recipient_unavailable, LastError "recipient_unavailable"),
 //      NO provider call, NO limiter permit (REQ-AUD-04 at send time);
@@ -1364,6 +1365,8 @@ type Client interface {
 	Send(ctx context.Context, m Message) (Response, error)
 }
 
+// PROVIDER_TIMEOUT is applied as hc.Timeout (wall clock, NOT c); exceeding it => ErrTimeout.
+// Tests use a short PROVIDER_TIMEOUT and a scripted mock-provider delay_ms above it.
 func NewHTTPClient(baseURL string, hc *http.Client, c clock.Clock) Client
 
 var (
