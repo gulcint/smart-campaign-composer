@@ -195,21 +195,6 @@ func (s *CampaignStore) EndGeneration(ctx context.Context, id, token string) err
 	return nil
 }
 
-// InspectLocked runs check on the campaign row under its lock and writes nothing.
-func (s *CampaignStore) InspectLocked(ctx context.Context, id string, check func(campaign.LockedCampaign) error) error {
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("postgres: inspect campaign: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	lc, err := lockCampaign(ctx, tx, id)
-	if err != nil {
-		return err
-	}
-	return check(lc.LockedCampaign)
-}
-
 // errRetryVersionNumber marks the one retry of a content_versions_campaign_version_key violation.
 var errRetryVersionNumber = errors.New("postgres: version number taken")
 
