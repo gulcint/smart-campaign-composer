@@ -112,6 +112,9 @@ Props: `variant: 'primary'|'secondary'|'ghost'|'danger-ghost'` (`primary`), `siz
 ### 3.2 `AppHeader`
 Props: `provider: 'mock'|'claude'|null`, `providerLoading: boolean` (false), `campaignState: CampaignState|null`. Testid'ler: `app-header`; içinde `ProviderBadge` ve kampanya durumu için `StatusBadge` (`data-testid="app-header-campaign-state"`, `kind="campaign"`; `campaignState` null ise yok).
 
+### 3.2a `BrandMark` (marka logosu)
+Tek izinli marka görseli `/brand/insider-one-logo.jpeg` (DESIGN.md §1 istisnası). Props: `size` (24), `muted` (false; `opacity-40 grayscale`), `decorative` (true; `alt=""`, aksi halde `t('app.logoAlt')`). `<img data-testid="brand-logo">`, `width`/`height` her zaman verilir. Yerleşim: `EmptyState` (ikonun üstünde, muted), `BriefPage` ilk yükleme skeleton'ı (balonun solunda, muted), `ApprovalPage` özet kartı üst satırı (28 px rozet), `EmailPreview` çerçeve şeridi (`email-preview-brand`, `aria-hidden`; iframe'in **dışında**, `srcdoc` değişmez). Favicon: `index.html` `/brand/favicon-{16,32}.png` (aynı dosyadan türetilmiş) + SVG yedek.
+
 ### 3.3 `ProviderBadge` (REQ-AI-03)
 Props: `provider: 'mock'|'claude'|null`, `loading: boolean` (false). Testid: `provider-badge` — `data-provider="mock"|"claude"|"unknown"` (null → `unknown`), metin `t('provider.mock')` / `t('provider.claude')` / `t('provider.unknown')`; `loading` iken `data-state="loading"`, aksi `data-state="ready"`. `GET /api/config` → `llm_provider: "mock"` ise rozet `data-provider="mock"`.
 
