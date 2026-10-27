@@ -1,9 +1,9 @@
 # `docker compose up` brings up the whole system without an API key (REQ-DLV-01):
-#   db -> migrate (scc_migrator) -> seed (scc_app) -> api (scc_app) -> web, plus mockprovider
+#   db -> migrate (scc_migrator) -> seed (scc_app) -> api, worker (scc_app) -> web, plus mockprovider
 # With no ANTHROPIC_API_KEY, LLM_PROVIDER=auto selects the mock LLM (REQ-AI-03).
 # Host ports are published on 127.0.0.1 only: the API (API_PORT, default 8080) and the web UI
 # (WEB_PORT, default 8081; it proxies /api to the API, so the browser needs one origin).
-# Postgres and the mock provider stay internal. The worker joins in P5.
+# Postgres, the mock provider and the worker stay internal.
 #
 # Passwords below are local-demo values for a database that is never exposed.
 
@@ -85,6 +85,24 @@ services:
     command: ["mockprovider"]
     environment:
       MOCK_PROVIDER_ADDR: ":8090"
+    restart: unless-stopped
+
+  # One dispatcher per channel; deliveries go only to the mock provider (REQ-SND-05).
+  # /healthz, /readyz and /metrics on :8081 stay on the internal network.
+  worker:
+    <<: *app
+    command: ["worker"]
+    # Requests already started finish (PROVIDER_TIMEOUT 10s) and are recorded before exit.
+    stop_grace_period: 20s
+    environment:
+      <<: *db-env
+      WORKER_HTTP_ADDR: ":8081"
+      PROVIDER_BASE_URL: http://mockprovider:8090
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      mockprovider:
+        condition: service_started
     restart: unless-stopped
 
   web:
