@@ -1,7 +1,6 @@
 // Package composer runs LLM generation with validation and the single repair attempt
-// (docs/contracts/llm-tools.md §2).
-//
-// The content stream loop arrives with the content slice (P4).
+// (docs/contracts/llm-tools.md §2): GenerateSegment for the segment rule, OpenContent +
+// ContentSession.Run for the streamed content (content.go).
 package composer
 
 import (
