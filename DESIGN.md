@@ -550,4 +550,5 @@ web/src/
 - V9. Grafik kütüphanesi kullanılmaz; çubuklar custom.
 - V10. Varsayılan turuncu metin preset'i `accent`.
 - V11. İçerik akışında otomatik yeniden bağlanma yok; dashboard akışında var.
+- V13. Responsive kapsamı eksik (tablet 768–1023, Brief/Kitle/Onay mobil düzeni, tablo/liste, `viewport` meta, test viewport'ları 375/768/1280); P5'te tamamlanır ve §8 güncellenir (`docs/PLAN.md` P5 satırı).
 - V12. Kenar değerleri (radius, gölge, dark tema) approximated; ilk ekran görüntüsünden sonra sahiple gözden geçirilir.

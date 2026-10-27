@@ -2,7 +2,7 @@
 
 Önemli kararlar ve nedenleri. Her faz kapısında güncellenir (`docs/PLAN.md` §3.2). Her karar: **bağlam → karar → neden → alternatifler/bedel**. "Doküman" case dokümanıdır; dokümanda olmayan her şey VARSAYIM olarak işaretlidir. Ayrıntılı gereksinimler `docs/requirements.md`, ad sözleşmeleri `docs/contracts/`.
 
-Durum: **P0 ve P1 tamamlandı** (`p0-done`, `contracts-v1`). Kod yok; aşağıdakiler tasarım kararlarıdır. P2'den itibaren uygulama kararları eklenir. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D37–D49; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
+Durum: **P0–P4 tamamlandı** (P4: içerik üretimi, düzenleme ve onay; P5 gönderim ve takip henüz yok). İlk bölümler tasarım kararlarıdır; P2'den itibaren uygulama kararları eklendi. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D37–D49; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
 
 ---
 
@@ -63,7 +63,7 @@ SMS ≤160, konu ≤80 **Unicode rune**; `ş ğ İ` tek karakter. Üretim ve dü
 ## 3. Süreç, roller ve güvenlik
 
 ### D13 — Test yazan, kodu yazan ve review eden ayrı; test yazarı koda bakmaz
-Testler yalnızca doküman, gereksinim kataloğu ve sözleşmelerden yazılır ki kod mimarisinin istenenleri karşılayıp karşılamadığı ölçülebilsin. Uygulama katmanları: koda bakmayan **sparse worktree**, yalnızca bu ajanda çalışan **PreToolUse koruması**, CI'daki **rol yolu kontrolü** ve reviewer. **Dürüst sınır:** bir ajanın okumasını her ortamda %100 engellemek mümkün değil; katmanlar birlikte sınırı teknik olarak destekler.
+Testler yalnızca gereksinim kataloğundan (`docs/requirements.md`) türetilir (D50; ilk tasarımda doküman ve sözleşmeler de kaynaktı) ki kod mimarisinin istenenleri karşılayıp karşılamadığı ölçülebilsin. Uygulama katmanları: koda bakmayan **sparse worktree**, yalnızca bu ajanda çalışan **PreToolUse koruması**, CI'daki **rol yolu kontrolü** ve reviewer. **Dürüst sınır:** bir ajanın okumasını her ortamda %100 engellemek mümkün değil; katmanlar birlikte sınırı teknik olarak destekler.
 - **Tek istisna:** `testdata/seed/manifest.json` seed kodu tarafından üretilir; kodu yazan commit'ler, test yazarı yalnızca okur (determinizm testi baytları yeniden üretir).
 
 ### D14 — Depo: önce GitLab denendi, GitHub (public) seçildi
@@ -121,6 +121,8 @@ REQ-DLV-01 "docker compose up, mock provider dahil" der ve sözleşme provider'�
 
 ### D27 — Bilinçle ertelenen CI kontrolleri
 PLAN §6'daki CodeQL (#17) ve imaj dosya sistemi / `docker history` taraması (#5) P2'de eklenmedi; P6 (sertleştirme) kapısına taşındı. Eklenenler: `db-roundtrip`, tool-şema sapma kontrolü, `compose-ports` (db ve mockprovider host portu yayınlamaz).
+
+**Güncelleme (2026-10-27, sahip kararı):** `web-image`, `compose-ports` ve `actionlint` job'ları CI'dan kaldırıldı; bu üç kontrol artık CI'da koşmaz. Yerelde yalnızca `actionlint` pre-commit hook'u kalır (üretim nginx imajı build/`nginx -t` ve db/mockprovider host portu kontrolü artık otomatik değildir).
 
 ### D28 — `/metrics` yayınlanan API portunda, yalnız 127.0.0.1
 `metrics.md` `/metrics`'i 8080'de sunar; PLAN'ın "yalnız iç ağ" ifadesi bu karara göre güncel sayılır. Kimlik doğrulama olmadığı için API portu yalnız `127.0.0.1`'e bağlanır (yerel demo).
@@ -215,6 +217,16 @@ PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `in
 - **Bağlam:** "Örnek 1/579" yazısı ve eşleşen tüm müşterileri gezen "Sonraki örnek" düğmesi pazarlamacıya bilgi katmıyordu (örnekler kimlik sırasındadır); sahip bu kadar örneğin gerekli olup olmadığını sordu.
 - **Karar:** Arayüz `sample_index`'i `(i+1) mod min(sample_count, 5)` ile gezer, etiket `Örnek i/min(n,5)` olur. API değişmez: `sample_index` ve `sample_count` aynı kalır, REQ-APR-01'deki deterministik örnek korunur. Daha anlamlı alternatif (en uzun isim ve hitapsız önizleme) ayrı bir faz işi olarak reddedilmedi, ertelendi.
 - **Bedel:** Arayüz 5'in ötesindeki alıcıları göstermez; uzunluk güvencesi önizleme değil en kötü durum sayacıdır (REQ-CNT-05).
+
+### D50 — Test kaynağı yalnızca `docs/requirements.md` (sahip kararı, 2026-10-27)
+- **Bağlam:** Sözleşmelerden (`docs/contracts/**`) türeyen testler gereksinimlerde olmayan davranışı da sabitledi; test sayısı şişti, aynı kural birden çok katmanda tekrarlandı (PR #58, #59).
+- **Karar:** Test yazarı yalnızca `docs/requirements.md`'yi kaynak alır; sözleşmeler ve case dokümanı sadece ad, şekil ve ifade sağlar. REQ'i olmayan davranış test edilmez, "REQ eksik" diye bildirilir. Koruma kancası `docs/contracts/**`, `DECISIONS.md` ve case HTML okumasını engeller. PR #62, `requirements.md` dayanağı olmayan P4 onay testlerini sildi.
+- **Bedel:** Yalnız sözleşmede yazan birçok davranış (ör. hata kodu ayrıntıları, kenar durumlar) artık otomatik testsizdir; bu davranışlar için REQ eklenirse test yazılır.
+
+### D51 — CI sadeleştirmesi (sahip kararı, 2026-10-27)
+- **Bağlam:** Docs-only PR'lar bile tüm ağır job'ları bekliyordu; `go-unit`, `make-test` ile aynı paketleri tekrar koşuyordu (PR #60, #63).
+- **Karar:** Yalnızca doküman değiştiren PR'da build/test job'ları atlanır (`detect` → `heavy=false`), politika ve sır job'ları her zaman koşar; `ci-ok` yine raporlar; `main`'e push'ta her şey çalışır. Ayrı `go-unit` job'ı kaldırıldı. `web-image`, `compose-ports` ve `actionlint` de kaldırıldı (D27 güncellemesi).
+- **Bedel:** Üretim nginx imajı build'i, db/mockprovider host portu kontrolü ve workflow sözdizimi artık CI'da doğrulanmaz; yalnız yerel pre-commit `actionlint` kalır. Ayrıntı: `docs/PLAN.md` §6.
 
 ## Bilinen sınırlar ve riskler
 

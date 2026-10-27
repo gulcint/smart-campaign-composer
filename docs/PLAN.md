@@ -92,7 +92,7 @@ Doküman "her şeyi yapmak yerine çekirdek akışı sağlam yap" diyor; fronten
 | 2 | **P2 Seed + altyapı** (`slice/p2-foundation`) | Seed üreticisi + manifest, compose, migration'lar, health, `LLMClient` fabrikası (auto/real/mock), mock LLM iskeleti, `make test` konteyner altyapısı | REQ-DLV-01, REQ-DLV-02, REQ-AI-02, REQ-AI-03, REQ-AI-04, REQ-AI-05, REQ-TRK-03, REQ-SEC-02, REQ-SEED-01, REQ-SEED-02 testleri yeşil |
 | 3 | **P3 Kitle dilimi** | Segment kuralı üretimi, doğrulama, parametreli sorgu, kanal bazında kişi sayısı + ekran | REQ-AUD (00–05), REQ-AI-01 (segment) testleri yeşil |
 | 4 | **P4 İçerik + onay dilimi** | SMS/email üretimi (stream protokolü 0.5), limitler, kişiselleştirme, düzenleme, yeniden doğrulama, sürümlü onay + ekranlar | REQ-CNT (01–05), REQ-APR, REQ-AI-01 (içerik), REQ-UI-01 testleri yeşil |
-| 5 | **P5 Gönderim + takip dilimi** | `deliveries` kuyruğu, dispatcher, rate limit, retry, idempotency, mock provider, SSE dashboard, metrics + ekran | REQ-SND (01–05), REQ-TRK-01/02, REQ-MOCK, REQ-SEC-01 testleri yeşil |
+| 5 | **P5 Gönderim + takip dilimi** | `deliveries` kuyruğu, dispatcher, rate limit, retry, idempotency, mock provider, SSE dashboard, metrics + ekran; **responsive tasarım güncellemesi** (DESIGN.md §8: tablet 768–1023 kuralları, Brief/Kitle/Onay ekranlarının mobil düzeni, tablo/liste davranışı, `viewport` meta, test viewport'ları 375/768/1280; tüm ekranlarda uygulama) | REQ-SND (01–05), REQ-TRK-01/02, REQ-MOCK, REQ-SEC-01 testleri yeşil; DESIGN.md §8 responsive kapsamı tamam |
 | 6 | **P6 Sertleştirme + teslim** | Uçtan uca test, güvenlik taraması, `README.md`, `DECISIONS.md`, session export'ları, değerlendirici erişimi | REQ-DLV-03, REQ-DLV-04 + REQ eşleme raporu boş + doğrulayıcı onayı + teslim kontrol listesi |
 | 7 | Tampon / bonus | Bonus yalnızca P6 tamamsa (zamanlanmış gönderim en ucuzu) | — |
 
@@ -113,7 +113,7 @@ main
 - P2'den itibaren her faz bu akışı izler (P2 dahil: `slice/p2-foundation`). P0 ve P1'de test yoktur, kod da yoktur.
 - Test yazarının worktree'si **sparse checkout** ile açılır: yalnızca `docs/`, `testdata/`, `test/` ve test dosyası desenleri (`**/*_test.go`, `web/tests/**`). Önceki fazlardan `main`'e girmiş implementasyon (`cmd/`, `internal/`, `migrations/`, `web/src/`) worktree'de **bulunmaz** (R1).
 - `*_test.go` dosyaları Go gereği paketlerin yanında durur. Sparse checkout bu dosyaları getirir ama yanlarındaki `.go` implementasyon dosyalarını getirmez. Test yazarı testleri derleyip çalıştırmaz; çalıştırma kodu yazanın ve CI'ın işidir.
-- Her PR'da aynı pipeline tetiklenir (Actions public repoda sınırsız); `main`'e yalnızca `ci-ok` yeşilken merge edilir. Yalnızca doküman değiştiren PR'da (`ai-sessions/**`, `docs/contracts/` dışındaki `docs/**`, `docs/contracts/` ve `web/` dışındaki `*.md`) `detect` job'ı `heavy=false` verir: build/test job'ları (go-lint, web, web-image, sql-lint, db-roundtrip, make-test, govulncheck) atlanır, politika ve sır job'ları her zaman çalışır, `ci-ok` yine raporlar. `main`'e push'ta her şey çalışır. Ayrı `go-unit` job'ı yok: make-test aynı paketleri `-race` ile, `-short` olmadan koşar.
+- Her PR'da aynı pipeline tetiklenir (Actions public repoda sınırsız); `main`'e yalnızca `ci-ok` yeşilken merge edilir. Yalnızca doküman değiştiren PR'da (`ai-sessions/**`, `docs/contracts/` dışındaki `docs/**`, `docs/contracts/` ve `web/` dışındaki `*.md`) `detect` job'ı `heavy=false` verir: build/test job'ları (go-lint, web, sql-lint, db-roundtrip, make-test, govulncheck) atlanır, politika ve sır job'ları her zaman çalışır, `ci-ok` yine raporlar. `main`'e push'ta her şey çalışır. Owner kararıyla (2026-10-27) `web-image` (üretim nginx imajı build + `nginx -t`), `compose-ports` (db/mockprovider host portu yayınlamaz) ve `actionlint` (workflow sözdizimi) CI'dan çıkarıldı; bunlar artık CI'da koşmaz (`actionlint` yalnızca yerel pre-commit hook'unda kalır). Ayrı `go-unit` job'ı yok: make-test aynı paketleri `-race` ile, `-short` olmadan koşar.
 - `main`'e squash merge; `slice/*` içinde merge commit serbest.
 
 ### 1.3 Branch isimlendirme
@@ -421,7 +421,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 | 12 | XSS: `v-html` yok; email önizlemesi sandbox'lı `iframe`; backend `html/template` | ESLint `vue/no-v-html` error; `<script>` içeren çıktıyla bileşen testi |
 | 13 | Maliyet/kötüye kullanım: brief max uzunluk, body limiti, `max_tokens`, Claude timeout, LLM endpoint rate limit | Uzun brief 413/422; timeout'ta anlamlı hata; limitte 429 |
 | 14 | Loglarda PII yok: müşteri ID'si, telefon/email değil | Teslimat log testi: `@example.com`, `+90` deseni yok |
-| 15 | Ağ izolasyonu: Postgres ve mock provider yalnızca iç ağda | CI: `docker compose config` çıktısında db için `ports:` yok |
+| 15 | Ağ izolasyonu: Postgres ve mock provider yalnızca iç ağda | `docker compose config` çıktısında db için `ports:` yok (CI'dan çıkarıldı 2026-10-27; elle/yerelde kontrol) |
 | 16 | Bağımlılıklar: `govulncheck`, `npm audit --audit-level=high`; Go sürümü `go.mod`'da, imajlar digest ile sabit | CI; kritik bulgu pipeline'ı kırar |
 | 17 | SAST: golangci-lint içinde gosec; CodeQL (public repoda ücretsiz) P2'de eklenir | CI lint ve CodeQL job'ları |
 | 18 | Auth yok (VARSAYIM, yerel demo); `/metrics` yalnızca iç ağ | README + `DECISIONS.md`; compose port incelemesi |
