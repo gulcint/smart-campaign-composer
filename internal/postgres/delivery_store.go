@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gulcint/smart-campaign-composer/internal/delivery"
@@ -26,9 +28,12 @@ func lockKey(ch delivery.Channel) int64 {
 	return delivery.LockKeySMS
 }
 
+// storeTimeout bounds lock bookkeeping that must not depend on the caller's context.
+const storeTimeout = 5 * time.Second
+
 // TryLockChannel takes the session advisory lock of ch on a connection reserved for as long as
-// the lock is held; release unlocks it and returns the connection to the pool.
-func (s deliveryStore) TryLockChannel(ctx context.Context, ch delivery.Channel) (func(), bool, error) {
+// the lock is held.
+func (s deliveryStore) TryLockChannel(ctx context.Context, ch delivery.Channel) (delivery.ChannelLock, bool, error) {
 	conn, err := s.db.Acquire(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("postgres: lock channel: %w", err)
@@ -43,16 +48,41 @@ func (s deliveryStore) TryLockChannel(ctx context.Context, ch delivery.Channel) 
 		conn.Release()
 		return nil, false, nil
 	}
-	release := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, key); err != nil {
-			// The lock may still be held by this session: never hand it back to the pool.
-			_ = conn.Conn().Close(ctx)
-		}
-		conn.Release()
+	return &channelLock{conn: conn, key: key}, true, nil
+}
+
+// channelLock is used by one goroutine at a time (the dispatcher's Run loop).
+type channelLock struct {
+	conn *pgxpool.Conn
+	key  int64
+	once sync.Once
+}
+
+// Held asks the lock's own session whether it still holds the advisory lock. A terminated
+// backend, a network failure or a database restart surfaces here as an error.
+func (l *channelLock) Held(ctx context.Context) (bool, error) {
+	var held bool
+	err := l.conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_locks
+			WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
+				AND classid = 0::oid AND objid = $1::bigint::oid AND objsubid = 1)`, l.key).Scan(&held)
+	if err != nil {
+		return false, fmt.Errorf("postgres: check channel lock: %w", err)
 	}
-	return release, true, nil
+	return held, nil
+}
+
+func (l *channelLock) Release() {
+	l.once.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+		defer cancel()
+		if _, err := l.conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, l.key); err != nil {
+			// The lock may still be held by this session: never hand it back to the pool.
+			_ = l.conn.Conn().Close(ctx)
+		}
+		l.conn.Release()
+	})
 }
 
 // Claim re-reads the customer's current contact and consent and the approved content in the same
@@ -123,64 +153,121 @@ func (s deliveryStore) ReclaimExpired(ctx context.Context, ch delivery.Channel, 
 	return int(tag.RowsAffected()), nil
 }
 
+// Requeue returns claimed but never started jobs to queued without touching their counters.
+func (s deliveryStore) Requeue(ctx context.Context, jobs []delivery.Job, now time.Time) (int, error) {
+	if len(jobs) == 0 {
+		return 0, nil
+	}
+	ids := make([]string, len(jobs))
+	attempts := make([]int32, len(jobs))
+	for i, j := range jobs {
+		ids[i] = j.ID
+		attempts[i] = int32(j.Attempts) //nolint:gosec // claim counts are small
+	}
+	tag, err := s.db.Exec(ctx, `
+		UPDATE deliveries d SET status = 'queued', lease_expires_at = NULL, updated_at = $3
+		FROM unnest($1::uuid[], $2::int[]) AS j(id, attempts)
+		WHERE d.id = j.id AND d.status = 'sending' AND d.attempts = j.attempts`,
+		ids, attempts, now)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: requeue deliveries: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// fenced is the WHERE clause of every Mark* update: the row is still in sending under the claim
+// that produced the update ($2 = Job.Attempts; 0 = not fenced).
+const fenced = `WHERE id = $1 AND status = 'sending' AND ($2 = 0 OR attempts = $2)`
+
 func (s deliveryStore) MarkSent(ctx context.Context, id string, u delivery.SentUpdate) error {
-	return s.finish(ctx, "mark sent", u.At, true, `
+	return s.finish(ctx, "mark sent", u.At, true, query{`
 		UPDATE deliveries SET
-			status = 'sent', sent_at = $2, last_http_status = $3, provider_message_id = NULLIF($4, ''),
-			lease_expires_at = NULL, updated_at = $2
-		WHERE id = $1 AND status = 'sending'
-		RETURNING campaign_id`,
-		id, u.At, u.HTTPStatus, u.ProviderMessageID)
+			status = 'sent', sent_at = $3, last_http_status = $4, provider_message_id = NULLIF($5, ''),
+			lease_expires_at = NULL, updated_at = $3
+		` + fenced + ` RETURNING campaign_id`,
+		[]any{id, u.Attempts, u.At, u.HTTPStatus, u.ProviderMessageID}}, nil)
 }
 
 func (s deliveryStore) ScheduleRetry(ctx context.Context, id string, u delivery.RetryUpdate) error {
-	return s.finish(ctx, "schedule retry", u.At, false, `
+	reason := delivery.FailureMaxAttempts
+	if u.Count == delivery.CountRateLimited {
+		reason = delivery.FailureRateLimitBudget
+	}
+	return s.finish(ctx, "schedule retry", u.At, false, query{`
 		UPDATE deliveries SET
-			status = 'queued', next_attempt_at = $3, lease_expires_at = NULL,
+			status = 'queued', next_attempt_at = $4, lease_expires_at = NULL,
 			retry_count = retry_count + 1,
-			failed_attempts = failed_attempts + $4, rate_limited_count = rate_limited_count + $5,
-			last_http_status = COALESCE(NULLIF($6, 0), last_http_status), last_error = $7, updated_at = $2
-		WHERE id = $1 AND status = 'sending'
-		RETURNING campaign_id`,
-		id, u.At, u.NextAttemptAt, failureInc(u.Count), rateLimitedInc(u.Count), u.HTTPStatus, u.LastError)
+			failed_attempts = failed_attempts + $5, rate_limited_count = rate_limited_count + $6,
+			last_http_status = COALESCE(NULLIF($7, 0), last_http_status), last_error = $8, updated_at = $3
+		` + fenced + ` RETURNING campaign_id`,
+		[]any{id, u.Attempts, u.At, u.NextAttemptAt, failureInc(u.Count), rateLimitedInc(u.Count), u.HTTPStatus, u.LastError}},
+		failWithoutCount(id, u.Attempts, u.At, reason, u.HTTPStatus, u.LastError))
 }
 
 func (s deliveryStore) MarkFailed(ctx context.Context, id string, u delivery.FailedUpdate) error {
-	return s.finish(ctx, "mark failed", u.At, true, `
+	return s.finish(ctx, "mark failed", u.At, true, query{`
 		UPDATE deliveries SET
-			status = 'failed', failure_reason = $3, failed_at = $2, lease_expires_at = NULL,
-			failed_attempts = failed_attempts + $4, rate_limited_count = rate_limited_count + $5,
-			last_http_status = COALESCE(NULLIF($6, 0), last_http_status), last_error = NULLIF($7, ''), updated_at = $2
-		WHERE id = $1 AND status = 'sending'
-		RETURNING campaign_id`,
-		id, u.At, string(u.Reason), failureInc(u.Count), rateLimitedInc(u.Count), u.HTTPStatus, u.LastError)
+			status = 'failed', failure_reason = $4, failed_at = $3, lease_expires_at = NULL,
+			failed_attempts = failed_attempts + $5, rate_limited_count = rate_limited_count + $6,
+			last_http_status = COALESCE(NULLIF($7, 0), last_http_status), last_error = NULLIF($8, ''), updated_at = $3
+		` + fenced + ` RETURNING campaign_id`,
+		[]any{id, u.Attempts, u.At, string(u.Reason), failureInc(u.Count), rateLimitedInc(u.Count), u.HTTPStatus, u.LastError}},
+		failWithoutCount(id, u.Attempts, u.At, u.Reason, u.HTTPStatus, u.LastError))
+}
+
+type query struct {
+	sql  string
+	args []any
+}
+
+// failWithoutCount is the fallback when a counter increment hits a deliveries CHECK (failed_attempts
+// <= 5, rate_limited_count <= 20), e.g. after a retry budget above the schema's bounds: the row is
+// failed with its counters unchanged instead of being left in sending to be reclaimed forever.
+func failWithoutCount(id string, attempts int, at time.Time, reason delivery.FailureReason, status int, lastError string) *query {
+	return &query{`
+		UPDATE deliveries SET
+			status = 'failed', failure_reason = $4, failed_at = $3, lease_expires_at = NULL,
+			last_http_status = COALESCE(NULLIF($5, 0), last_http_status), last_error = NULLIF($6, ''), updated_at = $3
+		` + fenced + ` RETURNING campaign_id`,
+		[]any{id, attempts, at, string(reason), status, lastError}}
 }
 
 // finish runs one delivery update (which must RETURN campaign_id) and, for a terminal status,
-// completes the campaign in the same transaction when no queued/sending delivery remains.
-func (s deliveryStore) finish(ctx context.Context, op string, at time.Time, terminal bool, sql string, args ...any) error {
+// completes the campaign in the same transaction when no queued/sending delivery remains. If the
+// update violates a CHECK constraint (SQLSTATE 23514) and onCheck is set, onCheck runs instead,
+// in a new transaction, as a terminal update.
+func (s deliveryStore) finish(ctx context.Context, op string, at time.Time, terminal bool, q query, onCheck *query) error {
+	err := s.update(ctx, at, terminal, q)
+	var pgErr *pgconn.PgError
+	if onCheck != nil && errors.As(err, &pgErr) && pgErr.Code == "23514" { // check_violation
+		err = s.update(ctx, at, true, *onCheck)
+	}
+	if err != nil && !errors.Is(err, delivery.ErrLeaseLost) {
+		return fmt.Errorf("postgres: %s: %w", op, err)
+	}
+	return err
+}
+
+func (s deliveryStore) update(ctx context.Context, at time.Time, terminal bool, q query) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("postgres: %s: %w", op, err)
+		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
 
 	var campaignID string
-	if err := tx.QueryRow(ctx, sql, args...).Scan(&campaignID); err != nil {
+	if err := tx.QueryRow(ctx, q.sql, q.args...).Scan(&campaignID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return delivery.ErrLeaseLost
 		}
-		return fmt.Errorf("postgres: %s: %w", op, err)
+		return err
 	}
 	if terminal {
 		if err := completeCampaign(ctx, tx, campaignID, at); err != nil {
-			return fmt.Errorf("postgres: %s: %w", op, err)
+			return err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("postgres: %s: %w", op, err)
-	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // completeCampaign moves a sending campaign to completed when none of its deliveries is queued or

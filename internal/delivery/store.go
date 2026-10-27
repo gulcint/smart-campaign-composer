@@ -61,14 +61,20 @@ type Job struct {
 	FirstAttemptAt time.Time
 }
 
+// Attempts on the update types is the Job.Attempts of the claim that produced it. A non-zero
+// value fences the update: it applies only while the row is still in sending under that same
+// claim, so a holder whose lease expired cannot overwrite a newer claim. 0 = not fenced.
+
 type SentUpdate struct {
 	At                time.Time
+	Attempts          int
 	HTTPStatus        int
 	ProviderMessageID string
 }
 
 type RetryUpdate struct {
 	At            time.Time
+	Attempts      int
 	NextAttemptAt time.Time
 	Count         CountKind
 	HTTPStatus    int    // 0 for transport errors
@@ -77,23 +83,38 @@ type RetryUpdate struct {
 
 type FailedUpdate struct {
 	At         time.Time
+	Attempts   int
 	Reason     FailureReason
 	Count      CountKind
 	HTTPStatus int
-	LastError  string
+	LastError  string // "" => NULL
+}
+
+// ChannelLock is a held channel advisory lock.
+type ChannelLock interface {
+	// Held reports whether the lock is still held: false (or an error) once the connection that
+	// holds it is gone, because Postgres then releases a session lock on its own.
+	Held(ctx context.Context) (bool, error)
+	// Release unlocks (if still held) and frees the connection. Safe to call more than once.
+	Release()
 }
 
 // Store is the queue (implemented by postgres.NewDeliveryStore; fakeable).
 type Store interface {
-	// TryLockChannel takes the channel's advisory lock on a dedicated connection.
-	TryLockChannel(ctx context.Context, ch Channel) (release func(), acquired bool, err error)
+	// TryLockChannel takes the channel's advisory lock on a dedicated connection. lock is nil
+	// unless acquired.
+	TryLockChannel(ctx context.Context, ch Channel) (lock ChannelLock, acquired bool, err error)
 	// Claim moves up to limit due queued rows (next_attempt_at <= now) to sending with
 	// lease_expires_at = leaseUntil, using FOR UPDATE SKIP LOCKED.
 	Claim(ctx context.Context, ch Channel, now time.Time, limit int, leaseUntil time.Time) ([]Job, error)
 	// ReclaimExpired returns sending rows whose lease expired before now to queued.
 	ReclaimExpired(ctx context.Context, ch Channel, now time.Time) (int, error)
-	// Mark* update a row currently in sending; ErrLeaseLost if it is not. Each also completes
-	// the campaign in the same transaction when no queued/sending delivery remains.
+	// Requeue returns claimed jobs whose provider request never started to queued (same
+	// next_attempt_at, no counter changes). Rows no longer held under the job's claim are skipped.
+	Requeue(ctx context.Context, jobs []Job, now time.Time) (int, error)
+	// Mark* update a row currently in sending; ErrLeaseLost if it is not (or, with a non-zero
+	// Attempts, if it was claimed again since). Each also completes the campaign in the same
+	// transaction when no queued/sending delivery remains.
 	MarkSent(ctx context.Context, id string, u SentUpdate) error
 	ScheduleRetry(ctx context.Context, id string, u RetryUpdate) error
 	MarkFailed(ctx context.Context, id string, u FailedUpdate) error

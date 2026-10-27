@@ -99,22 +99,34 @@ func (d *Dispatcher) setLeader(v bool) {
 	}
 }
 
+// errLockLost: the channel's advisory lock is no longer held (its connection is gone).
+var errLockLost = errors.New("delivery: channel lock lost")
+
+// storeTimeout bounds store writes that run detached from the caller's context.
+const storeTimeout = 5 * time.Second
+
 // Run loops until ctx is done (returns ctx.Err()): acquires the channel lock (only the holder
-// sends), reclaims expired leases, claims due jobs and processes them.
+// sends), reclaims expired leases, claims due jobs and processes them. The lock is re-checked
+// before every batch and again after the claim, before the batch's first permit; if it was lost
+// the dispatcher stops claiming, requeues the unstarted batch and goes back to acquiring it.
 func (d *Dispatcher) Run(ctx context.Context) error {
 	d.setLeader(false)
+	ch := slog.String("channel", string(d.cfg.Channel))
 	for {
-		release, acquired, err := d.deps.Store.TryLockChannel(ctx, d.cfg.Channel)
+		lock, acquired, err := d.deps.Store.TryLockChannel(ctx, d.cfg.Channel)
 		if err != nil && ctx.Err() == nil {
-			d.deps.Logger.Error("dispatcher lock failed", slog.String("channel", string(d.cfg.Channel)), slog.String("error", err.Error()))
+			d.deps.Logger.Error("dispatcher lock failed", ch, slog.String("error", err.Error()))
 		}
 		if err == nil && acquired {
 			d.setLeader(true)
-			d.deps.Logger.Info("dispatcher leader", slog.String("channel", string(d.cfg.Channel)))
-			err = d.lead(ctx)
+			d.deps.Logger.Info("dispatcher leader", ch)
+			err = d.lead(ctx, lock)
 			d.setLeader(false)
-			release()
-			return err
+			lock.Release()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			d.deps.Logger.Warn("dispatcher lock lost", ch, slog.String("error", err.Error()))
 		}
 		if err := clock.Sleep(ctx, d.deps.Clock, d.cfg.LockRetryInterval); err != nil {
 			return err
@@ -122,16 +134,23 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 }
 
-// lead runs the send loop while holding the channel lock.
-func (d *Dispatcher) lead(ctx context.Context) error {
+// lead runs the send loop while holding the channel lock; it returns ctx.Err() or errLockLost.
+func (d *Dispatcher) lead(ctx context.Context, lock ChannelLock) error {
+	guard := func() error { return d.checkLock(ctx, lock) }
 	for {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := guard(); err != nil {
 			return err
 		}
 		if _, err := d.deps.Store.ReclaimExpired(ctx, d.cfg.Channel, d.deps.Clock.Now()); err != nil && ctx.Err() == nil {
 			d.deps.Logger.Error("reclaim expired leases failed", slog.String("channel", string(d.cfg.Channel)), slog.String("error", err.Error()))
 		}
-		n, err := d.ProcessOnce(ctx)
+		n, err := d.batch(ctx, guard)
+		if errors.Is(err, errLockLost) {
+			return err
+		}
 		if err != nil && ctx.Err() == nil {
 			d.deps.Logger.Error("dispatch batch failed", slog.String("channel", string(d.cfg.Channel)), slog.String("error", err.Error()))
 		}
@@ -143,6 +162,25 @@ func (d *Dispatcher) lead(ctx context.Context) error {
 	}
 }
 
+// checkLock asks the store whether the lock is still held; any doubt counts as lost.
+func (d *Dispatcher) checkLock(ctx context.Context, lock ChannelLock) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cctx, cancel := context.WithTimeout(ctx, storeTimeout)
+	defer cancel()
+	held, err := lock.Held(cctx)
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case err != nil:
+		return fmt.Errorf("%w: %w", errLockLost, err)
+	case !held:
+		return errLockLost
+	}
+	return nil
+}
+
 // ProcessOnce claims one batch at Clock.Now() and processes it to completion WITHOUT taking the
 // channel lock (test seam). For each job, in this order:
 //  1. !job.Consent || job.To == "" => MarkFailed(recipient_unavailable), no provider call, no permit;
@@ -150,33 +188,73 @@ func (d *Dispatcher) lead(ctx context.Context) error {
 //  3. Limiter.Wait -> Provider.Send -> Policy.Next -> Store.MarkSent / ScheduleRetry / MarkFailed.
 //
 // Returns the number of jobs processed. Once a job's provider request has started, it is finished
-// and recorded even if ctx is cancelled meanwhile (graceful shutdown); jobs still waiting for a
-// permit are left in sending and come back when their lease expires.
+// and recorded even if ctx is cancelled meanwhile (graceful shutdown); jobs whose request had not
+// started are requeued.
 func (d *Dispatcher) ProcessOnce(ctx context.Context) (int, error) {
+	return d.batch(ctx, nil)
+}
+
+// errNotStarted marks a job whose provider request never started (no permit).
+var errNotStarted = errors.New("delivery: request not started")
+
+// batch claims and processes one batch. guard (optional) runs after the claim, before any job
+// takes a permit; if it fails, the whole batch is requeued and its error returned.
+func (d *Dispatcher) batch(ctx context.Context, guard func() error) (int, error) {
 	now := d.deps.Clock.Now()
 	jobs, err := d.deps.Store.Claim(ctx, d.cfg.Channel, now, d.cfg.BatchSize, now.Add(d.cfg.Lease))
 	if err != nil {
 		return 0, fmt.Errorf("delivery: claim: %w", err)
 	}
+	if len(jobs) > 0 && guard != nil {
+		if err := guard(); err != nil {
+			d.requeue(ctx, jobs)
+			return 0, err
+		}
+	}
 	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		errs []error
-		sem  = make(chan struct{}, d.cfg.Concurrency)
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		errs      []error
+		unstarted []Job
+		sem       = make(chan struct{}, d.cfg.Concurrency)
 	)
 	for _, job := range jobs {
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			if err := d.process(ctx, job); err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
+			err := d.process(ctx, job)
+			if err == nil {
+				return
 			}
+			mu.Lock()
+			defer mu.Unlock()
+			if errors.Is(err, errNotStarted) {
+				unstarted = append(unstarted, job)
+			}
+			errs = append(errs, err)
 		})
 	}
 	wg.Wait()
+	d.requeue(ctx, unstarted)
 	return len(jobs), errors.Join(errs...)
+}
+
+// requeue returns never-started jobs to queued right away instead of waiting for their lease.
+func (d *Dispatcher) requeue(ctx context.Context, jobs []Job) {
+	if len(jobs) == 0 {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
+	defer cancel()
+	if _, err := d.deps.Store.Requeue(rctx, jobs, d.deps.Clock.Now()); err != nil {
+		d.deps.Logger.Error("requeue unstarted deliveries failed", slog.String("channel", string(d.cfg.Channel)),
+			slog.Int("count", len(jobs)), slog.String("error", err.Error()))
+	}
+}
+
+// writeCtx detaches a store write from cancellation (the outcome must be recorded) but bounds it.
+func writeCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
 }
 
 func (d *Dispatcher) process(ctx context.Context, job Job) error {
@@ -201,15 +279,21 @@ func (d *Dispatcher) process(ctx context.Context, job Job) error {
 
 	waitStart := d.deps.Clock.Now()
 	if err := d.deps.Limiter.Wait(ctx); err != nil {
-		return err // not started: the lease brings the job back
+		return fmt.Errorf("%w: %w", errNotStarted, err)
 	}
 	start := d.deps.Clock.Now()
 	d.observeLimiterWait(start.Sub(waitStart))
 
-	// The request has started: finish and record it even if ctx is cancelled now.
-	sendCtx := context.WithoutCancel(ctx)
-	resp, sendErr := d.deps.Provider.Send(sendCtx, msg)
+	// The request has started: finish and record it even if ctx is cancelled now. The provider
+	// call is bounded by the HTTP client's timeout (PROVIDER_TIMEOUT).
+	resp, sendErr := d.deps.Provider.Send(context.WithoutCancel(ctx), msg)
 	now := d.deps.Clock.Now()
+	if sendErr != nil && !errors.Is(sendErr, provider.ErrTimeout) && !errors.Is(sendErr, provider.ErrConnection) {
+		// Not a transport failure (e.g. a message the client cannot encode): no request reached the
+		// provider and retrying cannot help, so the delivery fails without an HTTP status or
+		// transport error code (last_error NULL).
+		return d.fail(ctx, job, FailureProviderRejected, CountNone, 0, "")
+	}
 	d.observeResponse(resp.StatusCode, sendErr, now.Sub(start))
 
 	dec := d.deps.Policy.Next(Attempt{
@@ -230,14 +314,20 @@ func (d *Dispatcher) process(ctx context.Context, job Job) error {
 
 	switch dec.Action {
 	case ActionMarkSent:
-		err := d.deps.Store.MarkSent(sendCtx, job.ID, SentUpdate{At: now, HTTPStatus: status, ProviderMessageID: resp.ProviderMessageID})
+		wctx, cancel := writeCtx(ctx)
+		defer cancel()
+		err := d.deps.Store.MarkSent(wctx, job.ID, SentUpdate{
+			At: now, Attempts: job.Attempts, HTTPStatus: status, ProviderMessageID: resp.ProviderMessageID,
+		})
 		if err != nil {
 			return d.storeError(job, "mark sent", err)
 		}
 		d.deps.Logger.Info("delivery sent", d.attrs(job, status)...)
 	case ActionRetry:
-		err := d.deps.Store.ScheduleRetry(sendCtx, job.ID, RetryUpdate{
-			At: now, NextAttemptAt: dec.NextAttemptAt, Count: dec.Count, HTTPStatus: status, LastError: lastError,
+		wctx, cancel := writeCtx(ctx)
+		defer cancel()
+		err := d.deps.Store.ScheduleRetry(wctx, job.ID, RetryUpdate{
+			At: now, Attempts: job.Attempts, NextAttemptAt: dec.NextAttemptAt, Count: dec.Count, HTTPStatus: status, LastError: lastError,
 		})
 		if err != nil {
 			return d.storeError(job, "schedule retry", err)
@@ -245,15 +335,17 @@ func (d *Dispatcher) process(ctx context.Context, job Job) error {
 		d.deps.Logger.Warn("delivery retry scheduled", append(d.attrs(job, status),
 			slog.Time("next_attempt_at", dec.NextAttemptAt), slog.String("reason", lastError))...)
 	default:
-		return d.fail(sendCtx, job, dec.FailureReason, dec.Count, status, lastError)
+		return d.fail(ctx, job, dec.FailureReason, dec.Count, status, lastError)
 	}
 	return nil
 }
 
 // fail marks job failed and logs it.
 func (d *Dispatcher) fail(ctx context.Context, job Job, reason FailureReason, count CountKind, status int, lastError string) error {
-	err := d.deps.Store.MarkFailed(context.WithoutCancel(ctx), job.ID, FailedUpdate{
-		At: d.deps.Clock.Now(), Reason: reason, Count: count, HTTPStatus: status, LastError: lastError,
+	wctx, cancel := writeCtx(ctx)
+	defer cancel()
+	err := d.deps.Store.MarkFailed(wctx, job.ID, FailedUpdate{
+		At: d.deps.Clock.Now(), Attempts: job.Attempts, Reason: reason, Count: count, HTTPStatus: status, LastError: lastError,
 	})
 	if err != nil {
 		return d.storeError(job, "mark failed", err)
