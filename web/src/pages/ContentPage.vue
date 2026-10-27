@@ -343,10 +343,12 @@ async function onSaveError(err: ApiError, mine: Content) {
       savedAs(now)
       return
     }
-    conflict.value = {
-      currentVersionId: err.currentVersion?.id ?? now?.id ?? null,
-      currentVersionNumber: err.currentVersion?.version_number ?? now?.version_number ?? null,
-    }
+    // ui.md §3.23: conflict := error.current_version; the refetched latest is only a fallback
+    // when the 409 carried none.
+    const cur = err.currentVersion
+    conflict.value = cur
+      ? { currentVersionId: cur.id, currentVersionNumber: cur.version_number }
+      : { currentVersionId: now?.id ?? null, currentVersionNumber: now?.version_number ?? null }
     return
   }
   if (err.code === 'validation_failed') {
@@ -378,15 +380,14 @@ function onReloadLatest() {
 }
 
 function onKeepMine() {
-  const v = latest.value
+  // ui.md §3.23: rebase onto the version the 409 named, not the (possibly failed) refetch.
+  const c = conflict.value
+  if (!c) return
   conflict.value = null
-  if (v) {
-    base.value = v.content
-    expectedVersion.value = v.id
-    knownNumber.value = v.version_number
-  } else {
-    expectedVersion.value = 'none'
-  }
+  expectedVersion.value = c.currentVersionId ?? 'none'
+  knownNumber.value = c.currentVersionNumber
+  const v = latest.value
+  if (v && v.id === c.currentVersionId) base.value = v.content
 }
 
 function onDraftUpdate(c: Content) {
