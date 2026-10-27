@@ -22,7 +22,7 @@ REQ-TRK-02'nin test edildiği uç nokta budur. Teslimat serileri **her scrape'te
 
 Not: DB'den türetilen "counter"lar yalnızca seed `--reset` ile veri silinirse azalır (Prometheus bunu reset olarak yorumlar); VARSAYIM, `DECISIONS.md`'ye yazılır.
 
-Test için gözlemlenebilir değişmezler (tamamlanmış bir kampanyadan sonra, başka kampanya yokken): `Σ_reason scc_deliveries_failed_total{channel=c}` + `scc_deliveries_sent_total{channel=c}` = o kanaldaki teslimat sayısı; `scc_deliveries_queued{channel=c}` = 0 ve `scc_deliveries_in_flight{channel=c}` = 0. (Gönderimden hemen sonraki `queued` değeri worker'a bağlı olduğundan sabit değer olarak test edilmez.)
+Test için gözlemlenebilir değişmezler (bir kampanyanın gönderiminden hemen önce ve `completed` olduktan sonra alınan iki okuma arasında, ölçüm boyunca başka kampanya `sending` değilken): `Σ_reason scc_deliveries_failed_total{channel=c}` + `scc_deliveries_sent_total{channel=c}` değerlerindeki **artış** = o kampanyanın o kanaldaki teslimat sayısı; ikinci okumada `scc_deliveries_queued{channel=c}` = 0 ve `scc_deliveries_in_flight{channel=c}` = 0. Seriler DB'den türetildiği için önceki kampanyalar yalnız sabit taban ekler; ortak E2E DB'sinde mutlak değer değil artış test edilir. (Gönderimden hemen sonraki `queued` değeri worker'a bağlı olduğundan sabit değer olarak test edilmez.)
 
 ## 2. Worker süreci — `GET /metrics` (`cmd/worker`, port 8081, yalnız iç ağ)
 
