@@ -30,6 +30,9 @@ var sqlComparison = map[string]string{
 //
 // Timestamp comparisons are guarded with IS NOT NULL so that a NULL timestamp makes the
 // condition false (not unknown); `not` therefore behaves exactly like Match's two-valued logic.
+// Relative days are exact 24-hour periods (make_interval(hours => days*24)), the same as Match's
+// days×24h, so the result does not depend on the session TimeZone (calendar-day interval
+// arithmetic would shift across DST changes).
 func Compile(r Rule, ref time.Time) (Compiled, error) {
 	if err := Validate(r); err != nil {
 		return Compiled{}, err
@@ -80,9 +83,9 @@ func (c *compiler) condition(cond Condition) string {
 		return "(" + col + " BETWEEN " + c.param(numArg(spec, rg.min)) + " AND " + c.param(numArg(spec, rg.max)) + ")"
 	case opWithinLast:
 		days := c.param(v)
-		return "(" + col + " IS NOT NULL AND " + col + " >= $1 - make_interval(days => " + days + "::integer) AND " + col + " <= $1)"
+		return "(" + col + " IS NOT NULL AND " + col + " >= $1 - make_interval(hours => " + days + "::integer * 24) AND " + col + " <= $1)"
 	case opOlderThan:
-		return "(" + col + " IS NOT NULL AND " + col + " < $1 - make_interval(days => " + c.param(v) + "::integer))"
+		return "(" + col + " IS NOT NULL AND " + col + " < $1 - make_interval(hours => " + c.param(v) + "::integer * 24))"
 	case opIsNull:
 		return "(" + col + " IS NULL)"
 	case opIsNotNull:

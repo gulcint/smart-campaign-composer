@@ -18,6 +18,10 @@ func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 		// pgx error text may echo the URL (with its password); keep it out of the error.
 		return nil, fmt.Errorf("postgres: invalid database url")
 	}
+	// Every session runs in UTC, so timestamptz/interval arithmetic in SQL (customer_stats_at's
+	// "interval '30 days'", segment predicates) means exact 24-hour days, as in segment.Match,
+	// whatever the server's or the URL's default TimeZone is.
+	cfg.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: create pool: %w", err)
