@@ -137,7 +137,9 @@ Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state):
 - `content_versions_id_status_key`: `UNIQUE (id, status)` (onay FK'sı için)
 - `content_versions_errors_check`: `(status = 'validated') = (validation_errors = '[]'::jsonb)`
 
-İçerik sürümleri değişmezdir (UPDATE yapılmaz).
+İçerik sürümleri değişmezdir (UPDATE yapılmaz; DELETE yalnız `campaigns` ON DELETE CASCADE ve seed `--reset` ile).
+
+`version_number`: aynı kampanyanın **tüm** satırlarının (`validated` ve `invalid`) `MAX(version_number) + 1`'i (satır yoksa 1), `campaigns` satırı kilitliyken (`SELECT … FOR UPDATE`) hesaplanır; yeniden kullanılmaz ve `segment_revision` değişince sıfırlanmaz. `content_versions_campaign_version_key` yalnız son güvencedir: bu kısıtın SQLSTATE `23505`'i hiçbir zaman HTTP 500'e dönüşmez (kilit altında hesaplandığı için oluşmaması gerekir; oluşursa servis bir kez yeniden dener). "En son sürüm" = güncel `segment_revision`'daki en yüksek `version_number`'lı **`validated`** satır; `invalid` taslaklar hiçbir zaman en son sürüm olmaz.
 
 ### 3.6 `approvals`
 
@@ -153,6 +155,7 @@ Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state):
 
 - `approvals_content_version_fk`: `FOREIGN KEY (content_version_id, content_status) REFERENCES content_versions(id, status)` → `invalid` bir sürümün onay kaydı **DB düzeyinde** oluşamaz.
 - `approvals_one_active_idx`: `UNIQUE (campaign_id) WHERE revoked_at IS NULL` → kampanya başına en fazla bir etkin onay.
+- Değişmez: `campaigns.approved_content_version_id` dolu ⇔ kampanya `approved`/`sending`/`completed` ⇔ etkin (iptal edilmemiş) bir `approvals` satırı vardır ve `content_version_id` değeri aynıdır. İkisi hep aynı transaction'da yazılır. `sending`/`completed` kampanyada onay satırı asla iptal edilmez.
 
 ### 3.7 `deliveries` (kuyruğun kendisi)
 
@@ -201,6 +204,21 @@ Index'ler: `deliveries_claim_idx (channel, next_attempt_at) WHERE status = 'queu
 | `ref_time` | timestamptz | NOT NULL |
 | `dataset_sha256` | text | NOT NULL |
 | `loaded_at` | timestamptz | NOT NULL |
+
+### 3.9 Kampanya yazma işlemleri (her biri tek transaction, `campaigns` satırı `FOR UPDATE`)
+
+HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden önce yapılır; DB tetikleyicisi (§3.4) yalnızca son güvencedir.
+
+| İşlem | Aynı transaction'daki yazmalar |
+|---|---|
+| Segment üretimi (P3) | `segment_*`/`audience_*`/`longest_*` yazılır, `segment_revision + 1`; etkin onay varsa `revoked_at`, `revoke_reason = 'segment_changed'` ve `approved_content_version_id = NULL`; durum `audience_ready` |
+| `editContent` ön koşulu | Satır kilidi altında, ekleme ile **aynı** transaction'da: `X-Expected-Version` = güncel `segment_revision`'daki en yüksek `version_number`'lı `validated` satırın `id`'si (satır yoksa `none`) değilse hiçbir yazma yapılmaz ve 409 `content_edit_conflict` döner (karşılaştırma ile ekleme arasına başka yazma giremez) |
+| İçerik `validated` (LLM `validated` olayı veya `editContent`) | yeni `content_versions` satırı (`status = 'validated'`, `source` = `llm`/`edit`, `segment_revision` = güncel, `worst_case_*` dolu, `validation_errors = '[]'`); durum `content_ready`; etkin onay varsa `revoke_reason = 'content_changed'` ve `approved_content_version_id = NULL` |
+| Saklanabilir son `invalid` taslak (LLM) | yalnız yeni `content_versions` satırı (`status = 'invalid'`, `source = 'llm'`, `validation_errors` dolu); `campaigns` ve `approvals` satırlarına dokunulmaz |
+| Diğer son `invalid` sonuçları, kopan akış, 422 ile reddedilen düzenleme | hiçbir yazma yok |
+| Onay | yeni `approvals` satırı (`content_status = 'validated'`), `approved_content_version_id` = sürüm, durum `approved` |
+| Aynı sürümün tekrar onayı (idempotent) | hiçbir yazma yok (`approved_at` değişmez) |
+| Gönderim (P5) | §3.7 / README ve openapi `sendCampaign` |
 
 ## 4. Kuyruk mekanikleri (gözlemlenebilir)
 

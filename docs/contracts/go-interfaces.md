@@ -319,16 +319,21 @@ type Email struct {
 }
 
 // Parse decodes content.schema.json documents (LLM tool input and edit request body) against the
-// FULL schema. Unknown keys, wrong JSON types AND missing keys => schema_violation at that path
-// (a missing key is never "required"). Strings are NFC-normalized. On a Parse error Validate is
-// not run. Errors: *validation.Error matching validation.ErrInvalidJSON / ErrSchemaViolation.
+// FULL schema's STRUCTURE. Unknown keys, wrong JSON types AND missing keys => schema_violation at
+// that path (a missing key is never "required"; the path of an unknown key is the key itself, e.g.
+// "html"). Parse does NOT enforce the schema's `minLength: 1`: an empty string is structurally valid
+// and is reported by Validate as `required` (README §5.2), never as schema_violation. Strings are
+// NFC-normalized and otherwise stored as given (no trimming). On a Parse error Validate is not run.
+// Errors: *validation.Error matching validation.ErrInvalidJSON / ErrSchemaViolation.
 func Parse(raw []byte) (Content, error)
 
 // Validate is THE validator for both LLM output and human edits (REQ-APR-02, REQ-CNT-01).
 // l = longest values of the campaign's CURRENT segment (Campaign.Segment.LongestValues).
 // Checks per field, in order sms.body, email.subject, email.body:
 //   required (present but empty after TrimSpace) -> malformed_variable -> unknown_variable -> length.
-// A field with a required/malformed/unknown error gets no length check (substitution is undefined).
+// At most ONE FieldError per field (the first that applies); the returned order is the field order
+// above. A field with a required/malformed/unknown error gets no length check (substitution is
+// undefined), other fields are still checked independently.
 // The length rule is applied AFTER substitution: every placeholder is replaced by a value of the
 // corresponding Longest length (first_name already includes the fallback) and the resulting rune
 // count is compared with 160 (sms.body) / 80 (email.subject) / 5000 (email.body).
@@ -403,19 +408,36 @@ type Longest struct {
 // CheckWorstCase is the approval-time RE-check (REQ-CNT-05) with Longest recomputed at approval
 // time. Same substitution as Validate, only sms.body <= 160 and email.subject <= 80; codes
 // sms_too_long_worst_case / subject_too_long_worst_case, Actual = worst-case length; they match
-// ErrSMSTooLong/ErrSubjectTooLong AND ErrWorstCaseTooLong. Because Validate already applies the
-// rule, this fails over HTTP only if customer data changed after validation; it is unit-tested directly.
+// ErrSMSTooLong/ErrSubjectTooLong AND ErrWorstCaseTooLong; paths "sms.body" / "email.subject",
+// Limit 160 / 80. email.body (5000) is NOT re-checked at approval. Because Validate already applies
+// the rule, this fails over HTTP only if customer data changed after validation; it is unit-tested directly.
 func CheckWorstCase(c Content, l Longest) error
 
 // RenderEmailHTML builds the escaped HTML document used for the provider and the preview:
 //   <!doctype html><html lang="tr"><head><meta charset="utf-8">
 //   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-//   <title>{subject}</title></head><body><p>{paragraph}</p>...</body></html>
+//   <title>{subject}</title></head><body style="{emailBodyStyle}"><p>{paragraph}</p>...</body></html>
+// emailBodyStyle is one constant inline style (never built from content) that mirrors the editor
+// field: margin:0;padding:0 16px; font-family 'Figtree Variable',Figtree,system-ui,…,sans-serif
+// (no font download: the document CSP has no font-src); 16px/24px; color #241c20 on #fcfcf9.
+// There is no <style> element; <html> carries only lang="tr" and <p> has no attributes.
 // Paragraphs are separated by one or more blank lines; a single "\n" inside a paragraph becomes "<br>".
 // Every text fragment is escaped with html.EscapeString; the output never contains a tag that
 // was not produced by this skeleton (no "<script", no "<a", no attributes from content).
 func RenderEmailHTML(subject, bodyText string) string
 ```
+
+**Değişken söz dizimi tablosu** (`Variables` → `Validate`; boşluk = yalnız U+0020 ve U+0009):
+
+| Şablon | Sonuç |
+|---|---|
+| `{{first_name}}`, `{{ first_name }}`, `{{city }}` (araya sekme de girebilir), `{{first_name}}{{first_name}}` | geçerli (`Variables` sırayla ad döner, yinelenenler korunur) |
+| `{first_name}`, `%30`, `$`, tek `{` veya tek `}` (ör. `a } b`) | düz metin (değişken yok) |
+| `{{first_name`, `{{`, `{{ }}`, `{{}}`, `}}`, `{{first-name}}`, `{{1st}}`, `{{first name}}`, `{{{first_name}}}` | `malformed_variable` |
+| `{{First_Name}}`, `{{password}}`, `{{email}}`, `{{ phone }}` | `unknown_variable` (söz dizimi geçerli, ad izinli listede yok; büyük/küçük harf duyarlı) |
+| Aynı alanda hem bozuk hem bilinmeyen değişken | tek hata: `malformed_variable` |
+
+`first_name` doldurma: `EffectiveFirstName` (kırpılmış değer, boşsa yedek metin). `last_name`, `city`: ham değer, boşsa boş metin. Doldurma sonucu tekrar şablon olarak işlenmez (değer içindeki `{{x}}` düz metindir).
 
 Uzunluk ölçüsü örnekleri (değişkensiz metinde `Longest` etkisizdir): `strings.Repeat("ş",160)` geçerli, 161 → `sms_too_long` (`Actual` 161); `"İ"` (U+0130) 1 karakter; ayrışık `"I\u0307"` (Go kaçış dizisi) NFC'de `"İ"` olur ve 1 sayılır. `"{{first_name}}" + strings.Repeat("a",146)` (şablon 160) `Validate(c, Longest{FirstName:50})` ile **reddedilir** (`sms_too_long`, `Actual` 196), `Longest{FirstName:14}` ile geçer (160). Örnek brief kitlesinde `Longest` = manifest `example_brief.longest_values` (`first_name` 50, `city` 8) ve `CNT_OK` SMS'i tam 160'tır.
 
@@ -718,7 +740,8 @@ const BriefMaxRunes = 2000
 // generation lock is released when the request context is cancelled (client disconnect) or, at the
 // latest, after this duration; a content stream still running then ends with the final invalid
 // event, code "llm_unavailable". While the lock is held, GenerateSegment, StartContentGeneration,
-// EditContent and Approve return ErrGenerationInProgress.
+// EditContent, Approve and Send return ErrGenerationInProgress (Send is included so that a
+// persisting content generation can never meet a campaign already in state `sending`).
 const MaxGenerationDuration = 120 * time.Second
 
 // NormalizeBrief NFC-normalizes and trims s. Errors (*validation.Error, path "brief"):
@@ -734,7 +757,22 @@ var (
 	ErrContentNotValidated    = errors.New("campaign: content not validated")     // 409 content_not_validated
 	ErrStaleContentVersion    = errors.New("campaign: stale content version")     // 409 stale_content_version
 	ErrGenerationInProgress   = errors.New("campaign: generation in progress")    // 409 generation_in_progress
+	ErrContentEditConflict    = errors.New("campaign: content edit conflict")     // 409 content_edit_conflict
 )
+
+// ExpectedVersionNone is the X-Expected-Version value meaning "the editor saw no latest validated version".
+const ExpectedVersionNone = "none"
+
+// EditConflictError is returned by EditContent when the expected version is not the current latest
+// validated version. errors.Is(err, ErrContentEditConflict) is true. Current is the CURRENT latest
+// validated version of the current segment revision; both members are nil when there is none.
+type EditConflictError struct {
+	CurrentID            *string `json:"id"`
+	CurrentVersionNumber *int    `json:"version_number"`
+}
+
+func (*EditConflictError) Error() string
+func (*EditConflictError) Is(target error) bool // target == ErrContentEditConflict
 
 // ---- Domain structs: JSON encoding of each is EXACTLY the OpenAPI schema of the same name ----
 
@@ -931,14 +969,33 @@ type Service interface {
 	Get(ctx context.Context, id string) (Campaign, error)
 	List(ctx context.Context, limit, offset int) (CampaignPage, error)
 	GenerateSegment(ctx context.Context, id string) (SegmentResult, error)
-	// StartContentGeneration performs every pre-stream check (404/409/422 header/502 unavailable)
-	// and connects LLM attempt 1. Errors here become JSON responses; after it returns a run,
-	// the handler writes HTTP 200 + SSE.
+	// StartContentGeneration performs every pre-stream check and connects LLM attempt 1. Errors here
+	// become JSON responses; after it returns a run, the handler writes HTTP 200 + SSE.
+	// Check order (first failure wins): ErrCampaignNotFound -> ErrInvalidState (draft, sending,
+	// completed) -> ErrGenerationInProgress -> llm.ErrUnavailable. (The handler already answered
+	// 404 for a malformed id, 422 for an unknown X-Mock-LLM-Scenario and 400/413/422 for the body,
+	// in that order, before calling the Service: README §5.4.) Acquires the generation lock, which
+	// the returned run releases when Stream returns (any outcome) or when ctx is cancelled.
 	StartContentGeneration(ctx context.Context, id string) (ContentRun, error)
-	EditContent(ctx context.Context, id string, raw []byte) (ContentVersion, error)
+	// EditContent: ErrCampaignNotFound -> ErrGenerationInProgress -> ErrInvalidState (draft, sending,
+	// completed) -> *EditConflictError (expectedVersionID, a UUID or ExpectedVersionNone, is not the
+	// id of the CURRENT latest validated version of the current segment revision, or not "none" while
+	// there is none; compared under the row lock) -> content.Parse + content.Validate against the
+	// CURRENT segment's longest values (*validation.Error => 422, nothing stored). The handler
+	// validates the X-Expected-Version header format (422) before calling. Success, in ONE
+	// transaction under the same campaign row lock (the comparison and the insert cannot interleave
+	// with another write): next version_number, status validated, source edit, segment_revision = current, state
+	// content_ready (EventContentValidated), active approval revoked ("content_changed"). No
+	// de-duplication: saving text identical to the latest version still creates a new version.
+	EditContent(ctx context.Context, id, expectedVersionID string, raw []byte) (ContentVersion, error)
 	ListContentVersions(ctx context.Context, id string) ([]ContentVersion, error)
 	GetContentVersion(ctx context.Context, id, versionID string) (ContentVersion, error)
+	// Approve: openapi approveContent "Checks, in this order". Idempotent for the already approved
+	// version (returns the unchanged Campaign; no new approvals row, approved_at unchanged, the
+	// worst-case re-check is NOT run again).
 	Approve(ctx context.Context, id, versionID string) (Campaign, error)
+	// Send: ErrCampaignNotFound -> ErrContentVersionNotFound -> ErrGenerationInProgress ->
+	// ErrInvalidState (not approved / second send) -> ErrStaleContentVersion (README §5.4).
 	Send(ctx context.Context, id, versionID string) (SendResult, error)
 	Status(ctx context.Context, id string) (CampaignStatus, error)
 	Preview(ctx context.Context, id string, q PreviewQuery) (Preview, error)
@@ -948,8 +1005,15 @@ type Service interface {
 
 // ContentRun is a started generation. Stream calls emit for every composer event in order and
 // finally exactly once with the terminal event (ValidatedEvent or InvalidEvent{Final:true}),
-// persisting the version before emitting it. On ctx cancellation it stores nothing and returns
-// ctx.Err(). Fakes: any type with this method (e.g. replaying a fixed []composer.Event).
+// persisting the version before emitting it. Persistence is ONE transaction under the campaign row
+// lock: validated => next version_number, state content_ready (EventContentValidated), active
+// approval revoked ("content_changed"); storable final invalid => the draft is stored with status
+// invalid and nothing else changes (EventContentInvalid); any other final invalid stores nothing.
+// ctx is checked before that transaction starts: if it is already cancelled (client gone) nothing is
+// stored and Stream returns ctx.Err(); a transaction that has started is completed even if the
+// client disconnects while the terminal event is being written (a version the client never saw may
+// exist; it is visible through GET /api/campaigns/{id}). Fakes: any type with this method (e.g.
+// replaying a fixed []composer.Event).
 type ContentRun interface {
 	Stream(ctx context.Context, emit func(composer.Event) error) error
 }
@@ -1496,7 +1560,7 @@ Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clo
 | `content` | `ErrSMSTooLong`, `ErrSubjectTooLong`, `ErrEmailBodyTooLong`, `ErrUnknownVariable`, `ErrMalformedVariable`, `ErrWorstCaseTooLong` |
 | `llm` | `ErrUnavailable`, `ErrTruncated`, `ErrNoToolCall`, `ErrInvalidMode`, `ErrMissingAPIKey`, `ErrRealClientForbidden`, `ErrUnknownScenario`, `ErrUnknownTool` |
 | `composer` | `ErrInvalidOutput` |
-| `campaign` | `ErrCampaignNotFound`, `ErrContentVersionNotFound`, `ErrCustomerNotFound`, `ErrInvalidState`, `ErrContentNotValidated`, `ErrStaleContentVersion`, `ErrGenerationInProgress` |
+| `campaign` | `ErrCampaignNotFound`, `ErrContentVersionNotFound`, `ErrCustomerNotFound`, `ErrInvalidState`, `ErrContentNotValidated`, `ErrStaleContentVersion`, `ErrGenerationInProgress`, `ErrContentEditConflict` |
 | `delivery` | `ErrLeaseLost`, `ErrInvalidConfig` |
 | `provider` | `ErrTimeout`, `ErrConnection` |
 | `mockprovider` | `ErrInvalidConfig` |

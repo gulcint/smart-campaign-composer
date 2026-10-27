@@ -11,6 +11,8 @@ Taşıma: Server-Sent Events (`text/event-stream; charset=utf-8`), PLAN §0.5.
 - Yanıt başlıkları: `Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
 - Stream açılmadan önce tespit edilen hatalar (404, 409, 422, 502 `llm_unavailable`) **SSE değil**, normal JSON hata gövdesiyle ve ilgili HTTP koduyla döner ([README §5](README.md#5-hata-gövdesi-ve-kodlar)). HTTP 200 + SSE başladıktan sonra hatalar yalnızca olaylarla bildirilir.
 - JSON alan adları snake_case; zamanlar RFC 3339 UTC.
+- `data` kompakt JSON olduğundan ham `\n`/`\r` içeremez (metindeki satır sonları JSON'da `\n` olarak kaçışlıdır); bu yüzden her olay tam bir `data:` satırıdır ve istemci ayrıştırıcısının çok satırlı `data:` birleştirmesine ihtiyaç duyulmaz.
+- **Makine okunur şemalar:** her olayın `data` JSON'u `openapi.yaml` bileşenine karşı doğrulanır: `delta` → `ContentDeltaEvent`, `invalid` → `ContentInvalidEvent`, `validated` → `ContentValidatedEvent`; durum akışında üç olay da `CampaignStatus`. Eşleme `x-sse-events.schemas`'tadır. Düzyazı ile şema çelişirse şema (openapi) kazanır.
 
 ## 1. İçerik üretimi akışı
 
@@ -30,7 +32,7 @@ Alanlar:
 - `channel` ∈ `sms` | `email`; `field` ∈ `body` | `subject`. Geçerli çiftler: (`sms`,`body`), (`email`,`subject`), (`email`,`body`).
 - `text`: boş olmayan parça (boyutu sözleşme değildir: gerçek istemcide API'nin `partial_json` parçalarına bağlıdır, sahte LLM'de ≤ 20 karakter); aynı `attempt` içinde aynı (`channel`,`field`) için tüm `text`'lerin sırayla birleşimi o alanın modelin ürettiği değeridir.
 - `final`: `true` ise bu olay akışın **son** olayıdır.
-- Akış sürerken (kampanyanın üretim kilidi tutulurken) aynı kampanyaya segment/içerik üretimi, içerik düzenleme ve onay istekleri **409 `generation_in_progress`** alır; önceki `validated` sürüm de bu sırada onaylanamaz.
+- Akış sürerken (kampanyanın üretim kilidi tutulurken) aynı kampanyaya segment/içerik üretimi, içerik düzenleme, onay ve gönderim istekleri **409 `generation_in_progress`** alır; önceki `validated` sürüm de bu sırada onaylanamaz. Kilit yalnızca yazma işlemlerini engeller: `GET` uç noktaları (kampanya, sürümler, önizleme, durum) akış sürerken normal yanıt verir.
 - `errors`: en az bir `FieldError` (`{"path","code","message"}` + uzunluk kodlarında `limit`, `actual`); şema README §5'te.
 - `content_version_id` (`invalid` içinde): `final: false` iken **her zaman `null`**. `final: true` iken: son denemenin çıktısı şemaya uygun ama içerik kurallarını geçemediyse (`sms_too_long`, `subject_too_long`, `email_body_too_long`, `unknown_variable`, `malformed_variable`, `required`) bu taslak `status: "invalid"` bir içerik sürümü olarak saklanır ve kimliği burada döner. `required` yalnız anahtar **var ama değeri boş** ise saklanabilir sayılır; **eksik anahtar** `schema_violation`'dır ve saklanmaz. Aksi halde (`invalid_json`, `schema_violation`, `truncated_output`, `no_tool_call`, `llm_unavailable`, `internal_error`) `null`.
 - `content` (`validated` içinde): `{"sms":{"body":...},"email":{"subject":...,"body":...}}` — kaydedilen sürümün şablon metni.
@@ -59,8 +61,30 @@ terminal  := validated | invalid(final=true)
 | Model yanıtı `tool_use` bloğu **olmadan** bitti (yalnız metin) | Geçersiz çıktı: `invalid` (`errors: [{"path":"","code":"no_tool_call"}]`); deneme 1 ise `final:false` + deneme 2; deneme 2 ise `final:true`, `content_version_id: null`. |
 | LLM erişimi HTTP 200'den sonra koptu (`llm.ErrUnavailable`, deneme 1 veya 2) | Düzeltme denemesi **yok**; terminal `invalid` (`final: true`, `errors: [{"path":"","code":"llm_unavailable"}]`, `content_version_id: null`); durum değişmez. |
 | Üretim `campaign.MaxGenerationDuration` (**120 sn**, VARSAYIM) içinde bitmedi | LLM çağrısı iptal edilir; terminal `invalid` (`llm_unavailable`), kilit bırakılır. |
-| **İstemci bağlantısı** terminal olaydan önce koptu (sahte LLM `stalled_stream` ile test edilir) | Sunucu `ctx` iptalini görür, LLM çağrısını iptal eder, **hiçbir içerik sürümü saklamaz**, kampanya durumu değişmez ve **üretim kilidi bırakılır** (sonraki üretim/düzenleme/onay isteği 409 almaz). Kesilen içerik onaylanamaz (onaylanacak yeni `validated` sürüm yoktur). |
+| **İstemci bağlantısı** terminal olaydan önce koptu (sahte LLM `stalled_stream` ile test edilir) | Sunucu `ctx` iptalini görür, LLM çağrısını iptal eder, doğrulama/kayıt aşamasına gelmediyse **hiçbir içerik sürümü saklamaz**, kampanya durumu değişmez ve **üretim kilidi bırakılır** (sonraki üretim/düzenleme/onay/gönderim isteği 409 almaz). Kesilen içerik onaylanamaz (onaylanacak yeni `validated` sürüm yoktur). **İnce sınır:** kayıt işlemi (tek transaction) başladıysa istemci o sırada koparsa bile tamamlanır; istemcinin hiç görmediği bir `validated` sürüm bu durumda `GET /api/campaigns/{id}` ile görünür. Testler yalnız `stalled_stream`'in kapsadığı durumu (doğrulama öncesi kopma → sürüm yok) iddia eder. |
 | Sunucu iç hatası stream sırasında | Terminal `invalid` (`final: true`), `errors: [{"path":"","code":"internal_error"}]`, `content_version_id: null`. |
+
+Sunucu terminal olayı yazar yazmaz bağlantıyı kapatır (yanıt gövdesi biter); terminal olay gönderilmeden gövdenin bitmesi, istemci için "yarıda kesildi"dir.
+
+### 1.3.1 İstemci kuralları (normatif; ui.md §5.2 bunları uygular)
+
+1. Bilinmeyen `event` adları sessizce yok sayılır (ileriye uyumluluk); yorum satırları yok sayılır.
+2. `data` JSON olarak ayrıştırılamıyor veya ilgili şemaya uymuyorsa akış **kesilmiş** sayılır (aşağıdaki "terminal olay yok" davranışı); istemci bunu `ApiError` olarak göstermez.
+3. Terminal olaydan (`validated` veya `invalid` `final: true`) sonra gelen her şey yok sayılır.
+4. Terminal olay olmadan gövde biterse veya ağ hatası olursa istemci kendiliğinden **yeniden bağlanmaz** (yeniden üretim kullanıcı kararıdır; her üretim yeni bir LLM maliyeti ve yeni sürüm demektir).
+5. Aynı `attempt` içinde (`channel`,`field`) çiftine göre biriktirilen metin taslaktır; `validated`'daki `content` otoritedir ve alan metinlerini yeniden yazar.
+
+### 1.3.2 Neyin ne zaman saklandığı (özet tablo)
+
+| Sonuç | `content_versions` | Kampanya durumu | Etkin onay | `latest_content_version` |
+|---|---|---|---|---|
+| `validated` | yeni satır, `validated`, `source=llm`, `llm_attempts` 1 veya 2 | `content_ready` | düşer (`content_changed`) | yeni sürüm |
+| son `invalid`, `content_version_id` dolu | yeni satır, `invalid`, `source=llm`, `validation_errors` dolu | değişmez | değişmez | değişmez |
+| son `invalid`, `content_version_id: null` | satır yok | değişmez | değişmez | değişmez |
+| `final: false` `invalid` (deneme 1 sonu) | satır yok | değişmez | değişmez | değişmez |
+| bağlantı kopması / `delta`'lar sırasında iptal | satır yok | değişmez | değişmez | değişmez |
+
+Sürüm yalnız `validated` olayından **önce** ve son `invalid` olayından **önce** (kimlik olayda döndüğü için) kaydedilir; ara (`delta`, `final: false`) olaylar hiçbir şey kaydetmez.
 
 ### 1.4 Örnekler
 
