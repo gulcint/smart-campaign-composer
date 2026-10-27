@@ -1,0 +1,1130 @@
+openapi: 3.1.0
+info:
+  title: Smart Campaign Composer API
+  version: 1.0.0-contracts-v1
+  description: |
+    HTTP contract of cmd/api. Conventions (README.md §3): IDs are UUID strings, timestamps RFC 3339 UTC,
+    JSON snake_case, request bodies application/json (max 65536 bytes, larger => 413),
+    unknown JSON properties in request bodies => 422 schema_violation.
+    No authentication (local demo, VARSAYIM). Every response carries X-Request-ID
+    (echoed from the request when present, otherwise generated).
+    Malformed UUID in a path parameter is treated as "not found" (404). Unknown path => 404 `not_found`;
+    known path with an unsupported HTTP method => 405 `method_not_allowed` with an `Allow` header.
+    Invalid query parameter values (e.g. `status=foo`, `channel=fax`, `limit=0`) => 422 `validation_failed`
+    with field code `invalid_value` and path `query.<name>` (e.g. `query.status`, `query.channel`).
+    Per-campaign generation lock: while a segment or content generation runs, generateSegment,
+    generateContent, editContent and approveContent return 409 `generation_in_progress`. The lock is
+    released when the generating request's context is cancelled (client disconnect) or at the latest
+    after 120 s (campaign.MaxGenerationDuration, VARSAYIM).
+    SSE event payloads are specified in sse-events.md; LLM scenarios in llm-tools.md.
+
+    Drift guard (README.md §11): this multi-file spec is the hand-written source of truth and the code
+    is checked against it. Every object schema is closed (`additionalProperties: false`), every status
+    code an operation can return is listed (500 `internal_error` included), and error responses pin the
+    allowed `error.code` values per status. The segment rule and content bodies are `$ref`s to
+    schemas/segment-rule.schema.json and schemas/content.schema.json (relative file refs, resolved
+    against this file's location). `text/event-stream` responses (operations carrying `x-sse-events`)
+    are excluded from body validation; their events are specified in sse-events.md. Router-level
+    responses that belong to no operation (unknown path => `RouteNotFound`, unsupported method =>
+    `MethodNotAllowed`) are listed under components.responses and checked against those directly.
+servers:
+  - url: http://localhost:8080
+security: []  # no authentication (local demo, VARSAYIM)
+tags:
+  - name: campaigns
+  - name: audience
+  - name: content
+  - name: approval
+  - name: delivery
+  - name: system
+
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      operationId: getHealthz
+      summary: Liveness (REQ-TRK-03)
+      responses:
+        '200':
+          description: Process is up.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+              example: { status: ok }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /readyz:
+    get:
+      tags: [system]
+      operationId: getReadyz
+      summary: Readiness — database reachable (REQ-TRK-03)
+      responses:
+        '200':
+          description: Database ping succeeded within 1s.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+              example: { status: ready, checks: { database: ok } }
+        '503':
+          description: Database unreachable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+              example: { status: not_ready, checks: { database: unavailable } }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /metrics:
+    get:
+      tags: [system]
+      operationId: getMetrics
+      summary: Prometheus metrics (REQ-TRK-02, names in metrics.md)
+      responses:
+        '200':
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema: { type: string }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/config:
+    get:
+      tags: [system]
+      operationId: getConfig
+      summary: Effective runtime configuration visible to the UI (REQ-AI-03)
+      responses:
+        '200':
+          description: OK. Never contains secrets.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppConfig' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns:
+    post:
+      tags: [campaigns]
+      operationId: createCampaign
+      summary: Create a campaign from a brief (REQ-AUD-05)
+      description: |
+        Stores the brief (NFC-normalized, trimmed) and creates the campaign in state `draft`.
+        Does not call the LLM. Validation: brief empty/whitespace => field code `required`;
+        > 2000 characters (runes, after trim) => `too_long` (2000 accepted); missing `brief` key or
+        non-string => `schema_violation`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCampaignRequest' }
+      responses:
+        '201':
+          description: Created.
+          headers:
+            Location: { required: true, schema: { type: string }, description: '/api/campaigns/{campaign_id}' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Campaign' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    get:
+      tags: [campaigns]
+      operationId: listCampaigns
+      summary: List campaigns, newest first
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignPage' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [campaigns]
+      operationId: getCampaign
+      summary: One campaign with its segment, latest validated content version and approval
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Campaign' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/segment:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    post:
+      tags: [audience]
+      operationId: generateSegment
+      summary: Generate the segment rule from the stored brief with the LLM (REQ-AUD-00..04, REQ-AI-01)
+      description: |
+        Non-streaming. LLM tool `emit_segment_rule` -> segment.Parse + segment.Validate -> at most one
+        repair attempt -> audience count (consent filtered per channel) at the reference time
+        (SEGMENT_REFERENCE_TIME or now). Also stores `longest_values` (content.Longest over the matched
+        set) used by content validation. Request body: none or `{}` (any property => 422
+        `schema_violation`; non-JSON => 400; > 65536 bytes => 413).
+
+        Allowed states: draft, audience_ready, content_ready, approved. On success the state becomes
+        `audience_ready`, `segment.revision` increments, any active approval is revoked
+        (`segment_changed`) and `latest_content_version` becomes null (older versions are stale).
+        On any error the campaign (state, previous segment) is unchanged.
+      parameters:
+        - $ref: '#/components/parameters/MockScenario'
+      requestBody: { $ref: '#/components/requestBodies/EmptyBody' }
+      responses:
+        '200':
+          description: Valid rule stored and counted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SegmentResult' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          $ref: '#/components/responses/GenerationConflict'
+          description: '`invalid_state` (sending/completed) or `generation_in_progress` (another segment/content generation for this campaign is running).'
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/segments/count:
+    post:
+      tags: [audience]
+      operationId: countSegment
+      summary: Validate an explicit rule and count its audience (REQ-AUD-01, REQ-AUD-02, REQ-AUD-03; VARSAYIM)
+      description: |
+        Body follows schemas/segment-rule.schema.json (`{"rule": {...}}`). Same Parse/Validate/Compile path as
+        LLM output; no LLM call; nothing stored. Reference time = SEGMENT_REFERENCE_TIME or now.
+        Invalid rule => 422 with field errors (segment-dsl.md §7.3); the audience query is not executed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SegmentRuleDocument' }
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SegmentCount' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/content:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    post:
+      tags: [content]
+      operationId: generateContent
+      summary: Stream SMS + email content generation over SSE (REQ-CNT-04, REQ-AI-01)
+      description: |
+        Request body: none or `{}`. Response is `text/event-stream` with events `delta`, `invalid`,
+        `validated` exactly as in sse-events.md §1; the stream always ends with `validated` or
+        `invalid` with `final: true` (unless the client disconnects).
+
+        Allowed states: audience_ready, content_ready, approved. Errors detected before the stream
+        opens are returned as JSON with the status codes below (no SSE). After HTTP 200 the
+        equivalent of 502 is the final `invalid` event.
+        Effects: `validated` => new version (status validated, source llm), state `content_ready`,
+        active approval revoked (`content_changed`). Final `invalid` with a storable draft => new
+        version with status `invalid` that does NOT become `latest_content_version`, does NOT revoke
+        an approval and does NOT change the state (VARSAYIM, sse-events.md §1.2 #6). A concurrent
+        generation for the same campaign => 409 `generation_in_progress` (reproducible with the
+        `stalled_stream` mock scenario).
+      x-sse-events: { doc: sse-events.md, section: '§1', events: [delta, invalid, validated] }
+      parameters:
+        - $ref: '#/components/parameters/MockScenario'
+      requestBody: { $ref: '#/components/requestBodies/EmptyBody' }
+      responses:
+        '200':
+          description: SSE stream (see sse-events.md §1). Not body-validated (x-sse-events); per-event schemas arrive in P4.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          $ref: '#/components/responses/GenerationConflict'
+          description: '`invalid_state` (draft, sending, completed) or `generation_in_progress` (lock released on client disconnect or after 120 s).'
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '502':
+          $ref: '#/components/responses/BadGateway'
+          description: '`llm_unavailable` before the stream opens (after HTTP 200 the equivalent is the final `invalid` event).'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/content-versions:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [content]
+      operationId: listContentVersions
+      summary: All content versions of the campaign, newest (highest version_number) first
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ContentVersion' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [content]
+      operationId: editContent
+      summary: Human edit — creates a new validated content version (REQ-APR-01, REQ-APR-02, REQ-APR-03)
+      description: |
+        Body follows schemas/content.schema.json (full content: sms.body, email.subject, email.body).
+        Goes through exactly the same content.Parse + content.Validate(c, segment.longest_values) as LLM
+        output: lengths are measured AFTER substituting every variable with the current segment's
+        longest values (REQ-CNT-01/05). Invalid content => 422 and NOTHING is stored. Allowed states: audience_ready, content_ready, approved
+        (draft, sending, completed => 409 invalid_state); while a generation runs => 409
+        `generation_in_progress`. On success: new version
+        (status validated, source edit, version_number = previous max + 1), state `content_ready`,
+        active approval revoked (`content_changed`).
+        The response carries `worst_case` (post-substitution lengths) for the UI's second counter line.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Content' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContentVersion' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/GenerationConflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/content-versions/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+      - $ref: '#/components/parameters/VersionId'
+    get:
+      tags: [content]
+      operationId: getContentVersion
+      summary: One content version of the campaign (validated or invalid)
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContentVersion' }
+        '404': { $ref: '#/components/responses/VersionNotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    post:
+      tags: [approval]
+      operationId: approveContent
+      summary: Approve a content version (REQ-APR-01, REQ-APR-03, REQ-CNT-04, REQ-CNT-05)
+      description: |
+        Checks, in this order (first failure wins):
+        1. campaign exists, else 404 `campaign_not_found`;
+        2. version belongs to the campaign, else 404 `content_version_not_found`;
+        2b. no generation running for the campaign, else 409 `generation_in_progress`;
+        3. version status is `validated`, else 409 `content_not_validated`;
+        4. state is `content_ready` or `approved`, else 409 `invalid_state`;
+        5. version is the latest VALIDATED version (highest version_number among validated versions)
+           AND has the current segment revision, else 409 `stale_content_version`;
+        6. worst-case RE-check (content.CheckWorstCase with the longest first_name (fallback
+           included), last_name and city among customers MATCHED by the rule at the campaign's
+           reference time, before consent filtering — owner decision), recomputed now, else 422
+           `validation_failed` with field codes `sms_too_long_worst_case` / `subject_too_long_worst_case`.
+           Validation already applies the same rule, so over HTTP this fails only if customer data
+           changed after validation. Test placement: an INTEGRATION test on its OWN database (seed, then
+           validate content, then `UPDATE customers SET first_name = <longer value> WHERE id = <matched id>`
+           as the app role `scc_app`, then approve => 422). This mutation is FORBIDDEN in the shared
+           seeded E2E database (it would change manifest counts for other tests).
+        Success: approval row bound to the version, state `approved`. Approving the already
+        approved version again is idempotent (200, same approval).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VersionRef' }
+      responses:
+        '200':
+          description: Approved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Campaign' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '404': { $ref: '#/components/responses/VersionNotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/send:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    post:
+      tags: [delivery]
+      operationId: sendCampaign
+      summary: Accept the send and create all deliveries atomically (REQ-SND-01, REQ-APR-01, REQ-AUD-04, REQ-SND-03)
+      description: |
+        Checks in order: 404 `campaign_not_found`; 404 `content_version_not_found`;
+        state must be `approved`, else 409 `invalid_state` (no delivery row is created);
+        `content_version_id` must equal the approved version, else 409 `stale_content_version`.
+        Success, in ONE transaction: one delivery per (channel, customer) of the channel audiences
+        (segment-dsl.md §6) evaluated at the campaign's stored reference time, status `queued`,
+        `next_attempt_at` = now; state `sending`. If both audiences are empty the campaign becomes
+        `completed` in the same transaction. Returns immediately (202); workers send in the background.
+        A second send request => 409 `invalid_state`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VersionRef' }
+      responses:
+        '202':
+          description: Accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SendResult' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '404': { $ref: '#/components/responses/VersionNotFound' }
+        '409': { $ref: '#/components/responses/SendConflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/status:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [delivery]
+      operationId: getCampaignStatus
+      summary: Delivery counters snapshot (REQ-TRK-01)
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignStatus' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [delivery]
+      operationId: streamCampaignEvents
+      summary: Live delivery status over SSE, EventSource compatible (REQ-TRK-01)
+      description: Events `snapshot`, `status`, `completed` (sse-events.md §2).
+      x-sse-events: { doc: sse-events.md, section: '§2', events: [snapshot, status, completed] }
+      responses:
+        '200':
+          description: SSE stream (see sse-events.md §2). Not body-validated (x-sse-events); per-event schemas arrive in P4.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/deliveries:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [delivery]
+      operationId: listDeliveries
+      summary: Paginated deliveries (REQ-SND-01, REQ-SND-04, REQ-TRK-01)
+      description: Contains no recipient address (no phone, no email) — REQ-SEC-01 spirit.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Unknown value => 422 invalid_value (path query.status).
+          schema: { $ref: '#/components/schemas/DeliveryStatus' }
+        - name: channel
+          in: query
+          required: false
+          description: Unknown value => 422 invalid_value (path query.channel).
+          schema: { $ref: '#/components/schemas/Channel' }
+        - name: order
+          in: query
+          required: false
+          description: '`customer` = customer_id ASC, channel ASC (default); `recent` = updated_at DESC, id ASC (used by the UI activity feed). Unknown value => 422 invalid_value (path query.order).'
+          schema: { type: string, enum: [customer, recent], default: customer }
+        - name: customer_id
+          in: query
+          required: false
+          description: Only this customer's deliveries (0..2 rows). Malformed UUID => 422 invalid_value (path query.customer_id).
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeliveryPage' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/preview:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [approval]
+      operationId: previewContent
+      summary: Render a content version for one sample customer (REQ-APR-01, REQ-CNT-03, REQ-UI-01)
+      description: |
+        Defaults: `content_version_id` = latest validated version of the current segment revision.
+        Sample recipient: if `customer_id` is given it is used (must be matched by the rule);
+        otherwise the `sample_index`-th customer (0-based, default 0) of the matched set ordered by
+        customer id (UUID text order) at the campaign's reference time; `sample_index` >= matched
+        count => 404 `customer_not_found`. The UI "next sample" control increments `sample_index`
+        modulo `sample_count`. Errors: no segment or no validated version => 409
+        `invalid_state`; given version not in campaign => 404 `content_version_not_found`; given
+        version has status invalid => 409 `content_not_validated`; given customer not matched by the
+        rule => 404 `customer_not_found`. `email.html` is content.RenderEmailHTML output: every
+        template and variable fragment is HTML-escaped, it contains no element other than the
+        fixed skeleton (no script element), and the UI shows it only in a sandboxed iframe.
+      parameters:
+        - name: customer_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: content_version_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: sample_index
+          in: query
+          required: false
+          description: '>= 0, default 0. Negative => 422 invalid_value (path query.sample_index).'
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Preview' }
+        '404': { $ref: '#/components/responses/PreviewNotFound' }
+        '409': { $ref: '#/components/responses/PreviewConflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+components:
+  parameters:
+    CampaignId:
+      name: campaign_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    VersionId:
+      name: version_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: 1..200, default 50. Out of range => 422 invalid_value (path query.limit).
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Offset:
+      name: offset
+      in: query
+      required: false
+      description: '>= 0, default 0. Negative => 422 invalid_value (path query.offset).'
+      schema: { type: integer, minimum: 0, default: 0 }
+    MockScenario:
+      name: X-Mock-LLM-Scenario
+      in: header
+      required: false
+      description: |
+        Honored ONLY when the effective LLM provider is `mock`; ignored when `claude`.
+        Unknown value in mock mode => 422 validation_failed, field path `header.X-Mock-LLM-Scenario`,
+        code `invalid_value`; the LLM is not called. Default: MOCK_LLM_SCENARIO (default `ok`).
+      schema: { $ref: '#/components/schemas/MockScenario' }
+
+  requestBodies:
+    EmptyBody:
+      description: None or `{}`. Any property => 422 `schema_violation`.
+      required: false
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/EmptyObject' }
+
+  responses:
+    MalformedRequest:
+      description: '`malformed_request` — body is not valid JSON or Content-Type is not application/json.'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { const: malformed_request }, fields: { not: {} } } } }
+    NotFound:
+      description: '`campaign_not_found` — unknown campaign (malformed UUID included).'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { const: campaign_not_found }, fields: { not: {} } } } }
+    VersionNotFound:
+      description: '`campaign_not_found` or `content_version_not_found` (version missing or belongs to another campaign).'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { enum: [campaign_not_found, content_version_not_found] }, fields: { not: {} } } } }
+    PreviewNotFound:
+      description: '`campaign_not_found`, `content_version_not_found` or `customer_not_found`.'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { enum: [campaign_not_found, content_version_not_found, customer_not_found] }, fields: { not: {} } } } }
+    Conflict:
+      description: '`invalid_state`, `content_not_validated`, `stale_content_version` or `generation_in_progress` (approveContent order of checks).'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { enum: [invalid_state, content_not_validated, stale_content_version, generation_in_progress] }, fields: { not: {} } } } }
+    GenerationConflict:
+      description: '`invalid_state` or `generation_in_progress`.'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { enum: [invalid_state, generation_in_progress] }, fields: { not: {} } } } }
+    SendConflict:
+      description: '`invalid_state` (not approved, second send) or `stale_content_version`.'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { enum: [invalid_state, stale_content_version] }, fields: { not: {} } } } }
+    PreviewConflict:
+      description: '`invalid_state` (no segment or no validated version) or `content_not_validated`.'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { enum: [invalid_state, content_not_validated] }, fields: { not: {} } } } }
+    PayloadTooLarge:
+      description: '`payload_too_large` — body larger than 65536 bytes.'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { const: payload_too_large }, fields: { not: {} } } } }
+    ValidationFailed:
+      description: '`validation_failed` with at least one entry in `error.fields` (example body: README.md §5).'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { required: [fields], properties: { code: { const: validation_failed }, fields: { minItems: 1 } } } }
+    BadGateway:
+      description: |
+        `llm_invalid_output` (output still invalid after the single repair attempt; `error.fields`
+        holds the last attempt's errors) or `llm_unavailable`. The response never contains database
+        error text, the API key, or the raw model output.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties:
+                  error:
+                    oneOf:
+                      - required: [code, fields]
+                        properties: { code: { const: llm_invalid_output }, fields: { minItems: 1 } }
+                      - required: [code]
+                        properties: { code: { const: llm_unavailable }, fields: { not: {} } }
+    InternalError:
+      description: '`internal_error` — unexpected failure (panic recovery included); message is fixed, no internal detail.'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { const: internal_error }, fields: { not: {} } } } }
+    # Router-level responses: they belong to no operation (unknown path, or a method the path does
+    # not define), so the E2E validator checks them against these components directly.
+    RouteNotFound:
+      description: '`not_found` — no path template matches the request path.'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { const: not_found }, fields: { not: {} } } } }
+    MethodNotAllowed:
+      description: '`method_not_allowed` — the path exists but does not define this method.'
+      headers:
+        Allow:
+          required: true
+          description: Comma-separated methods the path defines, sorted (e.g. `GET, POST`).
+          schema: { type: string }
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { const: method_not_allowed }, fields: { not: {} } } } }
+
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { const: ok }
+
+    Readiness:
+      type: object
+      additionalProperties: false
+      required: [status, checks]
+      properties:
+        status: { enum: [ready, not_ready] }
+        checks:
+          type: object
+          additionalProperties: false
+          required: [database]
+          properties:
+            database: { enum: [ok, unavailable] }
+
+    AppConfig:
+      type: object
+      additionalProperties: false
+      required: [llm_provider, limits, template_variables, first_name_fallback]
+      properties:
+        llm_provider:
+          type: string
+          enum: [mock, claude]
+          description: Effective provider (llm.Select result). The UI shows a "Mock LLM" badge when `mock`.
+        mock_scenarios:
+          type: array
+          description: Present only when llm_provider is `mock`; the 14 names of llm-tools.md §3.2 in order.
+          items: { $ref: '#/components/schemas/MockScenario' }
+        limits:
+          type: object
+          additionalProperties: false
+          required: [sms_max_runes, email_subject_max_runes, email_body_max_runes, brief_max_runes, request_body_max_bytes]
+          properties:
+            sms_max_runes: { const: 160 }
+            email_subject_max_runes: { const: 80 }
+            email_body_max_runes: { const: 5000 }
+            brief_max_runes: { const: 2000 }
+            request_body_max_bytes: { const: 65536 }
+        template_variables:
+          type: array
+          items: { type: string }
+          description: Exactly ["first_name", "last_name", "city"].
+        first_name_fallback: { const: 'Değerli müşterimiz' }
+
+    MockScenario:
+      type: string
+      enum: [ok, invalid_json, schema_violation, over_limit_sms, over_limit_subject, unknown_variable,
+             injection_attempt, truncated_stream, then_ok_after_repair, always_invalid, sql_in_value,
+             html_in_content, llm_unavailable, stalled_stream]
+
+    CampaignState:
+      type: string
+      enum: [draft, audience_ready, content_ready, approved, sending, completed]
+
+    Channel:
+      type: string
+      enum: [sms, email]
+
+    DeliveryStatus:
+      type: string
+      enum: [queued, sending, sent, failed]
+
+    FailureReason:
+      type: string
+      enum: [provider_rejected, max_attempts_exceeded, rate_limit_budget_exhausted, content_too_long, recipient_unavailable]
+
+    CreateCampaignRequest:
+      type: object
+      additionalProperties: false
+      required: [brief]
+      properties:
+        brief: { type: string, description: '1..2000 characters after trim' }
+
+    Audience:
+      type: object
+      additionalProperties: false
+      required: [matched, sms, email]
+      properties:
+        matched: { type: integer, minimum: 0, description: 'Customers matched by the rule, consent ignored' }
+        sms: { type: integer, minimum: 0, description: 'matched AND sms_opt_in AND phone present' }
+        email: { type: integer, minimum: 0, description: 'matched AND email_opt_in AND email present' }
+
+    EmptyObject:
+      type: object
+      additionalProperties: false
+      maxProperties: 0
+
+    SegmentRuleDocument:
+      description: Body of countSegment; the single source is schemas/segment-rule.schema.json (root object with property `rule`).
+      $ref: './schemas/segment-rule.schema.json'
+
+    Segment:
+      type: object
+      additionalProperties: false
+      required: [rule, audience, longest_values, reference_time, revision, llm_attempts, generated_at]
+      properties:
+        rule:
+          description: 'Root group, e.g. {"all":[...]} (value of the tool input property `rule`); always a valid rule.'
+          $ref: './schemas/segment-rule.schema.json#/$defs/group1'
+        audience: { $ref: '#/components/schemas/Audience' }
+        longest_values: { $ref: '#/components/schemas/LongestValues' }
+        reference_time: { type: string, format: date-time }
+        revision: { type: integer, minimum: 1 }
+        llm_attempts: { type: integer, enum: [1, 2] }
+        generated_at: { type: string, format: date-time }
+
+    LongestValues:
+      type: object
+      additionalProperties: false
+      required: [first_name, last_name, city]
+      description: Longest rune lengths over customers matched by the rule (before consent); first_name includes the fallback (empty matched set => 18/0/0).
+      properties:
+        first_name: { type: integer, minimum: 0 }
+        last_name: { type: integer, minimum: 0 }
+        city: { type: integer, minimum: 0 }
+
+    WorstCase:
+      type: object
+      additionalProperties: false
+      required: [sms_runes, subject_runes]
+      description: Lengths after substituting every variable with the segment's longest values (validated versions => sms_runes <= 160, subject_runes <= 80).
+      properties:
+        sms_runes: { type: integer }
+        subject_runes: { type: integer }
+
+    SegmentResult:
+      type: object
+      additionalProperties: false
+      required: [campaign_id, state, segment]
+      properties:
+        campaign_id: { type: string, format: uuid }
+        state: { $ref: '#/components/schemas/CampaignState' }
+        segment: { $ref: '#/components/schemas/Segment' }
+
+    SegmentCount:
+      type: object
+      additionalProperties: false
+      required: [audience, reference_time]
+      properties:
+        audience: { $ref: '#/components/schemas/Audience' }
+        reference_time: { type: string, format: date-time }
+
+    Content:
+      description: Body of editContent and content of validated versions; the single source is schemas/content.schema.json.
+      $ref: './schemas/content.schema.json'
+
+    ContentDraft:
+      description: |
+        Shape of a stored version's content. Same keys as schemas/content.schema.json but values may be
+        empty: an `invalid` LLM draft is stored when a key is present with an empty value (field code
+        `required`, sse-events.md §1). `validated` versions additionally satisfy Content (see ContentVersion).
+      type: object
+      additionalProperties: false
+      required: [sms, email]
+      properties:
+        sms:
+          type: object
+          additionalProperties: false
+          required: [body]
+          properties:
+            body: { type: string }
+        email:
+          type: object
+          additionalProperties: false
+          required: [subject, body]
+          properties:
+            subject: { type: string }
+            body: { type: string }
+
+    ContentVersion:
+      type: object
+      additionalProperties: false
+      required: [id, campaign_id, version_number, segment_revision, status, source, content, worst_case, validation_errors, llm_attempts, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        campaign_id: { type: string, format: uuid }
+        version_number: { type: integer, minimum: 1 }
+        segment_revision: { type: integer, minimum: 1 }
+        status: { type: string, enum: [validated, invalid] }
+        source: { type: string, enum: [llm, edit] }
+        content: { $ref: '#/components/schemas/ContentDraft' }
+        worst_case:
+          description: Null iff the template syntax is invalid (malformed/unknown variable).
+          oneOf: [ { $ref: '#/components/schemas/WorstCase' }, { type: 'null' } ]
+        validation_errors:
+          type: array
+          description: Empty iff status is validated.
+          items: { $ref: '#/components/schemas/FieldError' }
+        llm_attempts: { type: [integer, 'null'], enum: [1, 2, null] }
+        created_at: { type: string, format: date-time }
+      if:
+        required: [status]
+        properties: { status: { const: validated } }
+      then:
+        properties:
+          content: { $ref: '#/components/schemas/Content' }
+          validation_errors: { maxItems: 0 }
+      else:
+        properties:
+          validation_errors: { minItems: 1 }
+
+    Approval:
+      type: object
+      additionalProperties: false
+      required: [id, content_version_id, approved_at]
+      properties:
+        id: { type: string, format: uuid }
+        content_version_id: { type: string, format: uuid }
+        approved_at: { type: string, format: date-time }
+
+    Campaign:
+      type: object
+      additionalProperties: false
+      required: [id, brief, state, segment, latest_content_version, approval, sending_started_at, completed_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        brief: { type: string }
+        state: { $ref: '#/components/schemas/CampaignState' }
+        segment:
+          oneOf: [ { $ref: '#/components/schemas/Segment' }, { type: 'null' } ]
+        latest_content_version:
+          description: Highest version_number among VALIDATED versions of the CURRENT segment revision; null if none. Invalid drafts never appear here.
+          oneOf: [ { $ref: '#/components/schemas/ContentVersion' }, { type: 'null' } ]
+        approval:
+          description: Active (not revoked) approval; non-null iff state is approved, sending or completed.
+          oneOf: [ { $ref: '#/components/schemas/Approval' }, { type: 'null' } ]
+        sending_started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CampaignPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Campaign' }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    VersionRef:
+      type: object
+      additionalProperties: false
+      required: [content_version_id]
+      properties:
+        content_version_id: { type: string, format: uuid, description: 'Malformed UUID => 422 invalid_value (path content_version_id)' }
+
+    SendResult:
+      type: object
+      additionalProperties: false
+      required: [campaign_id, state, content_version_id, deliveries]
+      properties:
+        campaign_id: { type: string, format: uuid }
+        state: { type: string, enum: [sending, completed] }
+        content_version_id: { type: string, format: uuid }
+        deliveries:
+          type: object
+          additionalProperties: false
+          required: [total, sms, email]
+          properties:
+            total: { type: integer }
+            sms: { type: integer, description: Equals segment.audience.sms }
+            email: { type: integer, description: Equals segment.audience.email }
+
+    StatusCounts:
+      type: object
+      additionalProperties: false
+      required: [total, queued, sending, sent, failed]
+      properties:
+        total: { type: integer }
+        queued: { type: integer }
+        sending: { type: integer }
+        sent: { type: integer }
+        failed: { type: integer }
+
+    CampaignStatus:
+      type: object
+      additionalProperties: false
+      required: [campaign_id, state, counts, by_channel, sending_started_at, completed_at, updated_at]
+      properties:
+        campaign_id: { type: string, format: uuid }
+        state: { $ref: '#/components/schemas/CampaignState' }
+        counts: { $ref: '#/components/schemas/StatusCounts' }
+        by_channel:
+          type: object
+          additionalProperties: false
+          required: [sms, email]
+          properties:
+            sms: { $ref: '#/components/schemas/StatusCounts' }
+            email: { $ref: '#/components/schemas/StatusCounts' }
+        sending_started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Delivery:
+      type: object
+      additionalProperties: false
+      required: [id, campaign_id, content_version_id, customer_id, channel, status, attempts, failed_attempts,
+                 rate_limited_count, retry_count, next_attempt_at, first_attempt_at, last_attempt_at,
+                 last_http_status, last_error, failure_reason, provider_message_id, sent_at, failed_at,
+                 created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid, description: 'Also the Idempotency-Key sent to the provider' }
+        campaign_id: { type: string, format: uuid }
+        content_version_id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+        channel: { $ref: '#/components/schemas/Channel' }
+        status: { $ref: '#/components/schemas/DeliveryStatus' }
+        attempts: { type: integer }
+        failed_attempts: { type: integer, minimum: 0, maximum: 5 }
+        rate_limited_count: { type: integer, minimum: 0, maximum: 20 }
+        retry_count: { type: integer }
+        next_attempt_at: { type: string, format: date-time }
+        first_attempt_at: { type: [string, 'null'], format: date-time }
+        last_attempt_at: { type: [string, 'null'], format: date-time }
+        last_http_status: { type: [integer, 'null'] }
+        last_error: { type: [string, 'null'] }
+        failure_reason:
+          oneOf: [ { $ref: '#/components/schemas/FailureReason' }, { type: 'null' } ]
+        provider_message_id: { type: [string, 'null'] }
+        sent_at: { type: [string, 'null'], format: date-time }
+        failed_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DeliveryPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Delivery' }
+        total: { type: integer, description: Count matching the filters }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    Preview:
+      type: object
+      additionalProperties: false
+      required: [campaign_id, content_version_id, sample_index, sample_count, customer, sms, email]
+      properties:
+        campaign_id: { type: string, format: uuid }
+        content_version_id: { type: string, format: uuid }
+        sample_index: { type: integer, description: 'Index of the shown customer in the matched set (also when customer_id was given)' }
+        sample_count: { type: integer, description: Matched customer count }
+        customer:
+          type: object
+          additionalProperties: false
+          required: [id, first_name, last_name, city]
+          description: No email, no phone.
+          properties:
+            id: { type: string, format: uuid }
+            first_name: { type: string, description: Raw value (may be empty) }
+            last_name: { type: string }
+            city: { type: string }
+        sms:
+          type: object
+          additionalProperties: false
+          required: [text, runes, limit, within_limit]
+          properties:
+            text: { type: string, description: 'Rendered plain text (fallback "Değerli müşterimiz" for empty first_name)' }
+            runes: { type: integer }
+            limit: { const: 160 }
+            within_limit: { type: boolean }
+        email:
+          type: object
+          additionalProperties: false
+          required: [subject, subject_runes, subject_limit, within_limit, text, html]
+          properties:
+            subject: { type: string, description: Rendered plain text }
+            subject_runes: { type: integer }
+            subject_limit: { const: 80 }
+            within_limit: { type: boolean, description: subject_runes <= 80 }
+            text: { type: string, description: Rendered plain-text body }
+            html: { type: string, description: 'content.RenderEmailHTML(subject, text): escaped, fixed skeleton' }
+
+    FieldError:
+      type: object
+      additionalProperties: false
+      required: [path, code, message]
+      properties:
+        path: { type: string, description: 'e.g. "brief", "sms.body", "rule.all[0].field", "header.X-Mock-LLM-Scenario", "query.limit", "" (whole document)' }
+        code:
+          type: string
+          enum: [required, too_long, invalid_value, invalid_json, schema_violation, truncated_output,
+                 no_tool_call, llm_unavailable, internal_error, sms_too_long, subject_too_long, email_body_too_long,
+                 sms_too_long_worst_case, subject_too_long_worst_case, unknown_variable, malformed_variable,
+                 unknown_field, unknown_operator, operator_not_allowed, type_mismatch, empty_group,
+                 max_depth_exceeded, max_conditions_exceeded]
+        message: { type: string }
+        limit: { type: integer }
+        actual: { type: integer }
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum: [malformed_request, not_found, method_not_allowed, campaign_not_found, content_version_not_found, customer_not_found,
+                     invalid_state, content_not_validated, stale_content_version, generation_in_progress,
+                     payload_too_large, validation_failed, llm_invalid_output, llm_unavailable, internal_error]
+            message: { type: string, description: 'English; never contains secrets, SQL or DB error text' }
+            fields:
+              type: array
+              description: Present (non-empty) for validation_failed and llm_invalid_output; absent otherwise (pinned per response in components.responses).
+              items: { $ref: '#/components/schemas/FieldError' }
+            request_id: { type: string, minLength: 1, description: Same value as the X-Request-ID response header }

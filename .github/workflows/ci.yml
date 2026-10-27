@@ -7,6 +7,8 @@ name: ci
 
 on:
   pull_request:
+    # labeled/unlabeled: re-run when the api-breaking-ok label changes.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -125,6 +127,38 @@ jobs:
           for f in segment-rule content; do
             cmp docs/contracts/schemas/llm/"$f".tool.json internal/llm/schemas/"$f".tool.json
           done
+
+  # API <-> doc drift guard (contracts README §11). api-routes and the strict E2E validation run
+  # inside `make test` (make-test job).
+  api-contract:
+    runs-on: ubuntu-latest
+    env:
+      # A boolean derived from PR labels, passed through env (never interpolated into the script).
+      API_BREAKING_OK: ${{ contains(github.event.pull_request.labels.*.name, 'api-breaking-ok') }}
+      # Base branch of the PR (e.g. slice/p3-audience); empty on push. Used via env only.
+      PR_BASE_REF: ${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history and all branches, so origin/<base> exists
+      - name: choose the api-breaking base
+        run: |
+          # A PR is compared with its own base branch; a push to main with origin/main (script default).
+          if [ -n "$PR_BASE_REF" ]; then
+            git fetch --no-tags origin "+refs/heads/$PR_BASE_REF:refs/remotes/origin/$PR_BASE_REF"
+            echo "API_BASE=origin/$PR_BASE_REF" >> "$GITHUB_ENV"
+          fi
+      - name: api-lint (redocly, pinned image, errors and warnings fail)
+        run: make api-lint
+      - name: check-contract-copies (embedded spec == docs/contracts)
+        run: make check-contract-copies
+      - name: api-breaking (oasdiff vs the PR base, origin/main on push; label api-breaking-ok lets intentional changes through)
+        run: |
+          if [ "$API_BREAKING_OK" = "true" ]; then
+            make api-breaking || echo "::warning::breaking API changes accepted by the api-breaking-ok label; justify them in the PR and DECISIONS.md"
+          else
+            make api-breaking
+          fi
 
   # Web UI: ESLint (vue/no-v-html: error) + Prettier, vue-tsc, Vitest, production build.
   web:
@@ -262,7 +296,7 @@ jobs:
   # the repo that do not exist yet) pass; failed or cancelled jobs do not.
   ci-ok:
     if: always()
-    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, web, web-image, sql-lint, db-roundtrip, compose-ports, hook-tests, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
+    needs: [detect, pr-policy, repo-policy, actionlint, go-lint, api-contract, web, web-image, sql-lint, db-roundtrip, compose-ports, hook-tests, go-unit, make-test, gitleaks, ai-sessions-scan, govulncheck]
     runs-on: ubuntu-latest
     steps:
       - env:

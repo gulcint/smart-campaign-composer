@@ -8,6 +8,7 @@
 package httpapi
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -61,21 +62,78 @@ func New(d Deps) http.Handler {
 	a := &api{deps: d}
 
 	r := &router{}
-	r.handle("/healthz", http.MethodGet, health.Healthz())
-	r.handle("/readyz", http.MethodGet, health.Readyz(d.DB))
-	if d.Metrics != nil {
-		r.handle("/metrics", http.MethodGet, d.Metrics)
+	for _, e := range routeTable {
+		r.handle(e.Template, e.Method, e.handler(a))
 	}
-	r.handle("/api/config", http.MethodGet, http.HandlerFunc(a.getConfig))
+	return a.middleware(r)
+}
+
+// Route is one method + path template the router registers. Template uses the OpenAPI
+// `{name}` syntax exactly as the key under `paths:` in openapi.yaml; Method is upper case.
+type Route struct {
+	Method, Template string
+}
+
+// routeTable is the single source of the router: New registers exactly these entries and
+// Routes() lists exactly these entries, so the two cannot drift (contracts README §11). A slice
+// that adds an endpoint adds a row here and updates openapi.yaml in the same PR.
+var routeTable = []struct {
+	Route
+	handler func(*api) http.Handler
+}{
+	{Route{http.MethodGet, "/healthz"}, func(*api) http.Handler { return health.Healthz() }},
+	{Route{http.MethodGet, "/readyz"}, func(a *api) http.Handler { return health.Readyz(a.deps.DB) }},
+	{Route{http.MethodGet, "/metrics"}, (*api).metricsHandler},
+	{Route{http.MethodGet, "/api/config"}, handlerOf((*api).getConfig)},
 
 	// Audience slice (P3).
-	r.handle("/api/campaigns", http.MethodPost, http.HandlerFunc(a.createCampaign))
-	r.handle("/api/campaigns", http.MethodGet, http.HandlerFunc(a.listCampaigns))
-	r.handle("/api/campaigns/{campaign_id}", http.MethodGet, http.HandlerFunc(a.getCampaign))
-	r.handle("/api/campaigns/{campaign_id}/segment", http.MethodPost, http.HandlerFunc(a.generateSegment))
-	r.handle("/api/segments/count", http.MethodPost, http.HandlerFunc(a.countSegment))
+	{Route{http.MethodPost, "/api/campaigns"}, handlerOf((*api).createCampaign)},
+	{Route{http.MethodGet, "/api/campaigns"}, handlerOf((*api).listCampaigns)},
+	{Route{http.MethodGet, "/api/campaigns/{campaign_id}"}, handlerOf((*api).getCampaign)},
+	{Route{http.MethodPost, "/api/campaigns/{campaign_id}/segment"}, handlerOf((*api).generateSegment)},
+	{Route{http.MethodPost, "/api/segments/count"}, handlerOf((*api).countSegment)},
+}
 
-	return a.middleware(r)
+func handlerOf(m func(*api, http.ResponseWriter, *http.Request)) func(*api) http.Handler {
+	return func(a *api) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { m(a, w, r) })
+	}
+}
+
+// Routes returns every route New registers, sorted by Template, then Method. It is a pure
+// function of the code (independent of Deps: /metrics is listed even when Deps.Metrics is nil)
+// and lists only explicitly registered methods.
+func Routes() []Route {
+	out := make([]Route, 0, len(routeTable))
+	for _, e := range routeTable {
+		out = append(out, e.Route)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Template != out[j].Template {
+			return out[i].Template < out[j].Template
+		}
+		return out[i].Method < out[j].Method
+	})
+	return out
+}
+
+// OpenAPI is the embedded copy of the contract (openapi.yaml + schemas/*.schema.json under
+// internal/httpapi/openapi/, same relative layout as docs/contracts/). Byte-identical to
+// docs/contracts/ by `make check-contract-copies`. Use fs.Sub(OpenAPI, "openapi") for the
+// contract-relative root.
+//
+//go:embed openapi/openapi.yaml openapi/schemas/segment-rule.schema.json openapi/schemas/content.schema.json
+var OpenAPI embed.FS
+
+// metricsHandler serves Deps.Metrics; without one the route still exists (Routes lists it) and
+// answers the spec'd 500 internal_error.
+func (a *api) metricsHandler() http.Handler {
+	if a.deps.Metrics != nil {
+		return a.deps.Metrics
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "internal error")
+	})
 }
 
 type api struct{ deps Deps }
@@ -198,10 +256,8 @@ func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		req.SetPathValue(k, v)
 	}
 	methods := rt.methods
+	// Only spec'd methods are served: no implicit HEAD-on-GET (HEAD gets the 405 below).
 	h, ok := methods[req.Method]
-	if !ok && req.Method == http.MethodHead {
-		h, ok = methods[http.MethodGet]
-	}
 	if !ok {
 		allow := make([]string, 0, len(methods))
 		for m := range methods {
@@ -317,7 +373,12 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 }
 
 // writeFieldError writes an error that carries field errors (validation_failed, llm_invalid_output).
+// The spec requires a non-empty `fields` array for these codes, so an error that arrives without
+// field errors gets one whole-document entry instead of an empty or missing array.
 func writeFieldError(w http.ResponseWriter, r *http.Request, status int, code, message string, fields []validation.FieldError) {
+	if len(fields) == 0 {
+		fields = []validation.FieldError{{Path: "", Code: validation.CodeSchemaViolation, Message: message}}
+	}
 	writeJSON(w, status, errorBody{Error: errorPayload{
 		Code: code, Message: message, Fields: fields, RequestID: r.Header.Get("X-Request-ID"),
 	}})
