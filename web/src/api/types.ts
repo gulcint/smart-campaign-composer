@@ -46,6 +46,11 @@ export type Delivery = Schemas['Delivery']
 export type DeliveryPage = Schemas['DeliveryPage']
 export type Preview = Schemas['Preview']
 
+// Content stream event payloads (sse-events.md §1.1; openapi components of the same name).
+export type ContentDeltaEvent = Schemas['ContentDeltaEvent']
+export type ContentInvalidEvent = Schemas['ContentInvalidEvent']
+export type ContentValidatedEvent = Schemas['ContentValidatedEvent']
+
 export type FieldErrorCode = Schemas['FieldError']['code']
 /**
  * Field error as the UI handles it: the spec's FieldError with `code` widened to string, so
