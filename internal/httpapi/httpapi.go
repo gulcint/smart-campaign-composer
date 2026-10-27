@@ -1,9 +1,10 @@
 // Package httpapi is the HTTP router of cmd/api (docs/contracts/openapi.yaml).
 //
-// P2 serves the system endpoints (/healthz, /readyz, /metrics, /api/config) plus
+// It serves the system endpoints (/healthz, /readyz, /metrics, /api/config), the
+// audience slice (campaign create/get/list, segment generation, rule counting) and
 // the cross-cutting behaviour every route shares: X-Request-ID, the 64 KiB body
-// limit, JSON 404/405 errors and panic recovery. The campaign routes are added by
-// the feature slices (P3–P5) on top of the same Deps.
+// limit, JSON 404/405 errors, error mapping, HTTP metrics and panic recovery. The
+// content, approval and delivery routes are added by the P4/P5 slices.
 package httpapi
 
 import (
@@ -22,6 +23,8 @@ import (
 	"github.com/gulcint/smart-campaign-composer/internal/content"
 	"github.com/gulcint/smart-campaign-composer/internal/health"
 	"github.com/gulcint/smart-campaign-composer/internal/llm"
+	"github.com/gulcint/smart-campaign-composer/internal/metrics"
+	"github.com/gulcint/smart-campaign-composer/internal/validation"
 )
 
 type Deps struct {
@@ -57,13 +60,20 @@ func New(d Deps) http.Handler {
 	}
 	a := &api{deps: d}
 
-	r := &router{routes: map[string]map[string]http.Handler{}}
+	r := &router{}
 	r.handle("/healthz", http.MethodGet, health.Healthz())
 	r.handle("/readyz", http.MethodGet, health.Readyz(d.DB))
 	if d.Metrics != nil {
 		r.handle("/metrics", http.MethodGet, d.Metrics)
 	}
 	r.handle("/api/config", http.MethodGet, http.HandlerFunc(a.getConfig))
+
+	// Audience slice (P3).
+	r.handle("/api/campaigns", http.MethodPost, http.HandlerFunc(a.createCampaign))
+	r.handle("/api/campaigns", http.MethodGet, http.HandlerFunc(a.listCampaigns))
+	r.handle("/api/campaigns/{campaign_id}", http.MethodGet, http.HandlerFunc(a.getCampaign))
+	r.handle("/api/campaigns/{campaign_id}/segment", http.MethodPost, http.HandlerFunc(a.generateSegment))
+	r.handle("/api/segments/count", http.MethodPost, http.HandlerFunc(a.countSegment))
 
 	return a.middleware(r)
 }
@@ -109,25 +119,85 @@ func (a *api) getConfig(w http.ResponseWriter, _ *http.Request) {
 
 // ---- routing ----
 
-// router dispatches on exact path, then method: unknown path => 404 not_found, known path with
-// another method => 405 method_not_allowed with an Allow header.
+// router dispatches on the path template, then the method: unknown path => 404 not_found, known
+// path with another method => 405 method_not_allowed with an Allow header. A template segment
+// "{name}" matches one non-empty path segment, exposed through Request.PathValue(name); literal
+// templates win over templates with parameters.
 type router struct {
-	routes map[string]map[string]http.Handler
+	routes []*route
 }
 
-func (r *router) handle(path, method string, h http.Handler) {
-	if r.routes[path] == nil {
-		r.routes[path] = map[string]http.Handler{}
+type route struct {
+	template string
+	segments []string
+	methods  map[string]http.Handler
+}
+
+func (r *router) handle(template, method string, h http.Handler) {
+	for _, rt := range r.routes {
+		if rt.template == template {
+			rt.methods[method] = h
+			return
+		}
 	}
-	r.routes[path][method] = h
+	r.routes = append(r.routes, &route{
+		template: template,
+		segments: strings.Split(strings.TrimPrefix(template, "/"), "/"),
+		methods:  map[string]http.Handler{method: h},
+	})
+}
+
+// match returns the route for path and its parameters; literal templates are preferred.
+func (r *router) match(path string) (*route, map[string]string) {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	var best *route
+	var bestParams map[string]string
+	for _, rt := range r.routes {
+		if len(rt.segments) != len(parts) {
+			continue
+		}
+		params := map[string]string{}
+		ok := true
+		for i, seg := range rt.segments {
+			if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
+				if parts[i] == "" {
+					ok = false
+					break
+				}
+				params[seg[1:len(seg)-1]] = parts[i]
+				continue
+			}
+			if seg != parts[i] {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		if len(params) == 0 {
+			return rt, params
+		}
+		if best == nil {
+			best, bestParams = rt, params
+		}
+	}
+	return best, bestParams
 }
 
 func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	methods, ok := r.routes[req.URL.Path]
-	if !ok {
+	rt, params := r.match(req.URL.Path)
+	if rt == nil {
 		writeError(w, req, http.StatusNotFound, "not_found", "route not found")
 		return
 	}
+	if rec, ok := w.(*statusRecorder); ok {
+		rec.route = rt.template
+	}
+	for k, v := range params {
+		req.SetPathValue(k, v)
+	}
+	methods := rt.methods
 	h, ok := methods[req.Method]
 	if !ok && req.Method == http.MethodHead {
 		h, ok = methods[http.MethodGet]
@@ -148,7 +218,12 @@ func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // ---- middleware ----
 
 func (a *api) middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		start := a.deps.Clock.Now()
+		w := &statusRecorder{ResponseWriter: rw, route: "unmatched"}
+		defer func() {
+			metrics.ObserveHTTPRequest(r.Method, w.route, w.statusCode(), a.deps.Clock.Now().Sub(start), w.streaming)
+		}()
 		id := requestID(r.Header.Get("X-Request-ID"))
 		w.Header().Set("X-Request-ID", id)
 		r.Header.Set("X-Request-ID", id)
@@ -167,6 +242,44 @@ func (a *api) middleware(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// statusRecorder captures the status code and the matched route template for the HTTP metrics.
+type statusRecorder struct {
+	http.ResponseWriter
+	status    int
+	route     string
+	streaming bool // set by SSE handlers: counted, not timed
+}
+
+func (w *statusRecorder) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusRecorder) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// Flush and Unwrap keep streaming (http.Flusher, http.ResponseController) working through the wrapper.
+func (w *statusRecorder) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *statusRecorder) statusCode() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
 }
 
 // requestID echoes a client-supplied id when it is short and printable, otherwise makes one.
@@ -193,13 +306,21 @@ type errorBody struct {
 }
 
 type errorPayload struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id"`
+	Code      string                  `json:"code"`
+	Message   string                  `json:"message"`
+	Fields    []validation.FieldError `json:"fields,omitempty"`
+	RequestID string                  `json:"request_id"`
 }
 
 func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
 	writeJSON(w, status, errorBody{Error: errorPayload{Code: code, Message: message, RequestID: r.Header.Get("X-Request-ID")}})
+}
+
+// writeFieldError writes an error that carries field errors (validation_failed, llm_invalid_output).
+func writeFieldError(w http.ResponseWriter, r *http.Request, status int, code, message string, fields []validation.FieldError) {
+	writeJSON(w, status, errorBody{Error: errorPayload{
+		Code: code, Message: message, Fields: fields, RequestID: r.Header.Get("X-Request-ID"),
+	}})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
