@@ -27,7 +27,8 @@ var errSendNotInSlice = fmt.Errorf("%w: accepting a send", errNotInSlice)
 // StartContentGeneration: 404 -> invalid_state (draft, sending, completed) -> generation lock ->
 // LLM attempt 1 connected (llm.ErrUnavailable otherwise). The lock is held by the returned run.
 func (s *service) StartContentGeneration(ctx context.Context, id string) (ContentRun, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return nil, ErrCampaignNotFound
 	}
 	c, err := s.d.Store.GetCampaign(ctx, id)
@@ -48,7 +49,9 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 	// genCtx carries the request's values (the mock scenario) and ends when the request is
 	// cancelled, when the run finishes or after MaxGenerationDuration on the injected clock.
 	genCtx, cancel := context.WithCancelCause(ctx)
-	context.AfterFunc(genCtx, release)
+	// Until Stream takes over, the lock ends with genCtx (e.g. the handler never streams). Stream
+	// stops this before persisting, so a timeout can never release the lock mid-transaction.
+	stopRelease := context.AfterFunc(genCtx, release)
 	timer := s.d.Clock.After(MaxGenerationDuration)
 	go func() {
 		select {
@@ -70,7 +73,7 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 		}
 		return nil, err
 	}
-	return &contentRun{s: s, id: id, genCtx: genCtx, cancel: cancel, release: release, sess: sess}, nil
+	return &contentRun{s: s, id: id, genCtx: genCtx, cancel: cancel, release: release, stopRelease: stopRelease, sess: sess}, nil
 }
 
 // contentRun is the ContentRun of the service.
@@ -80,8 +83,10 @@ type contentRun struct {
 	genCtx  context.Context
 	cancel  context.CancelCauseFunc
 	release func() // idempotent; also called by context.AfterFunc when genCtx ends
-	sess    *composer.ContentSession
-	once    sync.Once
+	// stopRelease detaches release from genCtx; false means it already ran (genCtx ended).
+	stopRelease func() bool
+	sess        *composer.ContentSession
+	once        sync.Once
 }
 
 // Stream consumes the generation, persists its result and emits the terminal event.
@@ -119,7 +124,11 @@ func (r *contentRun) Stream(ctx context.Context, emit func(composer.Event) error
 	if ctx.Err() != nil {
 		return ctx.Err() // client gone: nothing stored
 	}
-	if err != nil || r.genCtx.Err() != nil {
+	// From here on only Stream's defer releases the lock: a timeout firing while finish is inside
+	// the save transaction must not let another generation or edit in. If the release already ran,
+	// genCtx has ended and the run is treated as cancelled/timed out.
+	released := !r.stopRelease()
+	if err != nil || released || r.genCtx.Err() != nil {
 		if errors.Is(context.Cause(r.genCtx), errGenerationTimeout) {
 			return emit(composer.InvalidEvent{Attempt: attempt, Final: true, Errors: []validation.FieldError{{
 				Path: "", Code: validation.CodeLLMUnavailable,
@@ -180,8 +189,12 @@ func (r *contentRun) finish(ctx context.Context, out composer.ContentOutcome, em
 // content.Parse + content.Validate with the current segment's longest values -> new validated
 // version, state content_ready, active approval revoked.
 func (s *service) EditContent(ctx context.Context, id, expectedVersionID string, raw []byte) (ContentVersion, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return ContentVersion{}, ErrCampaignNotFound
+	}
+	if v, ok := canonicalID(expectedVersionID); ok {
+		expectedVersionID = v
 	}
 	if _, err := s.d.Store.GetCampaign(ctx, id); err != nil {
 		return ContentVersion{}, err
@@ -190,6 +203,11 @@ func (s *service) EditContent(ctx context.Context, id, expectedVersionID string,
 		return ContentVersion{}, ErrGenerationInProgress
 	}
 	return s.d.Store.WriteContentVersion(ctx, id, func(lc LockedCampaign) (ContentWrite, error) {
+		// Re-checked under the row lock (D47b): a generation that started after the pre-check
+		// above must not be overtaken by this edit.
+		if s.locks.busy(id, s.d.Clock.Now()) {
+			return ContentWrite{}, ErrGenerationInProgress
+		}
 		next, err := Transition(lc.State, EventContentValidated)
 		if err != nil {
 			return ContentWrite{}, err
@@ -231,7 +249,8 @@ func expectedMatches(expected string, latest *VersionRef) bool {
 }
 
 func (s *service) ListContentVersions(ctx context.Context, id string) ([]ContentVersion, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return nil, ErrCampaignNotFound
 	}
 	vs, err := s.d.Store.ListContentVersions(ctx, id)
@@ -245,10 +264,12 @@ func (s *service) ListContentVersions(ctx context.Context, id string) ([]Content
 }
 
 func (s *service) GetContentVersion(ctx context.Context, id, versionID string) (ContentVersion, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return ContentVersion{}, ErrCampaignNotFound
 	}
-	if !validID(versionID) {
+	versionID, ok = canonicalID(versionID)
+	if !ok {
 		if _, err := s.d.Store.GetCampaign(ctx, id); err != nil {
 			return ContentVersion{}, err
 		}
@@ -261,14 +282,20 @@ func (s *service) GetContentVersion(ctx context.Context, id, versionID string) (
 // (under the row lock) content_not_validated -> invalid_state -> stale -> idempotent re-approval
 // or worst-case re-check with the current customers -> approval row, state approved.
 func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, error) {
-	if _, err := s.GetContentVersion(ctx, id, versionID); err != nil {
+	v, err := s.GetContentVersion(ctx, id, versionID)
+	if err != nil {
 		return Campaign{}, err
 	}
+	id, versionID = v.CampaignID, v.ID // canonical (D47a)
 	if s.locks.busy(id, s.d.Clock.Now()) {
 		return Campaign{}, ErrGenerationInProgress
 	}
 	a := ApprovalWrite{ID: uuid.NewString(), ApprovedAt: s.now()}
 	return s.d.Store.ApproveVersion(ctx, id, versionID, a, func(chk ApprovalCheck) (bool, error) {
+		// Re-checked under the row lock (D47b): no approval while a generation is running.
+		if s.locks.busy(id, s.d.Clock.Now()) {
+			return false, ErrGenerationInProgress
+		}
 		if chk.Version.Status != ContentValidated {
 			return false, ErrContentNotValidated
 		}
@@ -297,12 +324,16 @@ func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, 
 // generation lock -> invalid_state (not approved) -> stale (not the approved version). Accepting
 // the send is the P5 slice.
 func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, error) {
-	if _, err := s.GetContentVersion(ctx, id, versionID); err != nil {
+	v, err := s.GetContentVersion(ctx, id, versionID)
+	if err != nil {
 		return SendResult{}, err
 	}
+	id, versionID = v.CampaignID, v.ID // canonical (D47a)
 	if s.locks.busy(id, s.d.Clock.Now()) {
 		return SendResult{}, ErrGenerationInProgress
 	}
+	// P5 must repeat this busy check under the campaign row lock of the transaction that accepts
+	// the send (D47b), as Approve and EditContent do; this slice has no such transaction yet.
 	c, err := s.d.Store.GetCampaign(ctx, id)
 	if err != nil {
 		return SendResult{}, err
@@ -319,21 +350,25 @@ func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, e
 // Preview renders a validated version (default: the latest) for one sample customer matched by
 // the rule at the campaign's reference time.
 func (s *service) Preview(ctx context.Context, id string, q PreviewQuery) (Preview, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return Preview{}, ErrCampaignNotFound
 	}
 	c, err := s.d.Store.GetCampaign(ctx, id)
 	if err != nil {
 		return Preview{}, err
 	}
-	if c.Segment == nil {
-		return Preview{}, fmt.Errorf("%w: campaign has no segment", ErrInvalidState)
-	}
+	// README §5.4: 404 content_version_not_found comes before 409 invalid_state.
 	var v ContentVersion
 	if q.ContentVersionID != "" {
 		if v, err = s.GetContentVersion(ctx, id, q.ContentVersionID); err != nil {
 			return Preview{}, err
 		}
+	}
+	if c.Segment == nil {
+		return Preview{}, fmt.Errorf("%w: campaign has no segment", ErrInvalidState)
+	}
+	if q.ContentVersionID != "" {
 		if v.Status != ContentValidated {
 			return Preview{}, ErrContentNotValidated
 		}
@@ -343,14 +378,20 @@ func (s *service) Preview(ctx context.Context, id string, q PreviewQuery) (Previ
 		}
 		v = *c.LatestContentVersion
 	}
-	if q.SampleIndex < 0 || (q.CustomerID != "" && !validID(q.CustomerID)) {
+	customerID := q.CustomerID
+	if customerID != "" {
+		if customerID, ok = canonicalID(customerID); !ok {
+			return Preview{}, ErrCustomerNotFound
+		}
+	}
+	if q.SampleIndex < 0 {
 		return Preview{}, ErrCustomerNotFound
 	}
 	rule, err := segment.Parse(append(append([]byte(`{"rule":`), c.Segment.Rule...), '}'))
 	if err != nil {
 		return Preview{}, fmt.Errorf("campaign: stored segment rule: %w", err)
 	}
-	sample, err := s.d.Store.PreviewSample(ctx, rule, c.Segment.ReferenceTime, q.CustomerID, q.SampleIndex)
+	sample, err := s.d.Store.PreviewSample(ctx, rule, c.Segment.ReferenceTime, customerID, q.SampleIndex)
 	if err != nil {
 		return Preview{}, err
 	}

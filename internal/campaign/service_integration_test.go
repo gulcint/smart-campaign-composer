@@ -1086,9 +1086,13 @@ func (s *blockingStream) Recv() (llm.ContentChunk, error) {
 func (s *blockingStream) Raw() json.RawMessage { return json.RawMessage(s.raw) }
 func (s *blockingStream) Close() error         { return nil }
 
-// REQ-CNT-04 (llm-tools.md §3.5)
+// REQ-CNT-04 (llm-tools.md §3.5, go-interfaces campaign.MaxGenerationDuration, D47)
 // A generation that does not finish within campaign.MaxGenerationDuration (fake clock) ends with
 // the final invalid event llm_unavailable, stores nothing, changes nothing and releases the lock.
+// One nanosecond before the limit the stream is still running and the lock is still held
+// (StartContentGeneration and EditContent are ErrGenerationInProgress); only past it is it released.
+// (The client-cancel release, with no clock advance at all, is
+// TestService_ClientCancelReleasesTheLockWithoutTime.)
 func TestService_GenerationTimeout(t *testing.T) {
 	t.Parallel()
 	bc := &blockingClient{mock: llm.NewMock(llm.MockOptions{})}
@@ -1113,7 +1117,24 @@ func TestService_GenerationTimeout(t *testing.T) {
 	if err := h.clock.BlockUntilWaiters(wctx, 1); err != nil {
 		t.Fatalf("the service registered no timer on the injected clock: %v", err)
 	}
-	h.clock.Advance(campaign.MaxGenerationDuration)
+	h.clock.Advance(campaign.MaxGenerationDuration - time.Nanosecond)
+	select {
+	case res := <-done:
+		t.Fatalf("Stream ended 1ns before MaxGenerationDuration (events %d, err %v), want it still running", len(res.events), res.err)
+	default:
+	}
+	startCtx, startCancel := context.WithCancel(context.Background())
+	defer startCancel()
+	if _, err := h.svc.StartContentGeneration(startCtx, id); !errors.Is(err, campaign.ErrGenerationInProgress) {
+		t.Fatalf("StartContentGeneration 1ns before the limit error = %v, want %v (lock still held)", err, campaign.ErrGenerationInProgress)
+	}
+	if _, err := h.svc.EditContent(context.Background(), id, campaign.ExpectedVersionNone, rawOf(t, editContent("henüz kilitli"))); !errors.Is(err, campaign.ErrGenerationInProgress) {
+		t.Fatalf("EditContent 1ns before the limit error = %v, want %v (lock still held)", err, campaign.ErrGenerationInProgress)
+	}
+	if n := bc.streamCalls(); n != 1 {
+		t.Fatalf("StreamContent calls = %d, want 1 (the refused start must not reach the LLM)", n)
+	}
+	h.clock.Advance(time.Nanosecond)
 
 	var res streamResult
 	select {

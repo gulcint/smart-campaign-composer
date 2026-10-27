@@ -171,9 +171,15 @@ func (s *service) referenceTime() time.Time {
 	return s.now()
 }
 
-func validID(id string) bool {
-	_, err := uuid.Parse(id)
-	return err == nil && len(id) == 36
+// canonicalID accepts the 36-character UUID form in any letter case and returns its lower-case
+// canonical spelling (D47a): the in-memory generation lock is keyed by it and version ids are
+// compared with it, so an upper-case id behaves exactly like the stored (Postgres) one.
+func canonicalID(id string) (string, bool) {
+	u, err := uuid.Parse(id)
+	if err != nil || len(id) != 36 {
+		return "", false
+	}
+	return u.String(), true
 }
 
 func (s *service) Create(ctx context.Context, brief string) (Campaign, error) {
@@ -190,7 +196,8 @@ func (s *service) Create(ctx context.Context, brief string) (Campaign, error) {
 }
 
 func (s *service) Get(ctx context.Context, id string) (Campaign, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return Campaign{}, ErrCampaignNotFound
 	}
 	return s.d.Store.GetCampaign(ctx, id)
@@ -223,7 +230,8 @@ func (s *service) List(ctx context.Context, limit, offset int) (CampaignPage, er
 // invalid_state) -> LLM + validation with one repair -> audience count + longest values at the
 // reference time -> store (audience_ready). On any error the campaign is unchanged.
 func (s *service) GenerateSegment(ctx context.Context, id string) (SegmentResult, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return SegmentResult{}, ErrCampaignNotFound
 	}
 	c, err := s.d.Store.GetCampaign(ctx, id)

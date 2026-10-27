@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/google/uuid"
-
 	"github.com/gulcint/smart-campaign-composer/internal/campaign"
 	"github.com/gulcint/smart-campaign-composer/internal/composer"
 	"github.com/gulcint/smart-campaign-composer/internal/sse"
@@ -58,6 +56,10 @@ func (a *api) generateContent(w http.ResponseWriter, r *http.Request) {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
+	defer func() {
+		close(done)
+		wg.Wait()
+	}()
 	go func() {
 		defer wg.Done()
 		for {
@@ -75,6 +77,28 @@ func (a *api) generateContent(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	attempt, terminal := 1, false
+	// internalError ends the stream with the terminal internal_error event: after HTTP 200 a
+	// failure is reported only through events (sse-events.md §0), never as a JSON error body.
+	internalError := func(cause string) {
+		a.deps.Logger.Error("content stream failed", slog.String("request_id", r.Header.Get("X-Request-ID")),
+			slog.String("campaign_id", id), slog.String("error", cause))
+		if terminal || ctx.Err() != nil {
+			return
+		}
+		_ = sw.Event("invalid", composer.InvalidEvent{Attempt: attempt, Final: true, Errors: []validation.FieldError{{
+			Path: "", Code: validation.CodeInternalError, Message: "internal error",
+		}}})
+	}
+	defer func() {
+		rec := recover()
+		if rec == nil {
+			return
+		}
+		if e, ok := rec.(error); ok && errors.Is(e, http.ErrAbortHandler) {
+			panic(rec)
+		}
+		internalError("panic during the content stream")
+	}()
 	err = run.Stream(ctx, func(ev composer.Event) error {
 		switch e := ev.(type) {
 		case composer.DeltaEvent:
@@ -87,15 +111,8 @@ func (a *api) generateContent(w http.ResponseWriter, r *http.Request) {
 		return sw.Event(ev.Name(), ev)
 	})
 	if err != nil && !terminal && ctx.Err() == nil {
-		// A server-side failure after HTTP 200 ends the stream with the internal_error event.
-		a.deps.Logger.Error("content stream failed", slog.String("request_id", r.Header.Get("X-Request-ID")),
-			slog.String("campaign_id", id), slog.String("error", err.Error()))
-		_ = sw.Event("invalid", composer.InvalidEvent{Attempt: attempt, Final: true, Errors: []validation.FieldError{{
-			Path: "", Code: validation.CodeInternalError, Message: "internal error",
-		}}})
+		internalError(err.Error())
 	}
-	close(done)
-	wg.Wait()
 }
 
 // ---- GET /api/campaigns/{campaign_id}/content-versions ----
@@ -159,8 +176,13 @@ func (a *api) getContentVersion(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	vid := r.PathValue("version_id")
-	if !isUUID(vid) {
+	vid, ok := canonicalUUID(r.PathValue("version_id"))
+	if !ok {
+		// README §5.4: the campaign is checked first, a malformed version id is then not found.
+		if _, err := a.deps.Service.Get(r.Context(), id); err != nil {
+			a.writeServiceError(w, r, err)
+			return
+		}
 		writeError(w, r, http.StatusNotFound, "content_version_not_found", "content version not found")
 		return
 	}
@@ -213,9 +235,12 @@ func readVersionRef(w http.ResponseWriter, r *http.Request) (string, bool) {
 		fields = append(fields, schemaViolation("content_version_id", "content_version_id is missing"))
 	case !bytes.HasPrefix(bytes.TrimSpace(raw), []byte(`"`)) || json.Unmarshal(raw, &vid) != nil:
 		fields = append(fields, schemaViolation("content_version_id", "content_version_id must be a string"))
-	case !isUUID(vid):
-		fields = append(fields, validation.FieldError{Path: "content_version_id", Code: validation.CodeInvalidValue,
-			Message: "content_version_id must be a UUID"})
+	default:
+		var ok bool
+		if vid, ok = canonicalUUID(vid); !ok {
+			fields = append(fields, validation.FieldError{Path: "content_version_id", Code: validation.CodeInvalidValue,
+				Message: "content_version_id must be a UUID"})
+		}
 	}
 	if len(fields) > 0 {
 		writeFieldError(w, r, http.StatusUnprocessableEntity, "validation_failed", "request validation failed", fields)
@@ -234,11 +259,15 @@ func (a *api) previewContent(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	var fields []validation.FieldError
 	q := campaign.PreviewQuery{CustomerID: query.Get("customer_id"), ContentVersionID: query.Get("content_version_id")}
-	if q.CustomerID != "" && !isUUID(q.CustomerID) {
-		fields = append(fields, invalidQuery("customer_id", "customer_id must be a UUID"))
+	if q.CustomerID != "" {
+		if q.CustomerID, ok = canonicalUUID(q.CustomerID); !ok {
+			fields = append(fields, invalidQuery("customer_id", "customer_id must be a UUID"))
+		}
 	}
-	if q.ContentVersionID != "" && !isUUID(q.ContentVersionID) {
-		fields = append(fields, invalidQuery("content_version_id", "content_version_id must be a UUID"))
+	if q.ContentVersionID != "" {
+		if q.ContentVersionID, ok = canonicalUUID(q.ContentVersionID); !ok {
+			fields = append(fields, invalidQuery("content_version_id", "content_version_id must be a UUID"))
+		}
 	}
 	n, ok := intQuery(query.Get("sample_index"), 0, 0, -1)
 	if !ok {
@@ -255,12 +284,6 @@ func (a *api) previewContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
-}
-
-// isUUID accepts the canonical 36-character UUID form (path and body ids, openapi format uuid).
-func isUUID(s string) bool {
-	_, err := uuid.Parse(s)
-	return err == nil && len(s) == 36
 }
 
 // ---- content_edit_conflict ----
