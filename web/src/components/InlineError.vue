@@ -12,8 +12,10 @@ const props = withDefaults(
     code: string
     limit?: number | null
     actual?: number | null
+    /** false when a parent wrapper owns the `inline-error-<pathKey>` id (ui.md §3.14 e). */
+    withId?: boolean
   }>(),
-  { limit: null, actual: null },
+  { limit: null, actual: null, withId: true },
 )
 
 /** API path -> testid suffix (ui.md §0): sms.body -> sms-body, … */
@@ -28,7 +30,7 @@ const text = computed(() => {
 
 <template>
   <p
-    :id="`inline-error-${pathKey}`"
+    :id="withId ? `inline-error-${pathKey}` : undefined"
     :data-testid="`inline-error-${pathKey}`"
     :data-code="code"
     role="alert"

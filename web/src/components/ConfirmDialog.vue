@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // ui.md §3.18: confirmation for approve / send / regenerate. Reka AlertDialog gives the
-// focus trap, Esc handling and focus return; rendered in place (no portal) so the dialog
-// stays inside the owning page's DOM.
+// focus trap, Esc handling, focus return and aria-labelledby; rendered in place (no portal)
+// so the dialog stays inside the owning page's DOM. While submitting, confirm is inert and
+// cancel / Esc / backdrop do not close it.
 import {
   AlertDialogContent,
   AlertDialogDescription,
@@ -33,6 +34,10 @@ function onOpenChange(v: boolean) {
   if (!v) cancel()
 }
 
+function onConfirm() {
+  if (!props.submitting) emit('confirm')
+}
+
 function cancel() {
   if (props.submitting) return
   emit('cancel')
@@ -46,9 +51,10 @@ function cancel() {
     <AlertDialogContent
       data-testid="confirm-dialog"
       :data-kind="kind"
+      aria-modal="true"
       class="fixed top-1/2 left-1/2 z-50 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-card-lg bg-surface-raised p-6 shadow-raised"
     >
-      <AlertDialogTitle class="text-h3 text-accent-heading">
+      <AlertDialogTitle data-testid="confirm-dialog-title" class="text-h3 text-accent-heading">
         {{ t(`confirm.${kind}.title`) }}
       </AlertDialogTitle>
       <AlertDialogDescription class="text-body text-ink-700">
@@ -88,15 +94,15 @@ function cancel() {
         </div>
       </div>
       <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        <Button
-          data-testid="confirm-dialog-cancel"
-          variant="ghost"
-          :disabled="submitting"
-          @click="cancel"
-        >
+        <Button data-testid="confirm-dialog-cancel" variant="ghost" @click="cancel">
           {{ t('confirm.cancel') }}
         </Button>
-        <Button data-testid="confirm-dialog-confirm" :loading="submitting" @click="emit('confirm')">
+        <Button
+          data-testid="confirm-dialog-confirm"
+          :disabled="submitting"
+          :loading="submitting"
+          @click="onConfirm"
+        >
           {{ t('confirm.confirm') }}
         </Button>
       </div>
