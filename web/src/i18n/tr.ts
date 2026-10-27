@@ -185,6 +185,8 @@ export const tr = {
   'error.invalid_state': 'Kampanya durumu değişti; ekran yenilendi.',
   'error.content_not_validated': 'İçerik doğrulanmadan bu işlem yapılamaz.',
   'error.stale_content_version': 'İçerik değişti; onayı yenilemen gerekiyor.',
+  'error.content_edit_conflict':
+    'İçerik başka bir yerde değişti; son sürümü yükleyebilir veya metnini koruyabilirsin.',
   'error.generation_in_progress': 'Bu kampanya için üretim sürüyor; biraz sonra tekrar dene.',
   'error.payload_too_large': 'Metin çok büyük.',
   'error.validation_failed': 'Bazı alanlar geçersiz.',
