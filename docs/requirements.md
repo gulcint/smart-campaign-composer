@@ -23,6 +23,7 @@ Test yazarının ve mimarın tek gereksinim kaynağı. Case dokümanının (`Sma
 |---|---|---|
 | SMS uzunluk sınırı | 160 karakter (Unicode rune) | [DOK]; rune ölçümü VARSAYIM |
 | Email konu sınırı | 80 karakter (Unicode rune) | [DOK]; rune ölçümü VARSAYIM |
+| Email gövdesi sınırı | 5000 karakter (Unicode rune), şablon doldurulduktan sonra; yalnız doğrulama anında denetlenir, onay anında yeniden denetlenmez | VARSAYIM (dokümanda yok) |
 | Hız sınırı | 100 mesaj/saniye, **kanal başına**, sistem genelinde, retry'lar dahil; her yarı-açık 1 sn'lik pencerede ≤ 100 (istek başlangıçları arasında en az 10 ms) | [DOK]; "sistem geneli, retry dahil" [DOK çıkarımı]; pencere tanımı VARSAYIM |
 | İzinli şablon değişkenleri | `first_name`, `last_name`, `city` | VARSAYIM |
 | `first_name` boşsa yedek metin | `Değerli müşterimiz` | VARSAYIM |
@@ -54,7 +55,7 @@ Kampanya düzeyinde `failed` durumu **yoktur**; tek tek teslimat hataları `fail
 | Kod | Ne zaman |
 |---|---|
 | 404 | Bilinmeyen kampanya |
-| 409 | Durum çatışması: onaysız gönderim; `validated` olmayan içeriği onaylama; `sending`/`completed` durumunda düzenleme; onaydan sonra eski sürümle gönderim |
+| 409 | Durum çatışması: onaysız gönderim; `validated` olmayan içeriği onaylama; son sürüm olmayanı onaylama; `sending`/`completed` durumunda düzenleme; onaydan sonra eski sürümle gönderim; aynı kampanyada üretim sürerken üretim/düzenleme/onay/gönderim isteği (`generation_in_progress`) |
 | 413 | İstek gövdesi 64 KiB'tan büyük |
 | 422 | Doğrulama hatası: boş veya çok uzun brief, geçersiz içerik, izinsiz değişken, limit aşımı (onay anında dahil) |
 | 502 | LLM'den, düzeltme denemesinden sonra bile geçerli çıktı alınamadı veya LLM erişilemiyor. Akış (SSE) uç noktalarında HTTP 200 sonrası bunun karşılığı son `invalid` olayıdır |
@@ -115,6 +116,8 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 
 - 160 karakterlik SMS kabul, 161 karakterlik red. Ölçü Unicode rune sayısıdır; `ş`, `ğ`, `İ` tek karakterdir.
 - Sınır **şablon doldurulduktan sonraki** metne uygulanır (bkz. REQ-CNT-05).
+- Email gövdesi de 5000 karakterle sınırlıdır (Sabitler); aşım `email_body_too_long` alan hatasıdır.
+- Alan **var ama boş** (veya yalnız boşluk) ise alan hatası `required`'dır; alanın eksik olması veya fazladan alan bulunması `schema_violation`'dır. Aynı alanda en çok **bir** hata raporlanır (öncelik: `required` › `malformed_variable` › `unknown_variable` › uzunluk); hatalı alanda uzunluk denetlenmez.
 
 ### REQ-CNT-02 — Email konusu en fazla 80 karakter · Faz P4 · [DOK]
 - 80 karakterlik konu kabul, 81 karakterlik red; Unicode rune sayısı.
@@ -126,6 +129,8 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 - İzinli listede olmayan değişken (`{{password}}`, `{{email}}`) içerik **reddedilir**.
 - `first_name` boşsa `Değerli müşterimiz` yazılır.
 - Bozuk söz dizimi (`{{first_name`, `{{ }}`) reddedilir.
+- Söz dizimi: `{{` + isteğe bağlı boşluk + ad + isteğe bağlı boşluk + `}}`; `{{ first_name }}` geçerlidir. Ad büyük/küçük harf duyarlıdır (`{{First_Name}}` → `unknown_variable`). Tek süslü parantez (`{first_name}`) düz metindir. Kapanmayan `{{`, hiçbir şeyi kapatmayan `}}`, boş ad ve geçersiz karakterli ad (`{{first-name}}`, `{{1st}}`) `malformed_variable`'dır; kesin tablo `docs/contracts/go-interfaces.md` §content.
+- Doldurma: `{{first_name}}` baştaki/sondaki boşluklar kırpılarak; boşsa `Değerli müşterimiz`. `{{last_name}}` ve `{{city}}` ham değerle, boşsa boş metinle doldurulur.
 
 ### REQ-CNT-04 — İçerik ekrana stream edilerek akar · Faz P4 · [DOK] (SSE ve olay ayrıntıları VARSAYIM)
 > "SMS ve email içeriği ekrana stream edilerek akar."
@@ -135,9 +140,14 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 - Doğrulama başarısızsa (REQ-AI-01) sunucu önce son olmayan bir `invalid` gönderir; düzeltme denemesi için `delta` olayları baştan başlar ve istemci önceki taslağı atar. İkinci başarısızlıkta son olay son-işaretli `invalid` olur.
 - `validated` gelmeden içerik taslaktır; onay mümkün değildir (**409**).
 - Akış yarıda kesilirse (son olay yok) içerik onaylanamaz.
+- Her `delta`/`invalid`/`validated` olayının JSON alanları `docs/contracts/openapi.yaml` bileşenlerinde (`ContentDeltaEvent`, `ContentInvalidEvent`, `ContentValidatedEvent`) ve `sse-events.md` §1'de tanımlıdır.
+- **İstisna (ilk denemede doğrudan son olay):** LLM erişimi akış açıldıktan sonra (HTTP 200 sonrası, deneme 1'in ortası dahil) kopar veya üretim 120 sn'yi aşarsa düzeltme denemesi **yapılmaz**; son olay `invalid` (`final: true`, alan hatası `llm_unavailable`, `content_version_id: null`) olur ve kampanya durumu değişmez. Sunucu iç hatası aynı biçimde `internal_error` koduyla biter.
+- Sürüm, `validated` olayı gönderilmeden **önce** kaydedilir ve kampanya `content_ready` olur; son `invalid` kampanya durumunu, onayı ve "en son sürüm"ü değiştirmez. İstemci terminal olaydan önce koparsa ve doğrulama henüz tamamlanıp kaydedilmediyse hiçbir sürüm saklanmaz.
 
 ### REQ-CNT-05 — Limit, kişiselleştirme sonrası ölçülür · Faz P4, P5 · VARSAYIM
 - **Onayda:** şablondaki her değişken, kitledeki **en uzun değeriyle** doldurulur (`first_name` boş olan biri varsa yedek metin `Değerli müşterimiz` dahil; `last_name` ve `city` için de aynı) ve 160/80 sınırına karşı denetlenir; aşılırsa onay **422** ile reddedilir. Bu, bilerek **muhafazakâr bir üst sınırdır**: en uzun değerlerin tek bir alıcıda birleşmesi gerekmez.
+- **"Kitle" = kuralla eşleşen tüm müşteriler, kanal izni süzgecinden önce** (sahip kararı, `docs/contracts/README.md` §9 #5). Hem SMS hem email için aynı küme kullanılır; kanal bazlı kitleler bu kümenin alt kümesi olduğundan sonuç bilerek muhafazakârdır (SMS gövdesi, yalnız SMS izinlilerin en uzun değerine değil, eşleşen herkesin en uzun değerine göre ölçülür). Değişken başına en uzun değer ayrı ayrı alınır (`first_name`: yedek metin dahil, **kırpılmış** değerin rune sayısı).
+- **Aynı kural doğrulama anında da uygulanır:** LLM çıktısı ve düzenleme, kampanyanın o anki segmentinin en uzun değerleriyle doldurularak denetlenir (hata kodları `sms_too_long`, `subject_too_long`; `actual` = doldurulmuş uzunluk). Onayda aynı denetim, **onay anındaki** müşteri verisiyle yeniden yapılır; yalnızca onay anında oluşabilen aşımın kodları `sms_too_long_worst_case` (yol `sms.body`) ve `subject_too_long_worst_case` (yol `email.subject`) olur ve yanıt 422 `validation_failed` içindeki `fields[]`'tir (`limit`, `actual` ile).
 - **Gönderimde:** her alıcı için render sonrası ikinci denetim yapılır; sınırı aşan teslimat gönderilmez, `failed` olur ve nedeni görünür.
 
 ## Onay (APR)
@@ -147,7 +157,7 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 
 - Onaylanmamış kampanyada gönderim isteği **409** döner ve hiçbir teslimat kaydı oluşmaz.
 - Pazarlamacı SMS gövdesini ve email konusu/gövdesini düzenleyebilir; her düzenleme yeni bir içerik sürümü üretir.
-- Önizleme, bir örnek alıcı için render edilmiş içeriği gösterir.
+- Önizleme, bir örnek alıcı için render edilmiş içeriği gösterir. Örnek alıcı deterministiktir: kuralla eşleşen kümenin müşteri kimliğine (UUID metin sırası) göre `sample_index`'inci üyesi (varsayılan 0); aynı istek her zaman aynı alıcıyı ve aynı çıktıyı verir. Çıktı düz metindir; email gövdesinin HTML karşılığı yalnız backend'in kaçışlayarak ürettiği `email.html`'dir (REQ-UI-01).
 
 ### REQ-APR-02 — Düzenlenen içerik yeniden doğrulanır · Faz P4 · [DOK çıkarımı]
 - Düzenlenmiş içerik LLM çıktısıyla **aynı doğrulayıcıdan** geçer.
@@ -155,7 +165,10 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 - Arayüzü atlayıp doğrudan API'ye gönderilen geçersiz içerik de reddedilir.
 
 ### REQ-APR-03 — Onay içeriğin son sürümüne bağlıdır · Faz P4 · VARSAYIM
-- Onay kaydı bir içerik sürümüne bağlıdır.
+- Onay kaydı bir içerik sürümüne bağlıdır; onay isteği sürüm kimliğini taşır. Sürümler **değişmezdir**: düzenleme veya yeniden üretim eskisini güncellemez, yeni sürüm ekler; eski sürümler silinmez ve listelenebilir. `version_number` kampanya başına 1'den artar, yeniden kullanılmaz, segment yeniden üretilince sıfırlanmaz ve saklanan `invalid` taslaklar da numara tüketir (doğrulanmış sürümlerde boşluk olabilir).
+- Yalnız kampanyanın **en son doğrulanmış** sürümü (güncel segment revizyonunda en yüksek `version_number`'lı `validated`) onaylanabilir; daha eskisini onaylamak **409** (`stale_content_version`), `invalid` sürümü onaylamak **409** (`content_not_validated`) döner. Aynı sürümü ikinci kez onaylamak idempotenttir: 200, aynı onay kaydı, yeni kayıt yok, `approved_at` değişmez, onay-anı denetimi yeniden çalışmaz.
+- Düzenleme (`validated` sürüm üretir) ve başarılı yeniden üretim onayı düşürür; başarısız yeniden üretim (son `invalid`) ve geçersiz düzenleme (422, hiçbir şey saklanmaz) düşürmez.
+- Aynı kampanyada iki düzenleme yarışırsa ikisi de sırayla başarılı olur (ardışık `version_number`; son yazılan "en son"dur, öncekiler korunur). Onay, düzenleme ile yarışırsa sonuç sıralıdır: ya onay önce gelir ve düzenleme onu düşürür, ya düzenleme önce gelir ve onay 409 `stale_content_version` alır. Aynı sürüm numarası iki kez üretilemez ve eşzamanlılık hiçbir zaman 500 üretmez.
 - Onaylı kampanyada içerik düzenlenirse onay düşer: kampanya `content_ready`'ye döner, gönderim **409** verir, yeniden onay gerekir. Bu aşamada henüz teslimat kaydı yoktur (kayıtlar gönderim isteğiyle oluşur).
 - `sending` veya `completed` durumunda içerik düzenleme **409** ile reddedilir.
 - Segment kuralı içerik oluştuktan sonra yeniden üretilirse kampanya `audience_ready`'ye döner; içerik ve onay geçersiz olur.
