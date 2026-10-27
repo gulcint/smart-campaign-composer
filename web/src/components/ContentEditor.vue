@@ -391,6 +391,7 @@ watch(
       </div>
       <Button
         data-testid="editor-save"
+        :variant="canSave ? 'primary' : 'secondary'"
         :disabled="!canSave"
         :loading="saving"
         :title="t('editor.shortcut')"

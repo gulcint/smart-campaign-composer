@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Step 3 (ui.md §1.1, §3.23; DECISIONS D40, D45; DESIGN.md §8.3): content generation stream,
 // editing with optimistic concurrency (X-Expected-Version) and the preview.
-import { ArrowUpRight, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
+import { ArrowUpRight, CircleCheck, Info, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -27,6 +27,7 @@ import EmailPreview from '@/components/EmailPreview.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ErrorCard from '@/components/ErrorCard.vue'
 import SmsPreview from '@/components/SmsPreview.vue'
+import StepHeader from '@/components/StepHeader.vue'
 import StreamingText from '@/components/StreamingText.vue'
 import VariableChip from '@/components/VariableChip.vue'
 import { useNotify } from '@/composables/useNotify'
@@ -136,6 +137,25 @@ const liveText = computed(() => {
   const key = retrying ? 'retrying' : sessionStatus.value
   if (key === 'none') return ''
   return t(`content.live.${key}` as MessageId)
+})
+
+// Step header (DESIGN.md §8.3): the content status badge and the next action.
+const headerStatus = computed<string | null>(() => {
+  const s = versionStatus.value
+  if (s === 'none') return null
+  if (s === 'streaming' || (s === 'validated' && dirty.value)) return 'draft'
+  if (editingDraft.value) return 'draft'
+  return s
+})
+const nextText = computed<string | null>(() => {
+  if (locked.value) return null
+  const s = versionStatus.value
+  if (s === 'none') return t('content.next.generate')
+  if (s === 'streaming') return t('content.next.streaming')
+  if (dirty.value) return t('content.next.dirty')
+  if (s === 'invalid') return t('content.next.invalid')
+  if (s === 'interrupted') return t('content.next.interrupted')
+  return canApprove.value ? t('content.next.toApproval') : null
 })
 
 const generationError = computed<ApiError | null>(() =>
@@ -430,12 +450,15 @@ onMounted(() => {
       @action="router.push({ name: 'brief-new' })"
     />
     <template v-else>
-      <header class="flex flex-col gap-1 pt-4">
-        <h1 data-testid="page-title" tabindex="-1" class="text-h1 outline-none">
-          {{ t('content.title') }}
-        </h1>
-        <p class="text-body text-ink-600">{{ t('content.subtitle') }}</p>
-      </header>
+      <StepHeader
+        step="content"
+        :role="t('content.role')"
+        :title="t('content.title')"
+        :subtitle="t('content.subtitle')"
+        status-kind="content"
+        :status="headerStatus"
+        :next="nextText"
+      />
 
       <p data-testid="content-live-status" role="status" aria-live="polite" class="sr-only">
         {{ liveText }}
@@ -505,10 +528,13 @@ onMounted(() => {
                 />
               </div>
               <aside
-                class="flex flex-col gap-3 rounded-card border border-border-default bg-surface-card p-4 shadow-card md:p-6"
+                class="flex flex-col gap-3 rounded-card border border-dashed border-border-default bg-surface-sunken/60 p-4 md:p-6"
                 :aria-label="t('content.previewTitle')"
               >
-                <h2 class="text-h4 text-accent-heading">{{ t('content.previewTitle') }}</h2>
+                <div class="flex flex-col gap-0.5">
+                  <h2 class="text-h4 text-accent-heading">{{ t('content.previewTitle') }}</h2>
+                  <p class="text-caption text-ink-500">{{ t('content.previewHint') }}</p>
+                </div>
                 <SmsPreview
                   v-if="c === 'sms'"
                   :preview="preview"
@@ -540,7 +566,11 @@ onMounted(() => {
           {{ t('content.invalidNote') }}
         </p>
 
-        <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div
+          role="group"
+          :aria-label="t('content.actions')"
+          class="flex flex-col gap-3 rounded-card border border-border-default bg-surface-card p-4 shadow-card md:flex-row md:items-center md:justify-between"
+        >
           <div class="flex flex-wrap gap-3">
             <Button
               data-testid="content-regenerate"
@@ -566,15 +596,29 @@ onMounted(() => {
               {{ t('content.editDraft') }}
             </Button>
           </div>
-          <Button
-            data-testid="content-to-approval"
-            size="lg"
-            :disabled="!canApprove"
-            @click="goToApproval"
-          >
-            {{ t('content.toApproval') }}
-            <ArrowUpRight aria-hidden="true" />
-          </Button>
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center md:ml-auto">
+            <p v-if="canApprove" class="flex items-center gap-1.5 text-body-sm text-ink-600">
+              <CircleCheck class="size-4 shrink-0 text-success" aria-hidden="true" />
+              {{ t('content.readyNote') }}
+            </p>
+            <p
+              v-else-if="dirty && versionStatus === 'validated'"
+              class="flex items-center gap-1.5 text-body-sm text-ink-600"
+            >
+              <Info class="size-4 shrink-0" aria-hidden="true" />
+              {{ t('content.dirtyNote') }}
+            </p>
+            <Button
+              data-testid="content-to-approval"
+              size="lg"
+              :variant="canApprove ? 'primary' : 'secondary'"
+              :disabled="!canApprove"
+              @click="goToApproval"
+            >
+              {{ t('content.toApproval') }}
+              <ArrowUpRight aria-hidden="true" />
+            </Button>
+          </div>
         </div>
       </template>
 
