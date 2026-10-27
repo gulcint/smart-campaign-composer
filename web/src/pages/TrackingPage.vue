@@ -39,7 +39,12 @@ const campaign = computed(() =>
 )
 const notFound = computed(() => (campaignId.value ? store.isNotFound(campaignId.value) : false))
 
-const { status, connection, lastUpdatedAt, completed } = useCampaignStatusStream(campaignId)
+const { status, connection, lastUpdatedAt, completed, close } = useCampaignStatusStream(campaignId)
+
+// An unknown campaign answers the stream with 404 too: stop reconnecting to it.
+watch(notFound, (nf) => {
+  if (nf) close()
+})
 
 // The stream's state is fresher than the loaded campaign (it moves to completed live).
 const campaignState = computed(() => status.value?.state ?? campaign.value?.state ?? null)
