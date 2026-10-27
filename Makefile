@@ -19,8 +19,9 @@ test: ## Run every test in containers, without ANTHROPIC_API_KEY (needs only Doc
 	@status=0; $(TEST_COMPOSE) run --rm --build test || status=$$?; \
 	$(TEST_COMPOSE) down -v --remove-orphans; exit $$status
 
-test-hooks: ## Behaviour tests for the agent guards and scripts/worktree-remove.sh
+test-hooks: ## Behaviour tests for the agent guards, worktree-remove and the session sanitizer
 	scripts/tests/guard-destructive-git.sh
+	scripts/tests/sanitize-sessions.sh
 
 test-unit: ## Go unit tests on the host, no DB, mock LLM
 	@test -f go.mod || { echo "make test-unit: no go.mod yet; Go code starts in P2"; exit 1; }
