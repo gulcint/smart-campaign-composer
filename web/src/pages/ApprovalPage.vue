@@ -10,6 +10,7 @@ import type { ApiError } from '@/api/errors'
 import { toApiError } from '@/api/errors'
 import type { Preview } from '@/api/types'
 import ApprovalBar from '@/components/ApprovalBar.vue'
+import BrandMark from '@/components/BrandMark.vue'
 import Button from '@/components/Button.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import EmailPreview from '@/components/EmailPreview.vue'
@@ -176,6 +177,7 @@ onMounted(async () => {
         :aria-label="t('approval.title')"
       >
         <div class="flex flex-wrap items-center justify-between gap-3">
+          <BrandMark :size="28" />
           <p
             v-if="latest"
             data-testid="approval-version"

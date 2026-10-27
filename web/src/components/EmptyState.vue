@@ -5,6 +5,7 @@ import { computed } from 'vue'
 
 import { t } from '@/i18n'
 
+import BrandMark from './BrandMark.vue'
 import Button from './Button.vue'
 
 const props = defineProps<{
@@ -24,6 +25,7 @@ const hasAction = computed(() => props.kind === 'campaign_not_found' || props.ki
     :data-kind="kind"
     class="flex flex-col items-center gap-3 px-4 py-12 text-center"
   >
+    <BrandMark :size="24" muted />
     <component :is="icon" class="size-12 stroke-[1.5] text-brand-icon" aria-hidden="true" />
     <p class="text-h3 text-accent-heading">{{ t(`empty.${kind}.title`) }}</p>
     <p class="max-w-md text-body text-ink-600">{{ t(`empty.${kind}.body`) }}</p>
