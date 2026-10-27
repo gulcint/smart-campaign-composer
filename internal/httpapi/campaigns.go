@@ -51,12 +51,8 @@ func (a *api) createCampaign(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, r, http.StatusUnprocessableEntity, "validation_failed", "request validation failed", fields)
 		return
 	}
-	// Reject an empty or too long brief here as well, so the service (and the LLM) is never asked
-	// to handle it; the service normalizes and stores it.
-	if _, err := campaign.NormalizeBrief(brief); err != nil {
-		a.writeServiceError(w, r, err)
-		return
-	}
+	// The brief rules (NFC, trim, required, <= 2000 runes) live in campaign.NormalizeBrief inside
+	// the service; its *validation.Error is mapped to 422 below.
 	c, err := a.deps.Service.Create(r.Context(), brief)
 	if err != nil {
 		a.writeServiceError(w, r, err)
