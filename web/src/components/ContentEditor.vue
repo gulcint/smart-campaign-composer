@@ -115,6 +115,12 @@ function invalid(d: FieldDef): boolean {
   return errorsOf.value[d.key].length > 0 || overLimit(d)
 }
 
+/** One id per field (ui.md §3.14 e): the field's own error wins over path "" errors. */
+function primaryCode(d: FieldDef): string | undefined {
+  const errs = errorsOf.value[d.key]
+  return (errs.find((e) => e.path === d.path) ?? errs[0])?.code
+}
+
 function describedBy(d: FieldDef): string | undefined {
   const ids: string[] = []
   if (d.limit !== null) ids.push(`char-counter-${d.key}`)
@@ -278,7 +284,13 @@ watch(
         @keydown="onKeydown"
       />
       <div class="flex items-start justify-between gap-3">
-        <div class="flex flex-col gap-1">
+        <div
+          v-if="errorsOf[d.key].length"
+          :id="`inline-error-${d.key}`"
+          :data-testid="`inline-error-${d.key}`"
+          :data-code="primaryCode(d)"
+          class="flex flex-col gap-1"
+        >
           <InlineError
             v-for="(e, i) in errorsOf[d.key]"
             :key="`${e.code}-${i}`"
@@ -286,6 +298,7 @@ watch(
             :code="e.code"
             :limit="e.limit ?? null"
             :actual="e.actual ?? null"
+            :with-id="false"
           />
         </div>
         <CharCounter
