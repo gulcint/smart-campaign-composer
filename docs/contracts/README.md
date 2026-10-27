@@ -158,7 +158,7 @@ P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
 | | 404 `campaign_not_found` › `content_version_not_found` | sürüm yok veya başka kampanyanın | sayfa / toast |
 | | 409 `generation_in_progress` › `content_not_validated` › `invalid_state` › `stale_content_version` | sıra openapi `approveContent`; `invalid_state`: `content_ready`/`approved` dışı | toast; `stale` → `ApprovalBar stale` |
 | | 422 `validation_failed` | `schema_violation` (eksik/fazla alan), `invalid_value` (`content_version_id` biçimsiz); `sms_too_long_worst_case` (`sms.body`), `subject_too_long_worst_case` (`email.subject`) | `ConfirmDialog` içinde |
-| `sendCampaign` | 404 `campaign_not_found` › `content_version_not_found`; 409 `generation_in_progress` › `invalid_state` › `stale_content_version`; 422 `invalid_value` | | toast |
+| `sendCampaign` | 400 (boş gövde dahil), 413; 404 `campaign_not_found` › `content_version_not_found`; 409 `generation_in_progress` › `invalid_state` › `stale_content_version`; 422 `validation_failed`: `schema_violation` (eksik/fazla alan), `invalid_value` (`content_version_id` biçimsiz) | gövde hataları 404/409'dan önce (REQ-SND-01) | toast |
 | `previewContent` | 404 `campaign_not_found` › `content_version_not_found` › `customer_not_found` | `sample_index` ≥ eşleşen sayı → `customer_not_found` | toast (uyarı) |
 | | 409 `invalid_state` › `content_not_validated` | segment/doğrulanmış sürüm yok; verilen sürüm `invalid` | önizleme `empty` |
 | | 422 `validation_failed` | `invalid_value`: `query.sample_index`, `query.customer_id`, `query.content_version_id` | — |
