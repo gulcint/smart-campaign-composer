@@ -120,6 +120,8 @@ export const tr = {
   // --- Counters / content (P4, required ids) ---
   'counter.worstCase': 'Kişiselleştirme sonrası en fazla: {n}',
   'stream.retrying': 'Model çıktısı düzeltiliyor…',
+  'stream.waiting': 'İçerik hazırlanıyor…',
+  'stream.waiting.claude': 'Claude düşünüyor…',
   'stream.interrupted': 'Akış yarıda kesildi',
   'stream.regenerate': 'Yeniden üret',
   'stream.errors': 'Doğrulama hataları',

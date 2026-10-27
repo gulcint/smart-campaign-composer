@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -107,15 +106,15 @@ func (s *CampaignStore) SaveSegment(ctx context.Context, id string, w campaign.S
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
 
-	var state string
-	err = tx.QueryRow(ctx, `SELECT state FROM campaigns WHERE id = $1 FOR UPDATE`, id).Scan(&state)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return campaign.Campaign{}, campaign.ErrCampaignNotFound
-	}
+	lc, err := lockCampaign(ctx, tx, id)
 	if err != nil {
-		return campaign.Campaign{}, fmt.Errorf("postgres: save segment: %w", err)
+		return campaign.Campaign{}, err
 	}
-	next, err := campaign.Transition(campaign.State(state), campaign.EventSegmentGenerated)
+	// Only the generation that still holds the lease may store its segment (D52).
+	if err := lc.CheckGenerationOwner(w.LeaseToken); err != nil {
+		return campaign.Campaign{}, err
+	}
+	next, err := campaign.Transition(lc.State, campaign.EventSegmentGenerated)
 	if err != nil {
 		return campaign.Campaign{}, err
 	}

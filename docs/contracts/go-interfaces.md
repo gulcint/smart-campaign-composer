@@ -737,11 +737,14 @@ func Transition(from State, ev Event) (State, error)
 const BriefMaxRunes = 2000
 
 // MaxGenerationDuration bounds one segment or content generation (VARSAYIM). The per-campaign
-// generation lock is released when the request context is cancelled (client disconnect) or, at the
-// latest, after this duration; a content stream still running then ends with the final invalid
-// event, code "llm_unavailable". While the lock is held, GenerateSegment, StartContentGeneration,
-// EditContent, Approve and Send return ErrGenerationInProgress (Send is included so that a
-// persisting content generation can never meet a campaign already in state `sending`).
+// generation lock is a lease on the campaign row (campaigns.generation_token/generation_expires_at,
+// D52), shared by every API process: it is released when the request context is cancelled (client
+// disconnect) or the generation ends and, at the latest, expires after this duration (so a crashed
+// process cannot block the campaign); a content stream still running then ends with the final
+// invalid event, code "llm_unavailable". While the lease is held, GenerateSegment,
+// StartContentGeneration, EditContent, Approve and Send return ErrGenerationInProgress (Send is included so that a
+// persisting content generation can never meet a campaign already in state `sending`); each
+// checks it under the campaign row lock in the transaction that checks the state.
 const MaxGenerationDuration = 120 * time.Second
 
 // NormalizeBrief NFC-normalizes and trims s. Errors (*validation.Error, path "brief"):
