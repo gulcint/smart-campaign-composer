@@ -6,7 +6,7 @@ export PATH := $(GOBIN):$(PATH)
 
 TEST_COMPOSE := docker compose -f compose.test.yml
 
-.PHONY: help hooks test test-unit test-integration db-roundtrip seed-manifest lint check-tool-schemas secrets sanitize-sessions check-sessions
+.PHONY: help hooks test test-hooks test-unit test-integration db-roundtrip seed-manifest lint check-tool-schemas secrets sanitize-sessions check-sessions
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -18,6 +18,9 @@ hooks: ## Install git hooks and the commit message template
 test: ## Run every test in containers, without ANTHROPIC_API_KEY (needs only Docker + make)
 	@status=0; $(TEST_COMPOSE) run --rm --build test || status=$$?; \
 	$(TEST_COMPOSE) down -v --remove-orphans; exit $$status
+
+test-hooks: ## Behaviour tests for the agent guards and scripts/worktree-remove.sh
+	scripts/tests/guard-destructive-git.sh
 
 test-unit: ## Go unit tests on the host, no DB, mock LLM
 	@test -f go.mod || { echo "make test-unit: no go.mod yet; Go code starts in P2"; exit 1; }
