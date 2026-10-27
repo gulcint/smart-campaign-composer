@@ -8,14 +8,19 @@ package e2e_test
 //
 // A running generation is held open with the stalled_stream mock scenario, exactly as
 // TestE2E_ContentGenerationLock does (first delta, then the stream waits until the client leaves).
-// "No delivery record" is observed through the campaign: it stays approved and
-// sending_started_at stays null (state machine: sending is entered only when the delivery records
-// are created). The send request carries no body: requirements.md names no send request body.
+// "No delivery record" is observed with GET /api/campaigns/{campaign_id}/deliveries (total = 0) and
+// GET /api/campaigns/{campaign_id}/status (counts.total = 0); the campaign also stays approved with
+// sending_started_at null. The send request carries the approved version as
+// {"content_version_id": "<uuid>"} with Content-Type application/json: an empty body is 400
+// malformed_request, checked before generation_in_progress, so the body is required for these
+// tests to reach the generation lock. Generation on a sending/completed campaign is 409
+// invalid_state.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,6 +29,46 @@ import (
 )
 
 func sendURL(api, id string) string { return api + "/api/campaigns/" + id + "/send" }
+
+// sendBody is the send request body for the approved content version vid.
+func sendBody(t *testing.T, vid string) []byte {
+	t.Helper()
+	b, err := json.Marshal(map[string]string{"content_version_id": vid})
+	if err != nil {
+		t.Fatalf("marshal send body: %v", err)
+	}
+	return b
+}
+
+// assertNoDeliveries checks that the campaign has no delivery record: deliveries total = 0 and
+// status counts.total = 0.
+func assertNoDeliveries(t *testing.T, api, id, when string) {
+	t.Helper()
+	status, _, body := doJSON(t, http.MethodGet, api+"/api/campaigns/"+id+"/deliveries", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("GET deliveries %s status = %d; body: %s", when, status, body)
+	}
+	var page struct {
+		Total *int `json:"total"`
+	}
+	mustUnmarshal(t, string(body), &page)
+	if page.Total == nil || *page.Total != 0 {
+		t.Fatalf("deliveries total %s = %v, want 0; body: %s", when, page.Total, body)
+	}
+	status, _, body = doJSON(t, http.MethodGet, api+"/api/campaigns/"+id+"/status", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("GET status %s status = %d; body: %s", when, status, body)
+	}
+	var st struct {
+		Counts *struct {
+			Total *int `json:"total"`
+		} `json:"counts"`
+	}
+	mustUnmarshal(t, string(body), &st)
+	if st.Counts == nil || st.Counts.Total == nil || *st.Counts.Total != 0 {
+		t.Fatalf("status counts.total %s missing or not 0; body: %s", when, body)
+	}
+}
 
 // approvedCampaign returns an approved campaign of the example brief and its approved version id.
 func approvedCampaign(t *testing.T, api string, m manifestDoc) (string, string) {
@@ -108,6 +153,7 @@ func assertNotSent(t *testing.T, api, id, vid, when string) {
 	if c.Approval == nil || c.Approval.ContentVersionID != vid {
 		t.Fatalf("campaign %s approval = %+v, want bound to %s", when, c.Approval, vid)
 	}
+	assertNoDeliveries(t, api, id, when)
 }
 
 // REQ-SND-01
@@ -122,7 +168,7 @@ func TestE2E_SendRefusedWhileGenerating(t *testing.T) {
 
 	release := holdGeneration(t, api, id)
 	for i := range 2 {
-		status, hdr, body := doJSON(t, http.MethodPost, sendURL(api, id), nil, nil)
+		status, hdr, body := doJSON(t, http.MethodPost, sendURL(api, id), sendBody(t, vid), nil)
 		if status != http.StatusConflict {
 			t.Fatalf("send #%d during the generation status = %d, want 409; body: %s", i+1, status, body)
 		}
@@ -144,11 +190,19 @@ type raceReply struct {
 }
 
 // raceDo sends one request without touching t (it runs off the test goroutine). An accepted
-// generation (200) keeps its body open in resp; every other response is read and closed.
-func raceDo(ctx context.Context, method, url string, headers map[string]string, keepOpenOn200 bool) raceReply {
-	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+// generation (200) keeps its body open in resp; every other response is read and closed. A non-nil
+// body is sent with Content-Type application/json.
+func raceDo(ctx context.Context, method, url string, body []byte, headers map[string]string, keepOpenOn200 bool) raceReply {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, rd)
 	if err != nil {
 		return raceReply{err: err}
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -175,7 +229,7 @@ func raceDo(ctx context.Context, method, url string, headers map[string]string, 
 // A content generation start and a send that arrive at the same time on an approved campaign are
 // never both accepted, and exactly one of them is. Either the generation wins (200 stream) and the
 // send gets 409 generation_in_progress with nothing sent, or the send wins (2xx, campaign leaves
-// approved for sending/completed) and the generation is refused with a 409 error body. Several
+// approved for sending/completed) and the generation is refused with 409 invalid_state. Several
 // campaigns race in parallel so both orders get a chance to occur; the invariant is checked on each.
 func TestE2E_SendAndGenerationStartRace(t *testing.T) {
 	t.Parallel()
@@ -191,6 +245,7 @@ func TestE2E_SendAndGenerationStartRace(t *testing.T) {
 			defer cancelGen()
 			genHeaders := scenario("stalled_stream")
 			genHeaders["Accept"] = "text/event-stream"
+			body := sendBody(t, vid) // built on the test goroutine: sendBody may call t.Fatalf
 
 			var gen, send raceReply
 			var wg sync.WaitGroup
@@ -199,12 +254,12 @@ func TestE2E_SendAndGenerationStartRace(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				gen = raceDo(genCtx, http.MethodPost, api+"/api/campaigns/"+id+"/content", genHeaders, true)
+				gen = raceDo(genCtx, http.MethodPost, api+"/api/campaigns/"+id+"/content", nil, genHeaders, true)
 			}()
 			go func() {
 				defer wg.Done()
 				<-start
-				send = raceDo(t.Context(), http.MethodPost, sendURL(api, id), nil, false)
+				send = raceDo(t.Context(), http.MethodPost, sendURL(api, id), body, nil, false)
 			}()
 			close(start)
 			wg.Wait()
@@ -232,17 +287,7 @@ func TestE2E_SendAndGenerationStartRace(t *testing.T) {
 				waitGenerationReleased(t, api, id, vid)
 				assertNotSent(t, api, id, vid, "after the winning generation ended")
 			default:
-				if gen.status != http.StatusConflict {
-					t.Fatalf("generation that lost to the send status = %d, want 409; body: %s", gen.status, gen.body)
-				}
-				var env struct {
-					Error struct {
-						Code string `json:"code"`
-					} `json:"error"`
-				}
-				if err := json.Unmarshal(gen.body, &env); err != nil || env.Error.Code == "" {
-					t.Fatalf("refused generation body is not an error envelope (%v): %s", err, gen.body)
-				}
+				assertError(t, gen.status, gen.hdr, gen.body, http.StatusConflict, "invalid_state", false)
 				status, _, body := doJSON(t, http.MethodGet, api+"/api/campaigns/"+id, nil, nil)
 				if status != http.StatusOK {
 					t.Fatalf("GET campaign status = %d; body: %s", status, body)
