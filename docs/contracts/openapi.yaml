@@ -674,7 +674,8 @@ paths:
         otherwise the `sample_index`-th customer (0-based, default 0) of the matched set ordered by
         customer id (UUID text order) at the campaign's reference time; `sample_index` >= matched
         count => 404 `customer_not_found`. The UI "next sample" control increments `sample_index`
-        modulo `sample_count`. Errors: no segment or no validated version => 409
+        modulo min(`sample_count`, 5): the UI walks only the first 5 samples (the API accepts any
+        index below `sample_count`). Errors: no segment or no validated version => 409
         `invalid_state`; given version not in campaign => 404 `content_version_not_found`; given
         version has status invalid => 409 `content_not_validated`; given customer not matched by the
         rule => 404 `customer_not_found`; malformed `customer_id`, `content_version_id` or negative /
