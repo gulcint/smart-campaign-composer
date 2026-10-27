@@ -14,12 +14,21 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/gulcint/smart-campaign-composer/test/contract"
 	"github.com/gulcint/smart-campaign-composer/test/testenv"
+	"github.com/gulcint/smart-campaign-composer/test/testenv/apispec"
 )
 
-func TestMain(m *testing.M) { testenv.Main(m) }
+// apiContract checks every request to E2E_API_URL against docs/contracts/openapi.yaml when
+// OPENAPI_VALIDATE=strict (docs/contracts/README.md §11) and records the operationIds called.
+// Every E2E call goes through client, so every call is validated.
+var apiContract = apispec.FromEnv("E2E_API_URL")
 
-var client = &http.Client{Timeout: 10 * time.Second}
+var client = &http.Client{Timeout: 10 * time.Second, Transport: apiContract}
+
+// After the suite: every implemented operation (all of openapi.yaml except the phase allowlist)
+// must have been called at least once, and no violation may have been recorded.
+func TestMain(m *testing.M) { testenv.MainThen(m, apiContract.AfterSuite(contract.NotImplemented)) }
 
 func baseURL(t *testing.T, name string) string {
 	t.Helper()
@@ -109,6 +118,41 @@ func TestE2E_ConfigReportsMockProvider(t *testing.T) {
 	}
 	if strings.Contains(string(body), "sk-ant") {
 		t.Fatalf("GET /api/config leaks something that looks like an API key: %s", body)
+	}
+}
+
+// REQ-DLV-02, REQ-TRK-03
+// `make test` runs the E2E suite with strict OpenAPI validation (docs/contracts/README.md §11:
+// compose.test.yml sets OPENAPI_VALIDATE=strict) and the spec is readable from OPENAPI_SPEC_PATH
+// (or the module root when unset).
+func TestE2E_StrictOpenAPIValidationIsOn(t *testing.T) {
+	t.Parallel()
+	_ = baseURL(t, "E2E_API_URL") // integration layer: skips under -short
+	if got := os.Getenv(apispec.EnvValidate); got != apispec.ModeStrict {
+		t.Fatalf("%s = %q, want %q in the make test container", apispec.EnvValidate, got, apispec.ModeStrict)
+	}
+	spec, err := apiContract.Spec()
+	if err != nil {
+		t.Fatalf("load openapi.yaml for strict validation: %v", err)
+	}
+	if len(spec.Operations()) == 0 {
+		t.Fatalf("%s has no operations", spec.Path())
+	}
+}
+
+// REQ-TRK-02, REQ-TRK-03
+// GET /metrics (operationId getMetrics) answers 200 in the Prometheus text format. The metric names
+// themselves are P5 (REQ-TRK-02, metrics.md §1); here the route and media type are checked, and
+// the strict validator checks the response against openapi.yaml.
+func TestE2E_APIMetricsEndpoint(t *testing.T) {
+	t.Parallel()
+	api := baseURL(t, "E2E_API_URL")
+	status, hdr, body := get(t, api+"/metrics")
+	if status != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d, want 200; body: %s", status, body)
+	}
+	if ct := hdr.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("GET /metrics Content-Type = %q, want text/plain (Prometheus text exposition)", ct)
 	}
 }
 
