@@ -236,8 +236,11 @@ type Rule struct{ Root Node }
 func (r Rule) MarshalJSON() ([]byte, error)
 
 // Parse decodes a document of the form {"rule": <group>} (the emit_segment_rule tool input and
-// the POST /api/segments/count body). Structural checks only. Errors: *validation.Error matching
-// validation.ErrInvalidJSON or validation.ErrSchemaViolation.
+// the POST /api/segments/count body). Structural checks only, in one linear pass; it does not walk
+// past the limits: a group nested deeper than MaxDepth+1 => max_depth_exceeded (path of the first
+// group over MaxDepth, as Validate), more than MaxConditions+1 conditions => max_conditions_exceeded
+// (path "rule"). At most 20 field errors. Errors: *validation.Error matching
+// validation.ErrInvalidJSON or validation.ErrSchemaViolation (or those two limit sentinels).
 func Parse(raw []byte) (Rule, error)
 
 // Validate performs semantic checks and returns nil or a *validation.Error with every problem
