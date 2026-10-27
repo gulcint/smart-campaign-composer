@@ -72,6 +72,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/docs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Interactive API documentation (Swagger UI)
+         * @description HTML page that loads Swagger UI from /docs/{asset} and this contract from /openapi.yaml. It has no
+         *     inline script (CSP `script-src 'self'`); the UI is started by /docs/swagger-initializer.js.
+         *     Security headers on the response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+         *     `Referrer-Policy: no-referrer` and a `Content-Security-Policy` that allows only same-origin
+         *     scripts and connections.
+         */
+        get: operations["getApiDocs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/docs/{asset}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description One of the vendored Swagger UI files (swagger-ui-dist, Apache-2.0) or the page initializer. */
+                asset: "swagger-ui-bundle.js" | "swagger-ui-bundle.js.LICENSE.txt" | "swagger-ui.css" | "swagger-initializer.js" | "favicon-32x32.png" | "LICENSE" | "NOTICE";
+            };
+            cookie?: never;
+        };
+        /**
+         * A file used by the documentation page
+         * @description Content type by file: `.js` => `text/javascript`, `.css` => `text/css`, `.png` => `image/png`,
+         *     `LICENSE`, `NOTICE` and `*.LICENSE.txt` => `text/plain`. Any other name => 404 `not_found`.
+         */
+        get: operations["getApiDocsAsset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openapi.yaml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * This OpenAPI contract
+         * @description Byte-identical to docs/contracts/openapi.yaml (the embedded copy, `make check-contract-copies`).
+         *     Its relative `$ref`s resolve to /schemas/{schema}.
+         */
+        get: operations["getOpenApiSpec"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schemas/{schema}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A JSON Schema file referenced by this contract. */
+                schema: "segment-rule.schema.json" | "content.schema.json";
+            };
+            cookie?: never;
+        };
+        /**
+         * A JSON Schema file referenced by this contract
+         * @description Byte-identical to docs/contracts/schemas/{schema}. Any other name => 404 `not_found`.
+         */
+        get: operations["getContractSchema"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/campaigns": {
         parameters: {
             query?: never;
@@ -1204,6 +1296,105 @@ export interface operations {
                     "application/json": components["schemas"]["AppConfig"];
                 };
             };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getApiDocs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Swagger UI page. */
+            200: {
+                headers: {
+                    "X-Content-Type-Options": "nosniff";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getApiDocsAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description One of the vendored Swagger UI files (swagger-ui-dist, Apache-2.0) or the page initializer. */
+                asset: "swagger-ui-bundle.js" | "swagger-ui-bundle.js.LICENSE.txt" | "swagger-ui.css" | "swagger-initializer.js" | "favicon-32x32.png" | "LICENSE" | "NOTICE";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file. */
+            200: {
+                headers: {
+                    "X-Content-Type-Options": "nosniff";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/javascript": string;
+                    "text/css": string;
+                    "text/plain": string;
+                    "image/png": string;
+                };
+            };
+            404: components["responses"]["RouteNotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getOpenApiSpec: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The contract as YAML. */
+            200: {
+                headers: {
+                    "X-Content-Type-Options": "nosniff";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/yaml": string;
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getContractSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A JSON Schema file referenced by this contract. */
+                schema: "segment-rule.schema.json" | "content.schema.json";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The schema. */
+            200: {
+                headers: {
+                    "X-Content-Type-Options": "nosniff";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/schema+json": Record<string, never>;
+                };
+            };
+            404: components["responses"]["RouteNotFound"];
             500: components["responses"]["InternalError"];
         };
     };

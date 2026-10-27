@@ -8,7 +8,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 
 | Dosya | İçerik |
 |---|---|
-| [`openapi.yaml`](openapi.yaml) | HTTP API (OpenAPI 3.1): 19 operasyon, kapalı şemalar, durum kodları, yanıt başına izinli hata kodları; segment kuralı ve içerik gövdeleri `schemas/*.schema.json`'a göreli `$ref` (çok dosyalı, doğruluk kaynağı; §11) |
+| [`openapi.yaml`](openapi.yaml) | HTTP API (OpenAPI 3.1): 23 operasyon (19 uygulama + 4 `documentation`: `/docs`, `/docs/{asset}`, `/openapi.yaml`, `/schemas/{schema}`; D36), kapalı şemalar, durum kodları, yanıt başına izinli hata kodları; segment kuralı ve içerik gövdeleri `schemas/*.schema.json`'a göreli `$ref` (çok dosyalı, doğruluk kaynağı; §11) |
 | [`redocly.yaml`](redocly.yaml) | `api-lint` kapısının Redocly yapılandırması (kapatılan her kural gerekçeli) |
 | [`sse-events.md`](sse-events.md) | İçerik üretimi (`delta`, `invalid`, `validated`) ve canlı durum (`snapshot`, `status`, `completed`) olayları |
 | [`schemas/segment-rule.schema.json`](schemas/segment-rule.schema.json) | Segment kuralı JSON şeması (LLM aracı girdisi + `POST /api/segments/count` gövdesi) |
@@ -255,6 +255,8 @@ Hepsi `DECISIONS.md`'ye gerekçesiyle yazılır.
 | `api-types-check` | `web/src/api` TS tipleri spec'ten üretilir (`openapi-typescript`); üretilen dosya commit'tekiyle aynı değilse kırmızı — frontend tipleri spec'ten sapamaz | kodu yazan (web) |
 | `check-contract-copies` | `internal/httpapi/openapi/` kopyaları `docs/contracts/openapi.yaml` ve başvurulan `schemas/*.schema.json` ile bayt bayt aynı (`cmp`, `make lint` içinde) | kodu yazan |
 | Sıkı E2E doğrulama (`OPENAPI_VALIDATE=strict`) | E2E istemcisi her yanıtı (SSE gövdeleri hariç, `x-sse-events`) libopenapi-validator ile spec'e karşı doğrular; 2xx alan isteği de doğrular; bilinmeyen alan, yanlış tip, listelenmemiş durum kodu veya izinsiz hata kodu testi düşürür; uygulanmış her `operationId` en az bir kez çağrılır | test yazarı (`test/e2e`), `compose.test.yml` |
+
+**Etkileşimli doküman (D36):** `GET /docs` (Swagger UI), `GET /docs/{asset}`, `GET /openapi.yaml` ve `GET /schemas/{schema}` spec'te `documentation` etiketiyle yazılıdır ve `Routes()` tablosundadır; `api-routes` için ayrı bir istisna yoktur. `/openapi.yaml` ve `/schemas/*` yanıtları gömülü kopyayla bayt bayt aynıdır, yani `docs/contracts/` ile de aynıdır (`check-contract-copies`). `servers` göreli `/`'tir. Kullanım: [`../API.md`](../API.md).
 
 **İnsan incelemesinde kalanlar** (araçlar denetlemez): hata kodlarının anlamı ve hangi durumda hangisinin seçildiği, kontrol sırası ("ilk hata kazanır"), sıralama/sayfalama anlamı, retry ve idempotency davranışı, SSE olay sırası ve anlamı (P4'te olay başına şemalar gelene kadar gövdeleri de), `X-Request-ID` başlığı, düzyazı dokümanlar (`*.md`) ile spec açıklamalarının tutarlılığı.
 
