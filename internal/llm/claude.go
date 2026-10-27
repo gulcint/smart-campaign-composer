@@ -40,8 +40,9 @@ const (
 		"Length limits, in Unicode characters, apply after every variable is replaced by the longest recipient " +
 		"value given in the prompt (a variable counts as that value's length, not as the length of its placeholder): " +
 		"SMS body at most 160, email subject at most 80, email body at most 5000. " +
-		"The SMS is one or two short sentences: use only {{first_name}} in it, at most once, and keep the rest of " +
-		"its text under 100 characters. Prefer an email subject without variables, at most 60 characters. " +
+		"The SMS is one or two short sentences. Any allowed variable may be used; remember each counts as its " +
+		"longest realistic value (first_name up to about 50 characters), so keep the plain text of the SMS short " +
+		"enough (about 100 characters) that the total stays at most 160. Aim for an email subject of at most 60 characters. " +
 		"Keep the email body to a few short paragraphs. No emojis. " +
 		"Count the characters of each field before calling the tool and shorten any field that is over its limit."
 
