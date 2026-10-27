@@ -214,7 +214,7 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 
 | İşlem | Aynı transaction'daki yazmalar |
 |---|---|
-| Segment üretimi (P3) | `segment_*`/`audience_*`/`longest_*` yazılır, `segment_revision + 1`; etkin onay varsa `revoked_at`, `revoke_reason = 'segment_changed'` ve `approved_content_version_id = NULL`; durum `audience_ready` |
+| Segment üretimi (P3) | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (kira sona erip başkasına geçti; D52). Aksi halde `segment_*`/`audience_*`/`longest_*` yazılır, `segment_revision + 1`; etkin onay varsa `revoked_at`, `revoke_reason = 'segment_changed'` ve `approved_content_version_id = NULL`; durum `audience_ready` |
 | `editContent` ön koşulu | Satır kilidi altında, ekleme ile **aynı** transaction'da: `X-Expected-Version` = güncel `segment_revision`'daki en yüksek `version_number`'lı `validated` satırın `id`'si (satır yoksa `none`) değilse hiçbir yazma yapılmaz ve 409 `content_edit_conflict` döner (karşılaştırma ile ekleme arasına başka yazma giremez) |
 | İçerik `validated` (LLM `validated` olayı veya `editContent`) | yeni `content_versions` satırı (`status = 'validated'`, `source` = `llm`/`edit`, `segment_revision` = güncel, `worst_case_*` dolu, `validation_errors = '[]'`); durum `content_ready`; etkin onay varsa `revoke_reason = 'content_changed'` ve `approved_content_version_id = NULL` |
 | Saklanabilir son `invalid` taslak (LLM) | yalnız yeni `content_versions` satırı (`status = 'invalid'`, `source = 'llm'`, `validation_errors` dolu); `campaigns` ve `approvals` satırlarına dokunulmaz |
@@ -222,10 +222,11 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 | Onay | yeni `approvals` satırı (`content_status = 'validated'`), `approved_content_version_id` = sürüm, durum `approved` |
 | Aynı sürümün tekrar onayı (idempotent) | hiçbir yazma yok (`approved_at` değişmez) |
 | Üretim başlangıcı (segment veya içerik) | Durum ve kira aynı kilit altında denetlenir; süresi geçmemiş kira varsa 409 `generation_in_progress`, yoksa `generation_token`/`generation_expires_at` yazılır (süresi geçmiş kiranın üzerine). `updated_at` değişmez |
+| LLM içerik sürümünün kaydı | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (son `invalid` olayı, `llm_unavailable`) |
 | Üretim sonu (başarı, hata, istemci kopması) | `generation_token = NULL, generation_expires_at = NULL WHERE generation_token = <kendi jetonu>` (tek ifade; başkasının kirasına dokunmaz) |
 | Gönderim (P5) | §3.7 / README ve openapi `sendCampaign` |
 
-Düzenleme, onay ve gönderim, kendi transaction'larında satırı kilitledikten sonra ilk iş olarak süresi geçmemiş bir kira olup olmadığına bakar (`LockedCampaign.CheckNoGeneration`); varsa hiçbir yazma yapmadan 409 `generation_in_progress` döner. Böylece aynı veritabanını kullanan birden fazla API sürecinde de üretim başlangıcı ile gönderimden yalnız biri kabul edilir (REQ-SND-01).
+Düzenleme, onay ve gönderim, kendi transaction'larında satırı kilitledikten sonra, durum denetimlerinden önce süresi geçmemiş bir kira olup olmadığına bakar (`LockedCampaign.CheckNoGeneration`); varsa hiçbir yazma yapmadan 409 `generation_in_progress` döner. Onay ve gönderimde bundan önce yalnız sürümün varlığı (404 `content_version_not_found`) denetlenir; düzenlemede kira denetimi ilk denetimdir. Böylece aynı veritabanını kullanan birden fazla API sürecinde de üretim başlangıcı ile gönderimden yalnız biri kabul edilir (REQ-SND-01).
 
 ## 4. Kuyruk mekanikleri (gözlemlenebilir)
 

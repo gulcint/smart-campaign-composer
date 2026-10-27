@@ -1,4 +1,4 @@
--- Per-campaign generation lease (db-schema.md §3.4, D52): one segment/content generation at a
+-- Per-campaign generation lease (db-schema.md §3.4, §3.9; D52): one segment/content generation at a
 -- time across every API process. Written and checked under the campaign row lock; a lease whose
 -- generation_expires_at has passed is free again, so a crashed process cannot block the campaign.
 

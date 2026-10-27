@@ -32,7 +32,7 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 	if !ok {
 		return nil, ErrCampaignNotFound
 	}
-	release, err := s.beginGeneration(ctx, id, func(lc LockedCampaign) error {
+	lease, release, err := s.beginGeneration(ctx, id, func(lc LockedCampaign) error {
 		if _, err := Transition(lc.State, EventContentValidated); err != nil {
 			return err
 		}
@@ -44,23 +44,15 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 	if err != nil {
 		return nil, err
 	}
-	// Read after the lease is held: no segment generation can change the campaign meanwhile.
-	c, err := s.d.Store.GetCampaign(ctx, id)
-	if err == nil && c.Segment == nil {
-		err = fmt.Errorf("%w: campaign has no segment", ErrInvalidState)
-	}
-	if err != nil {
-		release()
-		return nil, err
-	}
 
 	// genCtx carries the request's values (the mock scenario) and ends when the request is
-	// cancelled, when the run finishes or after MaxGenerationDuration on the injected clock.
+	// cancelled, when the run finishes or at the lease's deadline (MaxGenerationDuration after
+	// the instant the lease was stamped with) on the injected clock.
 	genCtx, cancel := context.WithCancelCause(ctx)
-	// Until Stream takes over, the lock ends with genCtx (e.g. the handler never streams). Stream
-	// stops this before persisting, so a timeout can never release the lock mid-transaction.
+	// Until Stream takes over, the lease ends with genCtx (e.g. the handler never streams). Stream
+	// stops this before persisting, so a timeout can never release the lease mid-transaction.
 	stopRelease := context.AfterFunc(genCtx, release)
-	timer := s.d.Clock.After(MaxGenerationDuration)
+	timer := s.d.Clock.After(lease.ExpiresAt.Sub(s.d.Clock.Now()))
 	go func() {
 		select {
 		case <-timer:
@@ -68,6 +60,17 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 		case <-genCtx.Done():
 		}
 	}()
+
+	// Read after the lease is held: no segment generation can change the campaign meanwhile.
+	c, err := s.d.Store.GetCampaign(genCtx, id)
+	if err == nil && c.Segment == nil {
+		err = fmt.Errorf("%w: campaign has no segment", ErrInvalidState)
+	}
+	if err != nil {
+		cancel(nil)
+		release()
+		return nil, err
+	}
 
 	sess, err := composer.OpenContent(genCtx, s.d.LLM, llm.ContentRequest{
 		Brief: c.Brief, Rule: c.Segment.Rule, Longest: c.Segment.LongestValues,
@@ -81,13 +84,14 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 		}
 		return nil, err
 	}
-	return &contentRun{s: s, id: id, genCtx: genCtx, cancel: cancel, release: release, stopRelease: stopRelease, sess: sess}, nil
+	return &contentRun{s: s, id: id, token: lease.Token, genCtx: genCtx, cancel: cancel, release: release, stopRelease: stopRelease, sess: sess}, nil
 }
 
 // contentRun is the ContentRun of the service.
 type contentRun struct {
 	s       *service
 	id      string
+	token   string // the run's generation lease
 	genCtx  context.Context
 	cancel  context.CancelCauseFunc
 	release func() // idempotent; also called by context.AfterFunc when genCtx ends
@@ -169,6 +173,10 @@ func (r *contentRun) finish(ctx context.Context, out composer.ContentOutcome, em
 		w.Status, w.ValidationErrors = ContentInvalid, out.Errors
 	}
 	v, err := r.s.d.Store.WriteContentVersion(context.WithoutCancel(ctx), r.id, func(lc LockedCampaign) (ContentWrite, error) {
+		// A run whose lease expired and was taken over (by any process) stores nothing (D52).
+		if err := lc.CheckGenerationOwner(r.token); err != nil {
+			return ContentWrite{}, err
+		}
 		next, err := Transition(lc.State, ev)
 		if err != nil {
 			return ContentWrite{}, err
@@ -178,6 +186,13 @@ func (r *contentRun) finish(ctx context.Context, out composer.ContentOutcome, em
 		}
 		return w, nil
 	})
+	if errors.Is(err, errLeaseLost) {
+		r.s.d.Logger.Info("content version not stored: generation lease lost", slog.String("campaign_id", r.id))
+		return emit(composer.InvalidEvent{Attempt: out.Attempts, Final: true, Errors: []validation.FieldError{{
+			Path: "", Code: validation.CodeLLMUnavailable,
+			Message: "the generation did not finish within " + MaxGenerationDuration.String(),
+		}}})
+	}
 	if err != nil {
 		r.s.d.Logger.Error("content version not stored", slog.String("campaign_id", r.id), slog.String("error", err.Error()))
 		return emit(composer.InvalidEvent{Attempt: out.Attempts, Final: true, Errors: []validation.FieldError{{

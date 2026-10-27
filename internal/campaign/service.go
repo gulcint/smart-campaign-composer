@@ -31,8 +31,9 @@ type Store interface {
 	ListCampaigns(ctx context.Context, limit, offset int) ([]Campaign, int, error)
 	// Longest computes content.Longest over the customers matched by r at ref (before consent).
 	Longest(ctx context.Context, r segment.Rule, ref time.Time) (content.Longest, error)
-	// SaveSegment stores a generated segment in one transaction: it re-checks the state machine
-	// (EventSegmentGenerated) under a row lock, increments the segment revision, revokes the
+	// SaveSegment stores a generated segment in one transaction: under a row lock it checks that the
+	// row still carries w.LeaseToken (CheckGenerationOwner) and re-checks the state machine
+	// (EventSegmentGenerated), increments the segment revision, revokes the
 	// active approval (segment_changed) and moves the campaign to audience_ready.
 	// Errors: ErrCampaignNotFound, ErrInvalidState.
 	SaveSegment(ctx context.Context, id string, w SegmentWrite) (Campaign, error)
@@ -108,6 +109,20 @@ func (lc LockedCampaign) CheckNoGeneration(now time.Time) error {
 	return nil
 }
 
+// errLeaseLost: the generation's lease was cleared or taken over (it expired) before its result
+// was stored; the service reports it like a generation that exceeded MaxGenerationDuration.
+var errLeaseLost = errors.New("campaign: generation lease lost")
+
+// CheckGenerationOwner fails unless the row still carries the lease with token. A generation's
+// final save calls it under the row lock, so a generation whose lease expired and was taken over
+// (possibly by another process) never stores a result (D52).
+func (lc LockedCampaign) CheckGenerationOwner(token string) error {
+	if lc.Generation == nil || lc.Generation.Token != token {
+		return errLeaseLost
+	}
+	return nil
+}
+
 // ContentWrite is one new, immutable content version.
 type ContentWrite struct {
 	ID               string
@@ -152,6 +167,9 @@ type SegmentWrite struct {
 	ReferenceTime time.Time
 	LLMAttempts   int
 	GeneratedAt   time.Time
+	// LeaseToken is the generation lease the write requires: SaveSegment refuses (nothing written)
+	// when the locked row no longer carries it (LockedCampaign.CheckGenerationOwner).
+	LeaseToken string
 }
 
 type Deps struct {
@@ -263,7 +281,7 @@ func (s *service) GenerateSegment(ctx context.Context, id string) (SegmentResult
 		return SegmentResult{}, ErrCampaignNotFound
 	}
 	// The lease and the state are checked together under the campaign row lock (D52).
-	release, err := s.beginGeneration(ctx, id, func(lc LockedCampaign) error {
+	lease, release, err := s.beginGeneration(ctx, id, func(lc LockedCampaign) error {
 		if err := lc.CheckNoGeneration(s.d.Clock.Now()); err != nil {
 			return err
 		}
@@ -274,37 +292,46 @@ func (s *service) GenerateSegment(ctx context.Context, id string) (SegmentResult
 		return SegmentResult{}, err
 	}
 	defer release()
-	c, err := s.d.Store.GetCampaign(ctx, id)
+
+	// Everything after the lease is taken (LLM, count, longest values, save) ends at the lease's
+	// deadline; SaveSegment also refuses once the lease is no longer this generation's.
+	workCtx, cancel := context.WithTimeout(ctx, lease.ExpiresAt.Sub(s.d.Clock.Now()))
+	defer cancel()
+	expired := func(err error) error {
+		if ctx.Err() == nil && (workCtx.Err() != nil || errors.Is(err, errLeaseLost)) {
+			return fmt.Errorf("%w: generation exceeded %s", llm.ErrUnavailable, MaxGenerationDuration)
+		}
+		return err
+	}
+	c, err := s.d.Store.GetCampaign(workCtx, id)
 	if err != nil {
-		return SegmentResult{}, err
+		return SegmentResult{}, expired(err)
 	}
 
 	ref := s.referenceTime()
-	genCtx, cancel := context.WithTimeout(ctx, MaxGenerationDuration)
-	defer cancel()
-	out, err := composer.GenerateSegment(genCtx, s.d.LLM, c.Brief)
+	out, err := composer.GenerateSegment(workCtx, s.d.LLM, c.Brief)
 	if err != nil {
-		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-			return SegmentResult{}, fmt.Errorf("%w: generation exceeded %s", llm.ErrUnavailable, MaxGenerationDuration)
+		if ctx.Err() == nil && workCtx.Err() != nil {
+			return SegmentResult{}, expired(err)
 		}
 		s.d.Logger.Info("segment generation rejected", slog.String("campaign_id", id), slog.String("error", err.Error()))
 		return SegmentResult{}, err
 	}
 
-	aud, err := s.d.Audience.Count(ctx, out.Rule, ref)
+	aud, err := s.d.Audience.Count(workCtx, out.Rule, ref)
 	if err != nil {
-		return SegmentResult{}, err
+		return SegmentResult{}, expired(err)
 	}
-	longest, err := s.d.Store.Longest(ctx, out.Rule, ref)
+	longest, err := s.d.Store.Longest(workCtx, out.Rule, ref)
 	if err != nil {
-		return SegmentResult{}, err
+		return SegmentResult{}, expired(err)
 	}
-	saved, err := s.d.Store.SaveSegment(ctx, id, SegmentWrite{
+	saved, err := s.d.Store.SaveSegment(workCtx, id, SegmentWrite{
 		Rule: out.Rule, Audience: aud, LongestValues: longest, ReferenceTime: ref,
-		LLMAttempts: out.Attempts, GeneratedAt: s.now(),
+		LLMAttempts: out.Attempts, GeneratedAt: s.now(), LeaseToken: lease.Token,
 	})
 	if err != nil {
-		return SegmentResult{}, err
+		return SegmentResult{}, expired(err)
 	}
 	if saved.Segment == nil {
 		return SegmentResult{}, errors.New("campaign: stored segment missing")
@@ -347,24 +374,34 @@ func (s *service) ListDeliveries(context.Context, string, DeliveryFilter) (Deliv
 // beginGeneration takes the campaign's generation lease under the row lock after check accepted
 // the locked row. The lease expires MaxGenerationDuration after now on the injected clock, rounded
 // up to the database's microsecond precision so it never ends early. release is idempotent, safe
-// for concurrent use, and frees only this lease even after ctx is cancelled.
-func (s *service) beginGeneration(ctx context.Context, id string, check func(LockedCampaign) error) (release func(), err error) {
+// for concurrent use, and frees only this lease even after ctx is cancelled. Callers bound their
+// work by lease.ExpiresAt.
+func (s *service) beginGeneration(ctx context.Context, id string, check func(LockedCampaign) error) (lease GenerationLease, release func(), err error) {
 	expires := s.d.Clock.Now().UTC().Add(MaxGenerationDuration)
 	if t := expires.Truncate(time.Microsecond); !t.Equal(expires) {
 		expires = t.Add(time.Microsecond)
 	}
-	lease := GenerationLease{Token: uuid.NewString(), ExpiresAt: expires}
-	if err := s.d.Store.BeginGeneration(ctx, id, lease, check); err != nil {
-		return nil, err
+	lease = GenerationLease{Token: uuid.NewString(), ExpiresAt: expires}
+	end := func() {
+		// Best effort: if this fails the lease still expires at lease.ExpiresAt.
+		ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := s.d.Store.EndGeneration(ectx, id, lease.Token); err != nil {
+			s.d.Logger.Error("generation lease not released", slog.String("campaign_id", id), slog.String("error", err.Error()))
+		}
 	}
-	bg := context.WithoutCancel(ctx)
+	accepted := false
+	err = s.d.Store.BeginGeneration(ctx, id, lease, func(lc LockedCampaign) error {
+		err := check(lc)
+		accepted = err == nil
+		return err
+	})
+	if err != nil {
+		if accepted {
+			end() // the write or commit failed after check: the lease may have been stored anyway
+		}
+		return GenerationLease{}, nil, err
+	}
 	var once sync.Once
-	return func() {
-		once.Do(func() {
-			if err := s.d.Store.EndGeneration(bg, id, lease.Token); err != nil {
-				// The lease still expires at lease.ExpiresAt.
-				s.d.Logger.Error("generation lease not released", slog.String("campaign_id", id), slog.String("error", err.Error()))
-			}
-		})
-	}, nil
+	return lease, func() { once.Do(end) }, nil
 }

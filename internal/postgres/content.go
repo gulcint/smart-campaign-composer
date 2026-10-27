@@ -159,7 +159,7 @@ func lockCampaign(ctx context.Context, tx pgx.Tx, id string) (lockedCampaign, er
 }
 
 // BeginGeneration stores the generation lease when check accepts the row read under its lock
-// (db-schema.md §3.9, D52).
+// (db-schema.md §3.4, §3.9; D52).
 func (s *CampaignStore) BeginGeneration(ctx context.Context, id string, lease campaign.GenerationLease, check func(campaign.LockedCampaign) error) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
