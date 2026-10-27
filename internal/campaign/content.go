@@ -27,7 +27,8 @@ var errSendNotInSlice = fmt.Errorf("%w: accepting a send", errNotInSlice)
 // StartContentGeneration: 404 -> invalid_state (draft, sending, completed) -> generation lock ->
 // LLM attempt 1 connected (llm.ErrUnavailable otherwise). The lock is held by the returned run.
 func (s *service) StartContentGeneration(ctx context.Context, id string) (ContentRun, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return nil, ErrCampaignNotFound
 	}
 	c, err := s.d.Store.GetCampaign(ctx, id)
@@ -180,8 +181,12 @@ func (r *contentRun) finish(ctx context.Context, out composer.ContentOutcome, em
 // content.Parse + content.Validate with the current segment's longest values -> new validated
 // version, state content_ready, active approval revoked.
 func (s *service) EditContent(ctx context.Context, id, expectedVersionID string, raw []byte) (ContentVersion, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return ContentVersion{}, ErrCampaignNotFound
+	}
+	if v, ok := canonicalID(expectedVersionID); ok {
+		expectedVersionID = v
 	}
 	if _, err := s.d.Store.GetCampaign(ctx, id); err != nil {
 		return ContentVersion{}, err
@@ -231,7 +236,8 @@ func expectedMatches(expected string, latest *VersionRef) bool {
 }
 
 func (s *service) ListContentVersions(ctx context.Context, id string) ([]ContentVersion, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return nil, ErrCampaignNotFound
 	}
 	vs, err := s.d.Store.ListContentVersions(ctx, id)
@@ -245,10 +251,12 @@ func (s *service) ListContentVersions(ctx context.Context, id string) ([]Content
 }
 
 func (s *service) GetContentVersion(ctx context.Context, id, versionID string) (ContentVersion, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return ContentVersion{}, ErrCampaignNotFound
 	}
-	if !validID(versionID) {
+	versionID, ok = canonicalID(versionID)
+	if !ok {
 		if _, err := s.d.Store.GetCampaign(ctx, id); err != nil {
 			return ContentVersion{}, err
 		}
@@ -261,9 +269,11 @@ func (s *service) GetContentVersion(ctx context.Context, id, versionID string) (
 // (under the row lock) content_not_validated -> invalid_state -> stale -> idempotent re-approval
 // or worst-case re-check with the current customers -> approval row, state approved.
 func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, error) {
-	if _, err := s.GetContentVersion(ctx, id, versionID); err != nil {
+	v, err := s.GetContentVersion(ctx, id, versionID)
+	if err != nil {
 		return Campaign{}, err
 	}
+	id, versionID = v.CampaignID, v.ID // canonical (D47a)
 	if s.locks.busy(id, s.d.Clock.Now()) {
 		return Campaign{}, ErrGenerationInProgress
 	}
@@ -297,9 +307,11 @@ func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, 
 // generation lock -> invalid_state (not approved) -> stale (not the approved version). Accepting
 // the send is the P5 slice.
 func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, error) {
-	if _, err := s.GetContentVersion(ctx, id, versionID); err != nil {
+	v, err := s.GetContentVersion(ctx, id, versionID)
+	if err != nil {
 		return SendResult{}, err
 	}
+	id, versionID = v.CampaignID, v.ID // canonical (D47a)
 	if s.locks.busy(id, s.d.Clock.Now()) {
 		return SendResult{}, ErrGenerationInProgress
 	}
@@ -319,7 +331,8 @@ func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, e
 // Preview renders a validated version (default: the latest) for one sample customer matched by
 // the rule at the campaign's reference time.
 func (s *service) Preview(ctx context.Context, id string, q PreviewQuery) (Preview, error) {
-	if !validID(id) {
+	id, ok := canonicalID(id)
+	if !ok {
 		return Preview{}, ErrCampaignNotFound
 	}
 	c, err := s.d.Store.GetCampaign(ctx, id)
@@ -343,14 +356,20 @@ func (s *service) Preview(ctx context.Context, id string, q PreviewQuery) (Previ
 		}
 		v = *c.LatestContentVersion
 	}
-	if q.SampleIndex < 0 || (q.CustomerID != "" && !validID(q.CustomerID)) {
+	customerID := q.CustomerID
+	if customerID != "" {
+		if customerID, ok = canonicalID(customerID); !ok {
+			return Preview{}, ErrCustomerNotFound
+		}
+	}
+	if q.SampleIndex < 0 {
 		return Preview{}, ErrCustomerNotFound
 	}
 	rule, err := segment.Parse(append(append([]byte(`{"rule":`), c.Segment.Rule...), '}'))
 	if err != nil {
 		return Preview{}, fmt.Errorf("campaign: stored segment rule: %w", err)
 	}
-	sample, err := s.d.Store.PreviewSample(ctx, rule, c.Segment.ReferenceTime, q.CustomerID, q.SampleIndex)
+	sample, err := s.d.Store.PreviewSample(ctx, rule, c.Segment.ReferenceTime, customerID, q.SampleIndex)
 	if err != nil {
 		return Preview{}, err
 	}
