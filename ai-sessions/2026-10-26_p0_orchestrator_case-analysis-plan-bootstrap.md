@@ -2808,7 +2808,7 @@
   - Migration gidiş-dönüş testi henüz yok. Migration aracı P2'de seçilecek; o
     faz make db-roundtrip hedefini eklemek zorunda, pre-push hook'u bu hedefi
     çağırıyor.
-  - Commit'lerin yazarı git ayarındaki Gulcin Tas <[REDACTED_EMAIL]>. Bu
+  - Commit'lerin yazarı git ayarındaki <user> <[REDACTED_EMAIL]>. Bu
     ayara dokunmadım.
   - Planlama session'ının export'u henüz alınmadı. /export komutunu yalnızca sen
     çalıştırabilirsin. Bu session'ın sonunda şunu çalıştırman gerekiyor:

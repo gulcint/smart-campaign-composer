@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Kaynak doküman
 
-Tüm gereksinimlerin tek doğruluk kaynağı: `/Users/gulcintas/Desktop/SmartCampaignComposer/Smart Campaign Composer Case.html` (Insider One · AI Developer Case Study · 2026). Bu dosyayla çelişen bir karar verilecekse önce oraya bak; bilinçli sapmaları `DECISIONS.md`'ye yaz.
+Tüm gereksinimlerin tek doğruluk kaynağı: `Smart Campaign Composer Case.html` (repo kökünde, `.gitignore`'da) (Insider One · AI Developer Case Study · 2026). Bu dosyayla çelişen bir karar verilecekse önce oraya bak; bilinçli sapmaları `DECISIONS.md`'ye yaz.
 
 Bir konuda kararsız kalınırsa (`DECISIONS.md`, `docs/PLAN.md` ve sözleşmeler çelişiyor ya da sessizse) karar case dokümanı okunarak verilir; `DECISIONS.md` önceki kararların kaydıdır, case'in yerine geçmez. Case'e dayanan karar gerekçesiyle `DECISIONS.md`'ye yazılır (sahip kararı, 2026-10-28).
 
@@ -36,7 +36,7 @@ Gerçek kimseye mesaj gitmez: alıcılar seed edilmiş sahte kullanıcılar, gö
 
 ## Tasarım ve frontend
 
-Görsel sistem ve ekran akışı: `/Users/gulcintas/Desktop/SmartCampaignComposer/DESIGN.md` (renk/tipografi token'ları, component envanteri, ekranlar, erişilebilirlik). Frontend'e dokunmadan önce okunur.
+Görsel sistem ve ekran akışı: `DESIGN.md` (renk/tipografi token'ları, component envanteri, ekranlar, erişilebilirlik). Frontend'e dokunmadan önce okunur.
 - Teknoloji: Vue 3 + Vite + TypeScript + Pinia; component'ler **shadcn-vue + Reka UI + Tailwind CSS v4**; ikonlar `@lucide/vue`; font Figtree + JetBrains Mono (self-host).
 - Metin rengi: sahibin kararıyla **turuncu metin vurgu rengidir** (başlıklar, vurgular, anahtar sayılar, linkler); uzun gövde ve LLM metni koyu mürekkep kalır. Turuncuya yalnızca rol token'larıyla erişilir (`--text-accent*`), `--orange-*` doğrudan kullanılmaz.
 - Arayüz dili Türkçe, metinler tek i18n dosyasında. LLM/düzenleme içeriği asla `v-html` ile basılmaz.
@@ -73,7 +73,7 @@ Bir işte birden fazla subagent kullanılacaksa orkestratör **Opus 5.5** (`clau
 
 ## Uygulama planı
 
-Fazlar, git akışı, hook'lar, roller (test yazarı implementasyona bakmaz), test kuralları, seed ve güvenlik önlemleri: `/Users/gulcintas/Desktop/SmartCampaignComposer/docs/PLAN.md`. Plandaki VARSAYIM'lar `DECISIONS.md`'ye gerekçesiyle taşınır.
+Fazlar, git akışı, hook'lar, roller (test yazarı implementasyona bakmaz), test kuralları, seed ve güvenlik önlemleri: `docs/PLAN.md`. Plandaki VARSAYIM'lar `DECISIONS.md`'ye gerekçesiyle taşınır.
 
 ## Zorunlu kurallar (case kısıtları)
 

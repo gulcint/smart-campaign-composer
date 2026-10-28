@@ -16,9 +16,9 @@ mkdir ai-sessions
 ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fails=$((fails + 1)); }
 
-sanitize() { USER=$name SANITIZE_EXTRA_NAMES="" "$root/scripts/sanitize-sessions.sh" "$@" >/dev/null; }
-check()    { git add -A >/dev/null 2>&1; CI=1 SANITIZE_EXTRA_NAMES="" "$root/scripts/hooks/check-ai-sessions.sh" >/dev/null 2>&1; }
-check_named() { git add -A >/dev/null 2>&1; CI="" USER=$name SANITIZE_EXTRA_NAMES="" "$root/scripts/hooks/check-ai-sessions.sh" >/dev/null 2>&1; }
+sanitize() { USER=$name SANITIZE_EXTRA_NAMES="" SANITIZE_EXTRA_PHRASES="Fake Person" "$root/scripts/sanitize-sessions.sh" "$@" >/dev/null; }
+check()    { git add -A >/dev/null 2>&1; CI=1 SANITIZE_EXTRA_NAMES="" SANITIZE_EXTRA_PHRASES="Fake Person" "$root/scripts/hooks/check-ai-sessions.sh" >/dev/null 2>&1; }
+check_named() { git add -A >/dev/null 2>&1; CI="" USER=$name SANITIZE_EXTRA_NAMES="" SANITIZE_EXTRA_PHRASES="Fake Person" "$root/scripts/hooks/check-ai-sessions.sh" >/dev/null 2>&1; }
 
 # case <label> <input-text>: the checker must flag it before, the sanitizer must clear it after
 case_leak() {
@@ -39,6 +39,15 @@ case_leak "claude slug"       "Read ../private/tmp/claude-501/-Users-$name-Deskt
 case_leak "bare account name" "the user $name asked for it"
 case_leak "api key"           "key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"
 case_leak "personal email"    "mail me at someone@personal-mail.dev please"
+
+# full names: the checker and sanitizer match them in any case, across a line wrap
+f=ai-sessions/name.md
+printf '%s\n' "written by fake person, also FAKE" "  PERSON and Fake Person." > $f
+if check; then bad "full name: not detected before sanitizing"; else ok "full name: detected"; fi
+sanitize $f
+if grep -qi "fake" $f; then bad "full name survived: $(grep -ni fake $f | head -1)"; else ok "full name: masked"; fi
+if check; then ok "full name: clean afterwards"; else bad "full name: checker still fails after sanitizing"; fi
+rm -f $f
 
 # things that must survive untouched
 f=ai-sessions/keep.md

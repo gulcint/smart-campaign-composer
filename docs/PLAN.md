@@ -437,7 +437,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 - **Subagent'lar:** ana export'ta yalnızca özet olarak görünebilir; izolasyonu önemli roller (test yazarı) bu yüzden **ayrı session'da** çalışır ve ayrı export edilir — rol ayrımının kanıtı da olur.
 - **claude.ai kullanılırsa:** doküman "claude.ai'da paylaşım linki" de istiyor; link `INDEX.md`'ye satır olarak eklenir (R13).
 - **`ai-sessions/INDEX.md`:** tarih · faz · rol · konu · dosya veya link.
-- **Temizlik:** `make sanitize-sessions` (key desenleri, `/Users/<kullanıcı>` yolları, kişisel email maskelenir) → gitleaks + özel regex → elle göz atma.
+- **Temizlik:** `make sanitize-sessions` (key desenleri, `/Users/<kullanıcı>` yolları, kişisel email maskelenir; ad-soyad için `SANITIZE_EXTRA_PHRASES="Ad Soyad,…"`) → gitleaks + özel regex → elle göz atma.
 - **Kritik:** bu planlama session'ı git'ten önce yapıldı; **P0'ın ilk işi** export'udur.
 
 ---
