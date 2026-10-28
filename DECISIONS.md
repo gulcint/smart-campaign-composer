@@ -2,7 +2,7 @@
 
 Önemli kararlar ve nedenleri. Her faz kapısında güncellenir (`docs/PLAN.md` §3.2). Her karar: **bağlam → karar → neden → alternatifler/bedel**. "Doküman" case dokümanıdır; dokümanda olmayan her şey VARSAYIM olarak işaretlidir. Ayrıntılı gereksinimler `docs/requirements.md`, ad sözleşmeleri `docs/contracts/`.
 
-Durum: **P0–P4 tamamlandı** (P4: içerik üretimi, düzenleme ve onay; P5 gönderim ve takip henüz yok). İlk bölümler tasarım kararlarıdır; P2'den itibaren uygulama kararları eklendi. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D37–D49; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
+Durum: **P0–P5 tamamlandı** (P5: gönderim API'si, worker, canlı durum akışı ve takip ekranı, responsive düzen; P6 sertleştirme ve teslim henüz başlamadı). İlk bölümler tasarım kararlarıdır; P2'den itibaren uygulama kararları eklendi. P4 öncesi içerik/onay sözleşmeleri sertleştirildi (D37–D49; D40 sahip kararıyla iyimser eşzamanlılığa çevrildi).
 
 ---
 
@@ -246,6 +246,19 @@ PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `in
 - **Karar:** Tek bir başarısız okuma durum değişikliği sayılmaz; akış açık kalır, sonraki tikte yeniden denenir. Art arda **5** başarısız okumada (≈5 sn) sunucu akışı kapatır; istemci `stale` olur, EventSource yeniden bağlanır, açılış okuması da başarısızsa JSON hata alır ve istemci kendi geri çekilmesine (1 sn ×2, en çok 30 s) geçer. Hata günlüğe kesinti başına bir kez (`warn`), kapanışta bir kez (`error`) ve toparlanınca bir kez (`info`) yazılır. Kapanışta `cmd/api` `RegisterOnShutdown` ile `httpapi.Deps.Shutdown` kanalını kapatır: açık içerik ve durum akışları hemen biter, sıradan istekler zarifçe tamamlanır (`BaseContext` iptali bunları da keseceği için seçilmedi).
 - **Bedel:** 5 sn'den kısa kesintilerde istemci yine "Canlı" görür (sayılar en çok birkaç saniye eskidir). Kapanışta yarıda kesilen içerik akışı terminal olay almaz; istemci bunu "kesildi" olarak gösterir (sse-events §1.3), kilit bırakılır.
 
+### D55 — Mock testleri için ikinci, yalıtılmış mock provider: `mockprovider-solo` (P5)
+- **Bağlam:** Worker `compose.test.yml`'e girince diğer testlerin kampanyalarını da aynı mock provider'a göndermeye başladı. Mock provider'ın kendi E2E testleri (REQ-MOCK) mock'u sıfırlayıp `/admin/messages` ve `/admin/requests`'i okuduğu için bu trafik onları bozdu (PR #84, #89).
+- **Karar:** Test yığınına worker trafiği almayan ikinci bir örnek eklendi: `mockprovider-solo` (varsayılan hata oranları, admin açık). Test konteyneri onu `E2E_MOCKPROVIDER_SOLO_URL` ile bulur; mock provider testleri buna, gönderim testleri worker'ın kullandığı `mockprovider`'a gider (orada `MOCK_PROVIDER_RATE_LIMIT_RATE=0`). REQ-MOCK-01'e bunu adlandıran bir cümle eklendi.
+- **Bedel:** Test yığınında bir servis daha; `docker compose up` (demo) değişmedi, tek mock provider kullanır.
+
+### D56 — P5 sahip kararları: test sınırları ve kapsam (P5)
+PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
+- **Çok süreçli üretim kilidi** (REQ-SND-01), ikinci bir API konteyneri yerine aynı veritabanını kullanan iki `campaign.NewService` örneğiyle test edilir; kira bitişi ortak sahte saatle denenir (bekleme yok).
+- **Hız sınırının E2E kanıtı** (REQ-SND-02) "gerçek mock provider hiç 429 dönmedi"dir (`/admin/requests`; test yığınında mock'un kendi rastgele 429'u kapalı). 1 sn'lik pencere başına kesin sayım yalnız sahte saatli birim testtedir; ağ gecikmesi E2E'de kesin sayımı güvenilmez yapar (D5).
+- **ActivityFeed** takip ekranında zorunlu değildir; REQ-TRK-01 yalnız sayaçları ister ve ekran yalnız sayaçları gösterir.
+- **Responsive düzen** (DESIGN.md V13) için REQ ve otomatik test yoktur; kapı 375/768/1280 px'te tüm ekranların ekran görüntüsüdür (PLAN §1.1 P5 satırı, PR #94).
+- **Bedel:** İkinci API sürecinin gerçek ağ/kapsayıcı davranışı ve E2E'deki pencere başına sayım otomatik denetlenmez; responsive gerilemeleri yalnız elle fark edilir.
+
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |
@@ -262,4 +275,8 @@ PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `in
 | Üretim kirası API süreçlerinin saatine dayanır (D52) | Süreçler arası saat kayması kiranın 120 sn'lik bitişini kaydırır; tek makinede/NTP ile ihmal edilebilir |
 | Kitle taraması eşleşen satırları Go'ya çeker | Seed ölçeğinde (5000) yeterli; üç en uzun değer SQL'de toplanarak ölçeklenebilir |
 | Canlı durum akışı 5 sn'den kısa okuma kesintisini göstermez (D54) | Sayaçlar o sürede "Canlı" kalır; 5 art arda hatada akış kapanır ve istemci `stale` olur |
+| Gönderim anı uzunluk denetimi iki kanalı birlikte denetler | `CheckRendered` alıcının SMS ve konu metnini birlikte denetler; bir kanaldaki taşma diğer kanalın teslimatını da `content_too_long` ile başarısız yapar. Kanal bazlı denetim sözleşme değişikliği gerektirir |
+| Gözlenen gönderim hızı kanal başına ~50/sn | Elle yapılan denemede; 100/sn sınırının altında, otomatik hız ölçümü yok |
+| Dokunma hedefleri genişliğe bağlı (`max-lg:`), `pointer: coarse`'a değil | Test viewport'larında doğrulanabilsin diye (DESIGN.md §8.6); dar masaüstü penceresi de 44 px hedef görür |
+| İçerik ekranının eylem şeridi mobilde yapışkan değil | Sayfa sonunda kalır; Onay ekranının `ApprovalBar`'ı yapışkandır |
 | Kanal kilidi kaybında en çok bir partilik fazla gönderim (D53) | Kilit parti başında denetlenir; kayıptan sonra eski lider en çok bir partiyi (varsayılan 50 istek) bitirir; mesaj tekrarı yok (Idempotency-Key) |
