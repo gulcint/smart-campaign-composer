@@ -34,7 +34,7 @@ seed (Go, tek seferlik job)  ──▶  PostgreSQL
 ```
 
 - `cmd/api`, `cmd/worker`, `cmd/mockprovider`, `cmd/seed` — ayrı binary'ler, aynı Go modülü.
-- **Kampanya durum makinesi (VARSAYIM):** `draft → audience_ready → content_ready → approved → sending → completed` (kampanya düzeyinde `failed` yok; teslimat hataları `failed` teslimat olarak sayılır, kampanya yine `completed` olur; ayrıntı ve geri düşmeler `docs/requirements.md`). Onaysız `sending` yok [DOK]; onaydan sonra içerik düzenlenirse `content_ready`'e geri düşer (REQ-APR-03).
+- **Kampanya durum makinesi (VARSAYIM):** `draft → audience_ready → content_ready → approved → sending → completed` (kampanya düzeyinde `failed` yok; teslimat hataları `failed` teslimat olarak sayılır, kampanya yine `completed` olur; ayrıntı ve geri düşmeler `docs/requirements.md`). Onaysız `sending` yok [DOK]; onaydan sonra içerik düzenlenirse `content_ready`'e geri düşer (REQ-APR-03). P7'de `approved ⇄ scheduled → sending` eklenir (§9.2).
 
 ### 0.3 Kuyruk kararı: neden PostgreSQL
 
@@ -47,7 +47,7 @@ seed (Go, tek seferlik job)  ──▶  PostgreSQL
 | 100 msg/sn/kanal [DOK] | Kanal başına tek dispatcher (`pg_try_advisory_lock`) + token bucket (burst = 1, yani istek başlangıçları arasında en az 10 ms; her yarı-açık 1 sn'lik pencerede ≤ 100) | Dağıtık limiter daha doğal — Redis'in tek gerçek avantajı |
 | Ölçek | Birkaç bin kullanıcı için fazlasıyla yeterli | Milyonlarca mesajda avantajlı |
 | Kurulum ve test | Tek bağımlılık | Ek servis + tutarlılık testleri |
-| Bonus: zamanlanmış gönderim | `next_attempt_at = scheduled_at` | Ayrı mekanizma |
+| Bonus: zamanlanmış gönderim | Kampanyada `scheduled_at` + worker'da zamanı gelen kampanyayı başlatan döngü; teslimatlar zamanı gelince aynı gönderim transaction'ıyla doğar (P7, §9.2) | Ayrı mekanizma |
 
 - İşler `FOR UPDATE SKIP LOCKED` ile alınır. Provider'a `Idempotency-Key` (= delivery id) gönderilir; mock provider bununla tekilleştirir → "provider kabul etti, worker durumu yazamadan çöktü" durumunda retry tekrar göndermez.
 - Kendi küçük implementasyonumuz (River gibi kütüphane yerine) — VARSAYIM; gerekçe: `deliveries` tablosu zaten gerekli ve review görüşmesinde her satır savunulabilir olmalı.
@@ -94,7 +94,7 @@ Doküman "her şeyi yapmak yerine çekirdek akışı sağlam yap" diyor; fronten
 | 4 | **P4 İçerik + onay dilimi** | SMS/email üretimi (stream protokolü 0.5), limitler, kişiselleştirme, düzenleme, yeniden doğrulama, sürümlü onay + ekranlar | REQ-CNT (01–05), REQ-APR, REQ-AI-01 (içerik), REQ-UI-01 testleri yeşil |
 | 5 | **P5 Gönderim + takip dilimi** | **İlk iş, `Send`'den önce: içerik üretim kilidi veritabanına taşınır** (D41, D47; kampanya satırındaki kiraya taşındı, D52). Üretim işareti veritabanında tutulur ve kampanya satır kilidiyle atomik denetlenir; `Send` (üretim, düzenleme ve onayla birlikte) aynı transaction'da kontrol eder, kural birden fazla API sürecinde de geçerlidir (REQ-SND-01). Ardından `deliveries` kuyruğu, dispatcher, rate limit, retry, idempotency, mock provider, SSE dashboard, metrics + ekran (ActivityFeed yok, yalnız sayaçlar; D56). Test yığınına worker trafiği almayan ikinci mock provider (`mockprovider-solo`, D55). İçerik ekranında "Claude düşünüyor" bekleme durumu (ilk parçadan önce). **Responsive tasarım güncellemesi** (DESIGN.md V13) P5 içinde kendi branch'inde, `feat/p5-responsive` (DESIGN.md §8: tablet 768–1023 kuralları, Brief/Kitle/Onay ekranlarının mobil düzeni, tablo/liste davranışı, `viewport` meta; tüm ekranlarda uygulama) | REQ-SND (01–05), REQ-TRK-01/02, REQ-MOCK, REQ-SEC-01 testleri yeşil; responsive (`feat/p5-responsive`): 375/768/1280 px genişliklerinde tüm ekranların ekran görüntüsü kanıtı PR'da (REQ yok, otomatik test yok) |
 | 6 | **P6 Sertleştirme + teslim** | Uçtan uca test, güvenlik taraması, `README.md`, `DECISIONS.md`, session export'ları, değerlendirici erişimi · **Kişisel bilgi temizliği** (sahip isteği, 2026-10-28): izlenen dosyalar ve `ai-sessions/` export'larından ad-soyad, kişisel e-posta (gmail) ve yerel bilgisayar yolları (`/Users/<kullanıcı>/…`) temizlenir; temizleme betiği (`make sanitize-sessions`) ve hook desenleri bu üç türü kapsayacak şekilde genişletilir. Commit meta verisi: GitHub'da e-posta gizliliği açılır ki squash merge commit'leri noreply adresiyle yazılsın; geçmişteki commit'lerin yazar adı/e-postası **yeniden yazılmaz** (sahip kararı, 2026-10-28, `DECISIONS.md` D58). GitHub kullanıcı adı (`gulcint`) repo adresi ve Go modül yolunun parçası olduğu için kalır | REQ-DLV-03, REQ-DLV-04 + REQ eşleme raporu boş + doğrulayıcı onayı + teslim kontrol listesi; kişisel bilgi taraması (izlenen dosyalarda `git grep` ile ad, e-posta, `/Users/` yolu; yeni commit'lerde `git log --format='%an <%ae>'`) temiz |
-| 7 | Tampon / bonus | Bonus yalnızca P6 tamamsa (zamanlanmış gönderim en ucuzu) | — |
+| 7 | **P7 Bonus** (`slice/p7-schedule`) | Case'in "Bonus (isteğe bağlı)" listesinden iki kırım (§9): **P7a Zamanlanmış gönderim** — onaylı kampanya ileri bir zamana planlanır, iptal/yeniden planlanır, zamanı gelince worker gönderimi başlatır; Onay ekranında "şimdi / ileri tarihte", Takip ekranında planlanan saat + geri sayım (REQ-SCH-01..04) · **P7b CI pipeline ✅** — P0'da kuruldu, P2–P6'da genişletildi ve sadeleştirildi (§1.2, §2.3, D27, D51); P7'de yeni iş yok. A/B varyantları ve dile göre içerik **kapsam dışı** (sahip eklemedikçe) | P7a: REQ-SCH (01–04) testleri yeşil, `make db-roundtrip` yeşil, §3.2 listesi; P7b: `main` ruleset'i `ci-ok`'u zorunlu tutuyor (kanıt: son merge'lerin `ci-ok` sonucu) |
 
 Her faz sonunda `main` üzerinde `p<N>-done` etiketi.
 
@@ -452,3 +452,148 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 - [ ] `ai-sessions/` + `INDEX.md`: tüm session'lar, temizlenmiş
 - [ ] Kişisel bilgi yok: izlenen dosyalarda ve session export'larında ad-soyad, kişisel e-posta ve yerel bilgisayar yolları temizlendi; squash merge commit'leri noreply adresiyle yazılıyor (geçmiş commit'ler yeniden yazılmaz, D58)
 - [ ] REQ eşleme raporu: testi olmayan REQ yok
+- [ ] P7 yapıldıysa: `p7-done` etiketi, REQ-SCH testleri yeşil, `README.md` bonuslarda CI'ın yanında zamanlanmış gönderimi anar (§9.6); yapılmadıysa P7a dalı `main`'e girmemiştir
+
+---
+
+## 9. P7 — Bonus fazı
+
+> **Kaynak:** case dokümanının "Bonus (isteğe bağlı)" bölümü: zamanlanmış gönderim, A/B varyantları, kullanıcının diline göre içerik, CI pipeline. Bonus yalnızca çekirdek akış sağlamsa yapılır [DOK]; P6 kapısı (`p6-done`) P7'nin ön koşuludur.
+> **Kapsam [SEN]:** P7a zamanlanmış gönderim (yapılacak) ve P7b CI pipeline (yapıldı). **A/B varyantları ve dile göre içerik kapsam dışıdır**; sahip eklerse ayrı kırım ve ayrı REQ alanı alır (`language` seed alanı §5.2'de hazır bekler).
+
+### 9.1 P7b — CI pipeline ✅ (yapıldı, P0–P6)
+
+Yeni iş yok; plan bonusun karşılandığını açıkça göstermek için kırımı listeler.
+
+| Ne var | Nerede |
+|---|---|
+| GitHub Actions iş akışı, her PR'da ve `main`'e push'ta | `.github/workflows/ci.yml` — job'lar: `detect`, `pr-policy`, `repo-policy`, `go-lint`, `api-contract`, `web`, `sql-lint`, `db-roundtrip`, `hook-tests`, `make-test`, `gitleaks`, `ai-sessions-scan`, `govulncheck`, kapı job'ı `ci-ok` |
+| Sunucu tarafı zorlama | `main` ruleset'i: PR + `ci-ok` zorunlu, branch güncel, force push/silme yasak, bypass yok (§1.6) |
+| Ajan merge kuralı | `scripts/claude/guard-git.sh`: `gh pr merge` yalnız açık PR numarası + `--squash` ve `ci-ok` yeşilken (§2.3) |
+| Yalnız doküman PR'ında hafif yol | `detect` → `heavy=false`; politika ve sır job'ları her zaman koşar (§1.2, D51) |
+| Bilinçli çıkarılan/ertelenen kontroller | `web-image`, `compose-ports`, `actionlint` CI'dan çıkarıldı (D27 güncellemesi, D51); CodeQL ve imaj dosya sistemi taraması eklenmedi (D27). P7 bunları geri getirmez |
+
+**Kapı:** son `main` merge'lerinde `ci-ok` yeşil; `make test` CI'da key'siz koşuyor (§4.3). P7a yeni bir CI job'ı gerektirmez: migration `db-roundtrip`, sözleşme `api-contract`, testler `make-test` ile zaten koşar.
+
+### 9.2 P7a — Zamanlanmış gönderim: tasarım
+
+**Hedef:** Onaylı kampanya "şimdi" yerine ileri bir zamana planlanabilir; o zaman gelince gönderim, bugünkü `POST /send` ile **birebir aynı** transaction'la başlar. Kuyruk, hız sınırı, retry ve idempotency değişmez.
+
+**Seçenekler (karar D61 olarak `DECISIONS.md`'ye yazılır):**
+
+| | A — Teslimatlar planlamada doğar, `next_attempt_at = scheduled_at` | **B — Plan kampanyada durur, teslimatlar zamanı gelince doğar (seçilen)** |
+|---|---|---|
+| Kitle ve izin | Planlama anında dondurulur; sonradan izin veren eklenmez | Gönderim anında okunur, anlık gönderimle aynı anlam |
+| İptal / yeniden planlama | Kuyruktan satır silmek veya hepsinin `next_attempt_at`'ini güncellemek (binlerce satır) | Tek satır güncellemesi |
+| `scheduled → sending` geçişini kim yapar | Claim sıcak yolu kampanya satırını kilitlemek zorunda kalır, ya da yine ayrı bir döngü gerekir | Ayrı, küçük bir döngü; claim'e dokunulmaz |
+| Yeni kod | Yok gibi görünür ama durum geçişi ve iptal karmaşıklaşır | Bir döngü + bir paylaşılan fonksiyon |
+
+A, §0.3'te ilk düşünülen yoldu; B'nin seçilme nedeni gönderim anlamının "şimdi gönder" ile aynı kalması ve iptalin kuyruğa dokunmamasıdır.
+
+**Veri modeli — migration `0008_campaign_schedule` (up + down):**
+- `campaigns.scheduled_at timestamptz NULL`. Durum kümesine `scheduled` eklenir (`campaigns_state_check`).
+- Kısıtlar: `state = 'scheduled'` ⇒ `scheduled_at IS NOT NULL`; `draft…approved` ⇒ `scheduled_at IS NULL`; `sending`/`completed`'da planlı başlamışsa dolu kalır (geçmiş bilgisi: "planlanan 10:00, başladı 10:00:01"). `campaigns_approval_present_check` `scheduled`'ı da kapsar.
+- Durum tetikleyicisi (`campaigns_state_transition`, `CREATE OR REPLACE`): yeni geçişler `approved → scheduled`, `scheduled → approved` (iptal), `scheduled → sending` (zamanı geldi veya "şimdi gönder").
+- Kısmi indeks: `campaigns (scheduled_at) WHERE state = 'scheduled'` — döngünün sorgusu yalnız bunu tarar.
+- Down: önce `scheduled` kampanyalar `approved`'a döndürülür (yeni tetikleyici buna izin verir), sonra eski tetikleyici fonksiyonu ve kısıtlar geri yüklenir, kolon `-- allow-destructive` ile düşer. `make db-roundtrip` hedefi zaten var (P2); pre-push ve CI `db-roundtrip` job'ı yeni migration'ı `up → down → up` koşar, şema diff'i boş olmalı. Migration değişmezliği gereği 0003 düzenlenmez.
+
+**Durum makinesi (D4 genişler):**
+
+```
+approved ──PUT /schedule──▶ scheduled ──zamanı geldi (worker) / POST /send──▶ sending ──▶ completed
+    ▲                           │  ▲
+    └──────DELETE /schedule─────┘  └── PUT /schedule (yeniden planlama, durum aynı)
+```
+
+- `scheduled`'da düzenleme, segment/içerik üretimi ve onay **409 `invalid_state`** (VARSAYIM). Pazarlamacı önce iptal eder (`approved`'a döner), sonra bugünkü kurallar geçerlidir: düzenleme onayı düşürür (REQ-APR-03). Gerekçe: planı sessizce düşüren bir düzenleme, "planlandı" sanılan kampanyanın hiç gitmemesine yol açar; açık iptal savunulabilir. (Alternatif: düzenleme planı da düşürür — açık soru 2.)
+- Önizleme (`preview`) `scheduled`'da serbesttir.
+- **Üretim kilidi (D41, D52):** `PUT /schedule` gönderimle aynı denetimi kendi satır kilitli transaction'ında yapar (`LockedCampaign.CheckNoGeneration` → 409 `generation_in_progress`). `scheduled`'da üretim başlatılamadığı için (denetim sırası `invalid_state` › `generation_in_progress`) zamanı gelen kampanyada kira bulunamaz; döngü yine de aynı denetimi savunma amaçlı çağırır. Planlama ile üretim başlangıcı aynı anda gelirse satır kilidi yüzünden yalnız biri kabul edilir.
+
+**API (`docs/contracts/openapi.yaml`):**
+- `PUT /api/campaigns/{campaign_id}/schedule`, gövde `{"content_version_id", "scheduled_at"}` → **200** `{"campaign_id", "state": "scheduled", "content_version_id", "scheduled_at"}`. `approved`'da planlar, `scheduled`'da yeniden planlar. Teslimat oluşturmaz.
+- `DELETE /api/campaigns/{campaign_id}/schedule` → **200** `{"campaign_id", "state": "approved", "scheduled_at": null}`; `scheduled` dışında 409 `invalid_state` (gönderim başlamışsa iptal yok).
+- `POST /send` artık `approved` **veya** `scheduled`'da kabul edilir ("şimdi gönder" planı aynı transaction'da düşürür; iki istekli iptal+gönder yarışı yok). Diğer davranışı ve 202 gövdesi değişmez.
+- `Campaign` ve `CampaignStatus` şemalarına `scheduled_at` (nullable, UTC `Z`) eklenir; `CampaignState` enum'una `scheduled`. Bu bir yanıt enum'u eklemesidir (`oasdiff` uyarısı, kırıcı değil; D41'deki gibi).
+- **Doğrulama (422 `validation_failed`, yol `scheduled_at`):** RFC 3339, **ofset zorunlu** (`Z` veya `+03:00`; ofsetsiz yerel saat `invalid_value`); `scheduled_at` ≥ şimdi + `SCHEDULE_MIN_LEAD` (varsayılan 1 dk, alan kodu `schedule_too_soon`); ≤ şimdi + 30 gün (`schedule_too_far`). Saklama ve yanıt UTC. "Şimdi" enjekte `clock.Clock`'tur.
+- **Denetim sırası** (gönderimle aynı kalıp, D42): biçimsiz path 404 › gövde 400/413/422 › 404 `campaign_not_found` › 404 `content_version_not_found` › 409 `generation_in_progress` › 409 `invalid_state` › 409 `stale_content_version`.
+- Seçenek olarak `POST /send`'e isteğe bağlı `scheduled_at` alanı da düşünüldü; reddedilme nedeni: `/send`'in "202 + teslimat sayıları" anlamı bozulur ve iptal/yeniden planlama için yine ayrı uç gerekir (açık soru 1).
+
+**Saat dilimi (VARSAYIM):** API yalnız mutlak zaman alır (ofsetli RFC 3339), veritabanı `timestamptz`, yanıtlar UTC. Arayüz zamanı **Europe/Istanbul** olarak girer ve gösterir (etiket "TSİ"), tarayıcının saat diliminden bağımsız; dönüşüm `Intl` ile IANA bölgesi üzerinden yapılır (Türkiye 2016'dan beri sabit UTC+3, yine de sabit ofset yazılmaz).
+
+**Worker davranışı (`cmd/worker`):**
+- Yeni döngü `campaign.Scheduler` (dispatcher'lardan ayrı goroutine): her `SCHEDULER_INTERVAL`'de (varsayılan 1 sn) bir transaction açar, `SELECT … FROM campaigns WHERE state = 'scheduled' AND scheduled_at <= $now ORDER BY scheduled_at LIMIT 10 FOR UPDATE SKIP LOCKED` ile zamanı gelenleri kilitler ve her birini **kendi transaction'ında** başlatır (biri hata verirse diğerleri bekletilmez).
+- Başlatma, `CreateDeliveries`'in gövdesinden çıkarılan paylaşılan fonksiyondur (`startSendingLocked`): aynı segment derlemesi (kampanyanın saklı referans zamanıyla), aynı izin filtresi, aynı `INSERT … UNIQUE(campaign_id, channel, customer_id)`, `state = 'sending'`, `sending_started_at = now`, kitle boşsa aynı transaction'da `completed`. API'nin `Send`'i ve döngü bu tek fonksiyonu çağırır; anlam ayrışamaz.
+- **Meşgul yoklama yok:** sorgu yalnız kısmi indeksi tarar ve iş yoksa hiçbir satır kilitlemez; dispatcher zaten 200 ms'de bir yokluyor (D5), 1 sn'lik indeksli sorgu ek yük değildir. `LISTEN/NOTIFY` reddedildi: ayrı bağlantı ve yeniden bağlanma mantığı ister, dakika hassasiyetli bir plan için kazancı yok (VARSAYIM). Hassasiyet: planlanan an + ≤ 1 sn + ilk partinin claim süresi.
+- **Çoklu worker:** advisory lock gerekmez; `SKIP LOCKED` + kilit altında durum yeniden denetimi aynı kampanyanın iki kez başlatılmasını imkânsız kılar (ikinci transaction `sending` görür, atlar). Yine de olsa `UNIQUE` kısıtı ikinci teslimat setini reddeder.
+- **Yeniden başlatma güvenliği:** bellekte zamanlayıcı yok; tek doğruluk kaynağı satırdır. Başlatma transaction'ı commit edilmeden çöken worker hiçbir iz bırakmaz, satır `scheduled` kalır, sonraki tur başlatır. Worker kapalıyken zamanı geçen kampanya, worker açılınca **geç de olsa** başlatılır (azami gecikme sınırı yok, VARSAYIM; açık soru 3); gecikme (`sending_started_at − scheduled_at`) loglanır.
+- **İptal–başlatma yarışı:** ikisi de kampanya satır kilidini alır; önce commit eden kazanır. Döngü önce kazanırsa `DELETE /schedule` 409 `invalid_state` alır ("gönderim başladı"); iptal önce kazanırsa döngü satırı `approved` görür ve atlar.
+- **Değişmeyenler:** idempotency anahtarı ve `Idempotency-Key` (= teslimat id), kanal başına ≤ 100/sn (aynı anda zamanı gelen birçok kampanya yalnız kuyruğu uzatır), retry ve 429 bütçesi (`first_attempt_at` ilk claim'de dolar, planlanan bekleme bütçeyi tüketmez), claim'deki izin yeniden okuması (REQ-AUD-04).
+- **Metrics (`docs/contracts/metrics.md`):** `scc_campaigns_scheduled` (gauge, `scheduled` durumundaki kampanya sayısı) ve `scc_scheduled_sends_started_total` (counter). Sağlık uçları değişmez.
+
+**Arayüz (`docs/contracts/ui.md`, DESIGN.md):**
+- **Onay ekranı:** `ConfirmDialog kind="send"` iki seçenek alır: "Şimdi gönder" (varsayılan, bugünkü davranış) ve "İleri tarihte gönder" (tarih + saat, TSİ). İstemci tarafı denetim API ile aynı sınırları gösterir (geçmiş/çok yakın/30 günden uzak), ama güvence API'dedir; 422 alan hatası diyalogda `field-error` olarak görünür. Başarıda `tracking` rotasına geçilir. Önerilen testid'ler: `confirm-dialog-send-now`, `confirm-dialog-send-later`, `confirm-dialog-scheduled-at` (input), onay etiketi kipine göre "Gönder" / "Planla".
+- **Takip ekranı:** kampanya `scheduled` iken sayaçlar yerine plan paneli: `schedule-panel`, `schedule-time` (`data-value` = UTC ISO, metin TSİ), `schedule-countdown` (`data-value` = kalan saniye, 1 sn'de bir; sıfıra inince "Başlatılıyor…" ve akıştan `sending` gelince sayaçlara geçer), `schedule-cancel` (iptal → `approval` rotası), `schedule-send-now` (`ConfirmDialog` → `POST /send`). `delivery-counters` için `data-state="scheduled"` eklenir. Canlı akış bugünkü gibi açılır; durum değişimi `status` olayıyla gelir. Başlamış planlı kampanyada sayaçların üstünde "Planlanan: …" satırı kalır.
+- **Onay ekranı, `scheduled` iken:** düzenleme ve onay pasiftir, açıklama "Planlı kampanyayı değiştirmek için planı iptal edin" + iptal düğmesi (ayrıntı ui.md'de).
+- i18n metinleri tek dosyada (`web/src/i18n`), LLM içeriği dışında yeni serbest metin yok.
+
+### 9.3 Gereksinimler (`docs/requirements.md`, yeni alan SCH)
+
+Test yazarı yalnız `docs/requirements.md`'den çalıştığı için (D50) testte gerekecek her ad, yol, alan kodu ve ortam değişkeni REQ metnine yazılır. "Kapsam dışı ve bonus" paragrafı güncellenir (zamanlanmış gönderim artık REQ'li; A/B ve dil kapsam dışı). Taslak kabul ölçütleri:
+
+- **REQ-SCH-01 — Gönderim ileri bir zamana planlanır · Faz P7 · [DOK] bonus + VARSAYIM tasarım:** `PUT …/schedule` istek/yanıt biçimi; `approved` → `scheduled`; teslimat oluşmaz (`deliveries.total` = 0, `status.counts.total` = 0); `scheduled_at` UTC döner, `GET /api/campaigns/{id}` ve `/status`'ta görünür; ofsetsiz zaman, `SCHEDULE_MIN_LEAD`'den yakın, 30 günden uzak → 422 ve alan kodları; tam denetim sırası; üretim sürerken 409 `generation_in_progress` (iki `campaign.NewService` örneğiyle, REQ-SND-01'deki kalıp).
+- **REQ-SCH-02 — Zamanı gelince gönderim kendiliğinden başlar · Faz P7 · VARSAYIM:** `campaign.Scheduler`'ın tek turu (`RunOnce(ctx)`; sahte saat `scheduled_at`'in öncesinde → başlatmaz, sonrasında → başlatır); başlatılan kampanyada teslimat sayıları anlık gönderimle aynı kurala uyar (kanal kitlesi, izin, tekillik); `sending_started_at` ≥ `scheduled_at`; iki eşzamanlı `RunOnce` aynı kampanyayı bir kez başlatır; başlatma transaction'ı geri alınırsa kampanya `scheduled` kalır ve sonraki turda başlar; geçmişte kalmış plan ilk turda başlar.
+- **REQ-SCH-03 — Plan iptal edilir, değiştirilir, öne alınır · Faz P7 · VARSAYIM:** `DELETE …/schedule` → `approved`, `scheduled_at` = `null`; `scheduled` dışında 409 `invalid_state`; `PUT` ile yeniden planlama; `scheduled`'da `POST /send` → 202 ve plan düşer; `scheduled`'da düzenleme, segment/içerik üretimi ve onay → 409 `invalid_state`, hiçbir sürüm/onay kaydı oluşmaz.
+- **REQ-SCH-04 — Arayüz: planlama ve geri sayım · Faz P7 · VARSAYIM:** §9.2'deki testid'ler, TSİ gösterimi (test ortamının `TZ`'sinden bağımsız), geri sayım (`vi.useFakeTimers()`), iptal ve "şimdi gönder" akışı, `delivery-counters` `data-state="scheduled"`.
+
+İzlenebilirlik tablosuna dört satır eklenir: SCH-01 `unit, integration, e2e`; SCH-02 `integration, e2e`; SCH-03 `integration, e2e`; SCH-04 `web-unit`.
+
+### 9.4 Testler katmana göre
+
+| Katman | Senaryolar |
+|---|---|
+| **Unit** | Zaman penceresi doğrulaması (sahte saat: sınırın 1 sn altı/üstü, 30 gün sınırı, ofsetsiz ve biçimsiz değer); denetim sırası; durum geçiş tablosu (`scheduled` giriş/çıkışları) |
+| **Entegrasyon (DB)** | Tetikleyici yeni geçişlere izin verir, `scheduled → content_ready` gibi yasakları 23514 ile reddeder; kısıtlar (`scheduled` ⇒ `scheduled_at` dolu); `RunOnce` sahte saatle başlatır/başlatmaz; iki eşzamanlı `RunOnce` → tek teslimat seti; iptal–başlatma yarışında tek kazanan; geri alınan başlatma sonrası yeniden deneme; iki API örneğiyle üretim kilidi |
+| **API E2E** | Key'siz: brief → segment → içerik → onay → `PUT /schedule` (yakın zaman; test yığınında `SCHEDULE_MIN_LEAD=0s`) → `scheduled` → worker başlatır → `completed`; iptal → `approved` → `POST /send` çalışır; 422/409 vakaları; yeni işlemler en az bir kez çağrılır (D30 `OPENAPI_VALIDATE=strict`) |
+| **Gönderim — gerçek mock provider** | Değişmez; planlı kampanya başladıktan sonra aynı hız/tekillik iddiaları geçerli (ek senaryo gerekmez) |
+| **Frontend (Vitest)** | Diyalog kip değişimi ve istemci denetimi; 422 alan hatası; TSİ biçimi; geri sayım ve sıfırda "Başlatılıyor…"; `status` olayıyla sayaçlara geçiş; iptal ve "şimdi gönder" |
+| **Elle** | 375/768/1280 px'de Onay diyaloğu ve Takip plan paneli ekran görüntüsü PR'da (P5 responsive kuralı) |
+
+### 9.5 Dilim akışı, sıra ve roller
+
+P2–P6 ile aynı akış (§1.2, §3): sözleşme → test → kod; hiçbir rol kendi işini onaylamaz.
+
+1. **Sözleşme** — `docs/p7-schedule-contracts` → `main` (mimar): `docs/requirements.md` (REQ-SCH-01..04, durum makinesi tablosu, HTTP 409 satırı, kapsam dışı paragrafı), `openapi.yaml`, `db-schema.md`, `go-interfaces.md` (`Service.Schedule`/`CancelSchedule`, `Scheduler.RunOnce`, store imzaları), `ui.md`, `metrics.md`, DESIGN.md'de plan paneli, `DECISIONS.md` D61 (+ bu bölümdeki VARSAYIM'lar). **Kabul:** `api-contract` yeşil; sahip REQ metnini onayladı.
+2. **Dilim branch'i** — `slice/p7-schedule` güncel `main`'den.
+3. **Testler** — `scripts/test-writer-worktree.sh origin/slice/p7-schedule test/p7-schedule`, ayrı session'da `claude --agent test-writer`; yalnız REQ-SCH kabul ölçütlerinden; eksik ad varsa "REQ eksik" döner (adım 1'e). **Kabul:** her REQ-SCH en az bir testle eşli, testler kırmızı, PR `slice`'a merge.
+4. **Backend** — `feat/p7-schedule-backend`: migration 0008 (+down), `startSendingLocked` çıkarımı, servis + HTTP uçları, `campaign.Scheduler` + `cmd/worker` bağlantısı, config (`SCHEDULE_MIN_LEAD`, `SCHEDULER_INTERVAL`), metrics. **Kabul:** Go testleri yeşil, `make db-roundtrip` yeşil, mevcut REQ-SND testleri değişmeden yeşil.
+5. **Arayüz** — `feat/p7-schedule-ui`: diyalog, Takip plan paneli, Onay ekranındaki `scheduled` görünümü, `api-types` yeniden üretimi. **Kabul:** Vitest yeşil, üç genişlikte ekran görüntüsü PR'da.
+6. **Kapı** — `slice/p7-schedule` → `main`: reviewer (`code-reviewer`; migration ve yarışlar için `security-reviewer`/mimar bakışı) raporu ve doğrulayıcı (`verifier`) kanıtı PR'da; `ci-ok` yeşilse squash merge; `p7-done` etiketi; session export'ları `ai-sessions/`'a.
+
+### 9.6 Faz kapısı (P7)
+
+- §3.2 listesinin tamamı.
+- REQ-SCH-01..04'ün her biri en az bir testle eşli ve yeşil; testsiz REQ listesi boş.
+- `make db-roundtrip` yeşil (0008 `up → down → up`, şema diff'i boş); `make test` key'siz yeşil.
+- Mevcut REQ-SND/REQ-TRK testleri değiştirilmeden yeşil (anlık gönderim anlamı korunuyor).
+- Elle kanıt: compose yığınında 2 dk sonraya planlanan kampanya planlanan dakikada `sending`'e geçer; planlıyken `docker compose restart worker` sonrası yine başlar; iptal edilen kampanya hiç teslimat üretmez.
+- `README.md` bonuslarda CI'ın yanında zamanlanmış gönderimi anar (README'yi o fazın sahibi düzenler); `DECISIONS.md` D61 güncel.
+
+### 9.7 Riskler ve VARSAYIM'lar
+
+| Konu | VARSAYIM / risk | Azaltma |
+|---|---|---|
+| Kitle anı | Gönderim anında izin ve iletişim bilgisi okunur, ama segmentin göreli pencereleri ("son 30 gün") **segment üretimindeki referans zamana** bağlı kalır (onaylanan kitle tanımı değişmez) | Arayüz planlama diyaloğunda kanal sayılarının gönderim anında değişebileceğini belirtir (açık soru 4) |
+| Planlıyken değişiklik | Düzenleme/üretim/onay 409; önce iptal | Onay ekranında açıklama + iptal düğmesi |
+| Geç başlatma | Worker kapalıyken kaçan plan açılınca başlatılır; sınır yok | Gecikme loglanır; sahip isterse azami gecikme eklenir (açık soru 3) |
+| En kısa / en uzun ufuk | `SCHEDULE_MIN_LEAD` 1 dk, ufuk 30 gün | Ortam değişkeniyle ayarlanır; testte 0 |
+| Saat dilimi | API ofsetli mutlak zaman; arayüz yalnız Europe/Istanbul | Vitest `TZ`'den bağımsız biçimi sınar |
+| Saat kayması | Başlatma worker'ın saatine, doğrulama API'nin saatine dayanır (D52'deki sınırla aynı) | Tek makine/NTP; ≤ 1 sn hassasiyet iddia edilir |
+| Durum makinesi değişikliği | Yeni durum mevcut ekranların `state` anahtarlı dallarını kırabilir | `scheduled` için her sayfada açık dal; mevcut testler değiştirilmeden yeşil kalmalı (kapı) |
+| Uzun süre açık SSE | Planlı kampanyanın Takip sayfası günlerce açık kalabilir | Bugünkü 1 sn yoklama + 15 sn keepalive yeter; sekme kapanınca akış kapanır |
+
+**Sahibe açık sorular:**
+1. Ayrı `PUT/DELETE …/schedule` uçları mı (öneri), yoksa `POST /send`'e isteğe bağlı `scheduled_at` mı?
+2. `scheduled`'da düzenleme 409 mu (öneri), yoksa düzenleme planı sessizce düşürüp `content_ready`'e mi döner?
+3. Worker kapalıyken kaçan plan: geç de olsa gönderilsin mi (öneri), yoksa belirli bir gecikmeden (ör. 1 sa) sonra gönderilmeyip işaretlensin mi?
+4. Göreli segment pencereleri planlanan ana göre yeniden mi hesaplansın? Öneri: hayır (onaylanan kitle tanımı değişmesin).
+5. Ufuk sınırları (en az 1 dk, en çok 30 gün) ve yalnız TSİ arayüzü uygun mu?

@@ -24,7 +24,7 @@ Bu README, case dokümanının başlıklarını izler: her başlıkta istenenin 
 - [Bonus](#bonus)
 - [AI araçları kullanımı](#ai-araçları-kullanımı)
 - [Değerlendirme başlıklarına göre nereye bakılır](#değerlendirme-başlıklarına-göre-nereye-bakılır)
-- [Yetiştirilemeyenler ve bilinen sınırlar](#yetiştirilemeyenler-ve-bilinen-sınırlar)
+- [Bilinen sınırlar](#bilinen-sınırlar)
 
 ## Kurulum
 
@@ -66,53 +66,59 @@ Ekranlar telefon (375 px), tablet (768 px) ve masaüstü (1280 px) genişlikleri
 ```mermaid
 sequenceDiagram
   actor M as Pazarlamacı
-  participant W as web
+  participant W as web (nginx)
   participant A as api
-  participant L as Claude (LLMClient)
+  participant L as LLMClient
   participant D as PostgreSQL
   participant K as worker
   participant P as mockprovider
 
-  M->>W: brief
-  W->>A: kitle iste
-  A->>L: segment kuralı üret
-  L-->>A: kural (JSON)
-  A->>A: şemaya göre doğrula
+  M->>W: brief yazar
+  W->>A: POST /api/campaigns
+  W->>A: POST /api/campaigns/{id}/segment
+  A->>L: segment kuralı üret (tool use)
+  L-->>A: kural (JSON), api şemaya göre doğrular
   opt geçersiz
-    A->>L: hata mesajıyla tek onarım turu
+    A->>L: hata alanlarıyla tek onarım turu (en çok 2 deneme)
     L-->>A: düzeltilmiş kural
   end
-  A->>D: parametreli sorgu (kural SQL olmaz)
-  D-->>A: kişi sayıları
-  A-->>W: kitle
-  W->>A: mesajları üret
-  A->>L: SMS + email üret
-  A-->>W: metin parçaları, sonra doğrulama sonucu (SSE)
-  M->>W: düzenle, onayla, gönder
-  W->>A: onay ve gönder
-  A->>D: teslimatları tek işlemde kuyruğa yaz
-  K->>D: kuyruktan iş al (SKIP LOCKED)
-  K->>P: hız sınırıyla gönder (Idempotency-Key)
-  P-->>K: 2xx, 429 veya hata
-  K->>D: sonucu yaz ya da retry planla
-  W->>A: canlı durumu dinle (/events)
-  A->>D: sayaçları yokla (1 sn)
-  A-->>W: canlı durum (SSE)
+  A->>D: parametreli sayım sorgusu, kural kaydı (audience_ready)
+  A-->>W: 200 kural ve kitle sayıları
+  W->>A: POST /api/campaigns/{id}/content
+  A->>L: SMS + email üret (akış)
+  A-->>W: SSE delta olayları, sonra validated
+  A->>D: içerik sürümü kaydı (content_ready)
+  M->>W: önizler, gerekirse düzenler (POST .../content-versions)
+  W->>A: POST /api/campaigns/{id}/approve (approved)
+  W->>A: POST /api/campaigns/{id}/send
+  A->>D: tek işlemde deliveries satırları + sending
+  A-->>W: 202 Accepted
+  K->>D: kanal advisory lock, FOR UPDATE SKIP LOCKED ile en çok 50 iş (kira 60 sn)
+  K->>P: POST /v1/{sms|email}/messages, Idempotency-Key, kanal başına ≤100/sn
+  P-->>K: 202, 429 + Retry-After veya 5xx
+  K->>D: sent, retry planı veya failed (son teslimatla completed)
+  W->>A: GET /api/campaigns/{id}/events
+  loop her 1 sn
+    A->>D: durum sayaçlarını oku
+    A-->>W: SSE snapshot, status, completed
+  end
 ```
 
 Kampanya şu durumlardan geçer. Kampanya düzeyinde hata durumu yoktur; tek tek mesaj hataları sayılarda görünür (D4):
 
 ```mermaid
 stateDiagram-v2
-  [*] --> draft
-  draft --> audience_ready: kitle hazır
-  audience_ready --> content_ready: mesajlar doğrulandı
-  content_ready --> approved: onaylandı
-  approved --> content_ready: düzenlendi / yeniden üretildi
-  content_ready --> audience_ready: kitle yeniden üretildi
-  approved --> audience_ready: kitle yeniden üretildi
-  approved --> sending: gönder
-  sending --> completed: hepsi sonuçlandı
+  [*] --> draft: POST /api/campaigns
+  draft --> audience_ready: POST .../segment
+  audience_ready --> audience_ready: POST .../segment
+  content_ready --> audience_ready: POST .../segment
+  approved --> audience_ready: POST .../segment
+  audience_ready --> content_ready: POST .../content veya .../content-versions
+  content_ready --> content_ready: POST .../content veya .../content-versions
+  approved --> content_ready: POST .../content veya .../content-versions
+  content_ready --> approved: POST .../approve
+  approved --> sending: POST .../send
+  sending --> completed: son teslimat sonuçlanınca
   completed --> [*]
 ```
 
@@ -159,24 +165,28 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-  web["web (Vue + nginx)"]
-  api["api"]
-  llm["LLMClient<br/>Claude veya sahte"]
-  db[("PostgreSQL<br/>kuyruk dahil")]
+  browser["tarayıcı"]
+  web["web (Vue + nginx)<br/>127.0.0.1:8081"]
+  api["api<br/>127.0.0.1:8080"]
+  llm["LLMClient<br/>Claude API veya sahte LLM"]
+  db[("PostgreSQL 16<br/>kuyruk dahil")]
   migrate["migrate"]
   seed["seed<br/>5000 sahte müşteri"]
   worker["worker<br/>kanal başına tek dispatcher"]
-  mock["mockprovider"]
+  mock["mockprovider<br/>:8090"]
 
-  web -- "/api isteklerini aktarır" --> api
-  api -- "içerik akışı (SSE)" --> web
-  api -- "canlı durum akışı (SSE)" --> web
+  browser -- "http" --> web
+  web -- "/api/ proxy_pass" --> api
+  api -- "içerik akışı ve canlı durum (SSE)" --> web
   api --> llm
   api --> db
   migrate --> db
   seed --> db
-  worker -- "kuyruktan iş al, sonucu yaz" --> db
+  worker -- "SKIP LOCKED ile iş al, sonucu yaz" --> db
   worker -- "≤100/sn, retry" --> mock
+  migrate -.->|"önce"| seed
+  seed -.->|"önce"| api
+  seed -.->|"önce"| worker
 ```
 
 - **api:** kampanya, kitle, içerik, onay ve gönderim uçları; içerik ve canlı durum için SSE (D12).
@@ -239,17 +249,7 @@ Session export'ları API key ve kişisel bilgilerden temizlenerek [`ai-sessions/
 | Frontend | `web/src/`, [`DESIGN.md`](DESIGN.md), [`docs/contracts/ui.md`](docs/contracts/ui.md) |
 | Test ve kod kalitesi | `test/`, `internal/**/*_test.go`, `web/tests/`, `.github/workflows/`, [`docs/requirements.md`](docs/requirements.md) |
 
-## Yetiştirilemeyenler ve bilinen sınırlar
-
-Henüz yapılmayanlar:
-
-- Tarayıcıdan uçtan uca test yok (API düzeyinde var: `test/e2e`, key'siz tam kampanya brief → `completed`).
-- CodeQL ve imaj taraması yok (D27); CI `web-image`, `compose-ports` ve `actionlint` kontrollerini çalıştırmaz (D27, D51).
-- Bonuslardan yalnızca CI yapıldı.
-- Kampanya için kanal seçimi yok: kişi izin verdiği her kanaldan mesaj alır (case iki kanalı birlikte ister, D59).
-- Swagger UI gibi etkileşimli API dokümanı yok (sahip kararıyla kaldırıldı, D36).
-
-Bilinen sınırlar:
+## Bilinen sınırlar
 
 - Üretim kilidi kampanya satırında en çok 120 sn'lik bir kiradır; bitişi API süreçlerinin saatine dayanır, süreçler arası saat kayması bitişi o kadar kaydırır (D52).
 - Kanal kilidi her partinin başında denetlenir; kilit kaybolursa eski gönderici en çok bir partiyi (varsayılan 50 istek) bitirir, o kısa sürede kanalda bir partilik fazla gönderim başlangıcı olabilir. Aynı mesaj yine iki kez gitmez (D53).
