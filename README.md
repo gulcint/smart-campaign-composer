@@ -24,7 +24,7 @@ Bu README, case dokümanının başlıklarını izler: her başlıkta istenenin 
 - [Bonus](#bonus)
 - [AI araçları kullanımı](#ai-araçları-kullanımı)
 - [Değerlendirme başlıklarına göre nereye bakılır](#değerlendirme-başlıklarına-göre-nereye-bakılır)
-- [Yetiştirilemeyenler ve bilinen sınırlar](#yetiştirilemeyenler-ve-bilinen-sınırlar)
+- [Bilinen sınırlar](#bilinen-sınırlar)
 
 ## Kurulum
 
@@ -239,17 +239,7 @@ Session export'ları API key ve kişisel bilgilerden temizlenerek [`ai-sessions/
 | Frontend | `web/src/`, [`DESIGN.md`](DESIGN.md), [`docs/contracts/ui.md`](docs/contracts/ui.md) |
 | Test ve kod kalitesi | `test/`, `internal/**/*_test.go`, `web/tests/`, `.github/workflows/`, [`docs/requirements.md`](docs/requirements.md) |
 
-## Yetiştirilemeyenler ve bilinen sınırlar
-
-Henüz yapılmayanlar:
-
-- Tarayıcıdan uçtan uca test yok (API düzeyinde var: `test/e2e`, key'siz tam kampanya brief → `completed`).
-- CodeQL ve imaj taraması yok (D27); CI `web-image`, `compose-ports` ve `actionlint` kontrollerini çalıştırmaz (D27, D51).
-- Bonuslardan yalnızca CI yapıldı.
-- Kampanya için kanal seçimi yok: kişi izin verdiği her kanaldan mesaj alır (case iki kanalı birlikte ister, D59).
-- Swagger UI gibi etkileşimli API dokümanı yok (sahip kararıyla kaldırıldı, D36).
-
-Bilinen sınırlar:
+## Bilinen sınırlar
 
 - Üretim kilidi kampanya satırında en çok 120 sn'lik bir kiradır; bitişi API süreçlerinin saatine dayanır, süreçler arası saat kayması bitişi o kadar kaydırır (D52).
 - Kanal kilidi her partinin başında denetlenir; kilit kaybolursa eski gönderici en çok bir partiyi (varsayılan 50 istek) bitirir, o kısa sürede kanalda bir partilik fazla gönderim başlangıcı olabilir. Aynı mesaj yine iki kez gitmez (D53).
