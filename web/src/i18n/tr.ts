@@ -47,7 +47,7 @@ export const tr = {
 
   // --- Brief page ---
   'brief.titleLead': 'Kampanyanı',
-  'brief.titleAccent': 'tek cümleyle anlat',
+  'brief.titleAccent': 'kendi sözlerinle anlat',
   'brief.subtitle': 'Kitleyi ve mesajları Claude önerir, son kararı sen verirsin.',
   'brief.readonlyTitle': 'Kampanya brief’i',
   'brief.inputLabel': 'Kampanya brief’i',
