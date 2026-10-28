@@ -36,7 +36,7 @@ type DeliveryStatsSource interface {
 var (
 	channels       = []string{"sms", "email"}
 	failureReasons = []string{"provider_rejected", "max_attempts_exceeded", "rate_limit_budget_exhausted", "content_too_long", "recipient_unavailable"}
-	campaignStates = []string{"draft", "audience_ready", "content_ready", "approved", "sending", "completed"}
+	campaignStates = []string{"draft", "audience_ready", "content_ready", "approved", "scheduled", "sending", "completed"}
 )
 
 const scrapeTimeout = 2 * time.Second
