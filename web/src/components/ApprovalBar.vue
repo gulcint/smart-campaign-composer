@@ -1,12 +1,13 @@
 <script setup lang="ts">
 // ui.md §3.17 (REQ-APR-01, -03, REQ-CNT-04, -05): approve / send decision panel. The first
-// matching state wins: approved › stale › submitting › ready › disabled (with a visible reason).
+// matching state wins: scheduled (P7a) › approved › stale › submitting › ready › disabled (with a visible reason).
 // It does not position itself: ApprovalPage pins its wrapper inside the summary card (DESIGN.md §8.4).
-import { ArrowUpRight, CircleCheck, Info, Send, TriangleAlert } from '@lucide/vue'
+import { ArrowUpRight, CalendarClock, CircleCheck, Info, Send, TriangleAlert } from '@lucide/vue'
 import { computed, useId } from 'vue'
 
 import type { CampaignState, VersionStatus } from '@/api/types'
 import { t } from '@/i18n'
+import { formatTsi } from '@/lib/schedule'
 
 import Button from './Button.vue'
 
@@ -19,14 +20,21 @@ const props = withDefaults(
     dirty: boolean
     submitting?: boolean
     stale?: boolean
+    scheduledAt?: string | null
   }>(),
-  { submitting: false, stale: false },
+  { submitting: false, stale: false, scheduledAt: null },
 )
-const emit = defineEmits<{ approve: []; send: [] }>()
+const emit = defineEmits<{
+  approve: []
+  send: []
+  'cancel-schedule': []
+  'to-tracking': []
+}>()
 
 const reasonId = useId()
 
 const state = computed(() => {
+  if (props.campaignState === 'scheduled') return 'scheduled'
   if (props.campaignState === 'approved' && !props.stale) return 'approved'
   if (props.stale) return 'stale'
   if (props.submitting) return 'submitting'
@@ -67,7 +75,18 @@ function onApprove() {
     class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
   >
     <p
-      v-if="state === 'stale'"
+      v-if="state === 'scheduled'"
+      data-testid="approval-scheduled-note"
+      :data-value="scheduledAt ?? undefined"
+      class="flex items-center gap-2 text-body-sm text-ink-700"
+    >
+      <CalendarClock class="size-5 shrink-0 text-info" aria-hidden="true" />
+      <span>{{
+        t('approval.scheduledNote', { time: scheduledAt ? formatTsi(scheduledAt) : '' })
+      }}</span>
+    </p>
+    <p
+      v-else-if="state === 'stale'"
       data-testid="approval-stale-note"
       role="status"
       class="flex items-center gap-2 text-body-sm font-semibold text-warning"
@@ -99,8 +118,24 @@ function onApprove() {
 
     <div class="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:gap-3">
       <slot />
+      <template v-if="state === 'scheduled'">
+        <Button
+          data-testid="approval-schedule-cancel"
+          variant="secondary"
+          size="lg"
+          :disabled="submitting"
+          :loading="submitting"
+          @click="emit('cancel-schedule')"
+        >
+          {{ t('schedule.cancel') }}
+        </Button>
+        <Button data-testid="approval-to-tracking" size="lg" @click="emit('to-tracking')">
+          {{ t('approval.toTracking') }}
+          <ArrowUpRight aria-hidden="true" />
+        </Button>
+      </template>
       <Button
-        v-if="state === 'approved'"
+        v-else-if="state === 'approved'"
         data-testid="approval-send"
         size="lg"
         :loading="submitting"
