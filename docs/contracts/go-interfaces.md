@@ -108,7 +108,7 @@ type Config struct {
 
 	AnthropicAPIKey secret.Secret // ANTHROPIC_API_KEY, optional
 	LLMMode         llm.Mode      // LLM_PROVIDER: auto|real|mock, default auto
-	AnthropicModel  string        // ANTHROPIC_MODEL, default "claude-opus-5-5"
+	AnthropicModel  string        // ANTHROPIC_MODEL, default "claude-sonnet-5-5"
 	LLMTimeout      time.Duration // LLM_TIMEOUT, default 60s
 	LLMMaxTokens    int           // LLM_MAX_TOKENS, default 4096
 	MockLLMScenario llm.Scenario  // MOCK_LLM_SCENARIO, default "ok"

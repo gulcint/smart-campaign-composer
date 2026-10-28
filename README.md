@@ -39,7 +39,7 @@ make help              # diğer komutlar
 
 `docker compose up` bitince tarayıcıda <http://127.0.0.1:8081> adresini açın. Bu port başka bir programda doluysa `.env` dosyasına `WEB_PORT=8082` gibi boş bir port yazın; API için `API_PORT` aynı şekilde çalışır. Hangi portun açıldığını `docker compose ps` gösterir.
 
-`.env` dosyasına `ANTHROPIC_API_KEY` yazarsanız sistem gerçek Claude'u kullanır (varsayılan model `claude-opus-5-5`, `ANTHROPIC_MODEL` ile değişir); boş bırakırsanız sahte LLM çalışır. `LLM_PROVIDER=mock` anahtar olsa da sahte LLM'i seçer, `real` ise anahtar yoksa açılışta hata verir. Örnek: [`.env.example`](.env.example).
+`.env` dosyasına `ANTHROPIC_API_KEY` yazarsanız sistem gerçek Claude'u kullanır (model `claude-sonnet-5-5`; hem kitle hem içerik üretimi bu modeli kullanır, D60); boş bırakırsanız sahte LLM çalışır. `LLM_PROVIDER=mock` anahtar olsa da sahte LLM'i seçer, `real` ise anahtar yoksa açılışta hata verir. Örnek: [`.env.example`](.env.example).
 
 Koda katkı verecekseniz klonladıktan sonra ilk iş `make hooks` (lefthook ve gitleaks gerekir; araç listesi [`CLAUDE.md`](CLAUDE.md) "Komutlar").
 
