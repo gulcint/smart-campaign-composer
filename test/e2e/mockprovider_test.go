@@ -102,6 +102,9 @@ func mpPost(url, contentType, key string, body []byte) mpResponse {
 	if err != nil {
 		return mpResponse{Err: err}
 	}
+	// net/http silently resends a POST carrying Idempotency-Key when the connection closes without
+	// an answer and the body is rewindable; a lost response must surface as a connection error.
+	req.GetBody = nil
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
