@@ -29,7 +29,7 @@ const CARD: Record<ToastVariant, string> = {
 <template>
   <section
     :aria-label="t('toast.region')"
-    class="pointer-events-none fixed inset-x-0 top-20 z-50 flex flex-col items-center gap-2 px-4"
+    class="pointer-events-none fixed inset-x-0 top-20 z-50 flex flex-col items-center gap-2 px-4 sm:items-end sm:px-6"
   >
     <TransitionGroup
       enter-from-class="-translate-y-2 opacity-0"
