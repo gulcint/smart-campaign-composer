@@ -869,7 +869,7 @@ type Campaign struct {
 	Segment              *Segment        `json:"segment"`
 	LatestContentVersion *ContentVersion `json:"latest_content_version"` // latest VALIDATED, current revision
 	Approval             *Approval       `json:"approval"`
-	ScheduledAt          *time.Time      `json:"scheduled_at"` // openapi ScheduledAt: non-nil iff scheduled, or started from a plan
+	ScheduledAt          *time.Time      `json:"scheduled_at"` // openapi ScheduledAt: non-nil when scheduled; in sending/completed non-nil if started from a plan
 	SendingStartedAt     *time.Time      `json:"sending_started_at"`
 	CompletedAt          *time.Time      `json:"completed_at"`
 	CreatedAt            time.Time       `json:"created_at"`
@@ -1070,6 +1070,8 @@ type Service interface {
 	// worker already started it). Success, in one transaction under the campaign row lock: state
 	// approved (EventScheduleCanceled), scheduled_at = NULL, updated_at = Clock.Now(); approval and
 	// approved version kept. No generation-lease check (no generation can run in scheduled).
+	// A late LLM generation result can never land on a scheduled campaign: persisting it goes
+	// through Transition, which fails from scheduled with ErrInvalidState, and nothing is written.
 	CancelSchedule(ctx context.Context, id string) (CancelScheduleResult, error)
 	Status(ctx context.Context, id string) (CampaignStatus, error)
 	Preview(ctx context.Context, id string, q PreviewQuery) (Preview, error)
@@ -1135,13 +1137,15 @@ func NewScheduler(cfg SchedulerConfig, deps SchedulerDeps) (*Scheduler, error)
 
 // RunOnce is one pass at now = Clock.Now() (test seam). Up to BatchSize times: ONE transaction
 // claims ONE due campaign (state scheduled AND scheduled_at <= now, ordered by scheduled_at, id,
-// FOR UPDATE SKIP LOCKED, excluding campaigns whose start already failed in this pass), re-checks the
-// state under the row lock, skips the campaign for this pass if an unexpired generation lease is
+// FOR UPDATE SKIP LOCKED, excluding campaigns that failed or were skipped in this pass), re-checks
+// state = scheduled AND scheduled_at <= now under the row lock (a re-plan to a later time wins the
+// race; the campaign is then skipped), skips the campaign for this pass if an unexpired generation lease is
 // present (LockedCampaign.CheckNoGeneration, defensive), then starts it with startSendingLocked:
 // exactly the deliveries, state, sending_started_at = now and empty-audience completion of
 // Service.Send, except that scheduled_at is KEPT. It commits per campaign, so one failing campaign
 // neither blocks nor rolls back the others; a failed start leaves the campaign scheduled (retried by
-// the next pass). A plan that became due while the worker was down is started by the first pass
+// the next pass). Per-campaign failure isolation, a start rolled back mid-transaction and the
+// defensive lease skip are design intent, covered by review only, not by a REQ. A plan that became due while the worker was down is started by the first pass
 // after it is back, however late (no maximum delay, D62). Concurrent RunOnce calls (several worker
 // processes) never start the same campaign twice: SKIP LOCKED plus the re-check, and
 // deliveries_campaign_channel_customer_key as the last guard.
@@ -1150,7 +1154,7 @@ func NewScheduler(cfg SchedulerConfig, deps SchedulerDeps) (*Scheduler, error)
 // If ctx is already cancelled, nothing is started and the error matches context.Canceled.
 func (s *Scheduler) RunOnce(ctx context.Context) (int, error)
 
-// Run calls RunOnce immediately and then every Interval (Clock.After) until ctx is done; returns
+// Run calls RunOnce immediately (before the first Clock.After) and then every Interval until ctx is done; returns
 // ctx.Err(). A RunOnce error is logged and the loop continues. No in-memory timer per campaign:
 // the campaigns row is the only source of truth (restart safe).
 func (s *Scheduler) Run(ctx context.Context) error
@@ -1165,7 +1169,7 @@ func (s *Scheduler) Run(ctx context.Context) error
 | `scheduled send started` | INFO | `campaign_id`, `scheduled_at` (RFC 3339 UTC), `sending_started_at` (RFC 3339 UTC), `delay_ms` (int64, `sending_started_at − scheduled_at` milisaniye, ≥ 0; D62 geç başlatma gecikmesi), `deliveries` (int, oluşturulan teslimat sayısı) |
 | `scheduled send failed` | ERROR | `campaign_id`, `error` (sabit, DB metni içermez) |
 
-`cmd/worker` `Scheduler.Run`'ı dispatcher'lardan ayrı bir goroutine'de `SchedulerConfig{Interval: cfg.SchedulerInterval, BatchSize: 10}` ile çalıştırır; worker kapanırken (`ctx` iptali) döngü biter. Hassasiyet: planlanan an + ≤ `SCHEDULER_INTERVAL` + ilk partinin claim süresi.
+`cmd/worker` `Scheduler.Run`'ı dispatcher'lardan ayrı bir goroutine'de `SchedulerConfig{Interval: cfg.SchedulerInterval, BatchSize: 10}` ile çalıştırır; worker kapanırken (`ctx` iptali) döngü biter. Hassasiyet: planlanan an + ≤ `SCHEDULER_INTERVAL` (varsayılan 1 sn) + ilk partinin claim süresi.
 
 `campaign.Transition` ve `campaign.NormalizeBrief` saf fonksiyon olarak unit test edilir. Servis davranışının kendisi HTTP + gerçek DB üzerinden (entegrasyon/E2E) test edilir; HTTP handler'ları ise sahte `campaign.Service` + sahte `ContentRun` + `clock.Fake` ile unit test edilir (bkz. §httpapi).
 
