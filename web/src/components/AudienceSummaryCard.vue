@@ -4,7 +4,7 @@ import { Info, PencilLine, TriangleAlert } from '@lucide/vue'
 import { computed } from 'vue'
 
 import type { ApiError } from '@/api/errors'
-import type { Audience } from '@/api/types'
+import type { Audience, LlmProvider } from '@/api/types'
 import { formatNumber, t } from '@/i18n'
 
 import Button from './Button.vue'
@@ -12,11 +12,16 @@ import ErrorCard from './ErrorCard.vue'
 import ProgressBar from './ProgressBar.vue'
 import Skeleton from './Skeleton.vue'
 
-const props = defineProps<{
-  audience: Audience | null
-  loading: boolean
-  error: ApiError | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    audience: Audience | null
+    loading: boolean
+    error: ApiError | null
+    /** LLM building the segment right now; null when only loading (no generation). */
+    provider?: LlmProvider | null
+  }>(),
+  { provider: null },
+)
 const emit = defineEmits<{ 'edit-brief': []; retry: [] }>()
 
 const state = computed(() => {
@@ -25,6 +30,16 @@ const state = computed(() => {
   if (!props.audience) return 'loading'
   return props.audience.matched === 0 ? 'empty' : 'ready'
 })
+
+const loadingText = computed(() =>
+  t(props.provider === 'claude' ? 'audience.loading.claude' : 'audience.loading'),
+)
+
+// Static channel rows for the loading skeleton; labels and colours are known before the data.
+const CHANNEL_ROWS = [
+  { key: 'sms', label: 'audience.channelSms', dot: 'bg-sms' },
+  { key: 'email', label: 'audience.channelEmail', dot: 'bg-email' },
+] as const
 
 const share = (n: number) =>
   props.audience && props.audience.matched > 0 ? Math.round((n / props.audience.matched) * 100) : 0
@@ -58,11 +73,36 @@ const channels = computed(() => {
     :aria-busy="state === 'loading' ? 'true' : undefined"
     class="flex flex-col gap-5"
   >
+    <!-- Loading mirrors the ready layout row for row (fixed line heights: numeral-xl 44 px,
+         numeral-md 28 px) so the swap to real numbers does not move anything. The visible
+         status line sits where the matched label goes and is the only polite announcement. -->
     <template v-if="state === 'loading'">
-      <span class="sr-only" role="status">{{ t('audience.loading') }}</span>
-      <Skeleton class="h-11 w-40 rounded-sm" />
-      <Skeleton class="h-2 w-full" />
-      <Skeleton class="h-2 w-4/5" />
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <Skeleton variant="shimmer" class="h-11 w-28 rounded-sm" />
+        <span
+          data-testid="audience-loading-status"
+          role="status"
+          class="text-body font-medium text-accent-text"
+          >{{ loadingText }}</span
+        >
+      </div>
+      <div class="flex flex-col gap-3" aria-hidden="true">
+        <div
+          v-for="c in CHANNEL_ROWS"
+          :key="c.key"
+          class="grid grid-cols-[4.5rem_1fr_auto] items-center gap-3 sm:grid-cols-[5rem_1fr_7rem]"
+        >
+          <span class="flex items-center gap-2 text-body-sm font-medium text-ink-700">
+            <span :class="['size-2 rounded-full', c.dot]" />
+            {{ t(c.label) }}
+          </span>
+          <Skeleton variant="shimmer" class="h-2 w-full" />
+          <span class="flex h-7 items-center justify-end gap-2">
+            <Skeleton variant="shimmer" class="h-5 w-12 rounded-sm" />
+            <Skeleton variant="shimmer" class="h-3 w-8" />
+          </span>
+        </div>
+      </div>
     </template>
 
     <ErrorCard

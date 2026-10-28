@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Step 2 (ui.md §1.1, §3.7, §3.8; DESIGN.md §8.2).
-import { ArrowUpRight, PencilLine } from '@lucide/vue'
+import { ArrowUpRight, ListFilter, PencilLine } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -10,14 +10,17 @@ import ChatBubble from '@/components/ChatBubble.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import SegmentRuleView from '@/components/SegmentRuleView.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import { t } from '@/i18n'
 import { isLockedForEditing } from '@/lib/steps'
 import { campaignIdOf } from '@/router'
 import { useCampaignStore } from '@/stores/campaign'
+import { useConfigStore } from '@/stores/config'
 
 const route = useRoute()
 const router = useRouter()
 const store = useCampaignStore()
+const config = useConfigStore()
 
 const campaignId = computed(() => (route ? campaignIdOf(route) : null))
 const campaign = computed(() =>
@@ -109,11 +112,29 @@ async function onRetry() {
           <h2 class="text-h4 text-accent-heading">{{ t('audience.ruleTitle') }}</h2>
           <SegmentRuleView :rule="segment.rule" />
         </div>
-        <div v-if="segment" class="h-px bg-border-subtle" aria-hidden="true" />
+        <!-- No rule yet: a shimmer chips row with SegmentRuleView's geometry (30 px chips,
+             32/44 px JSON toggle) so the section reads as loading, not empty. -->
+        <div v-else-if="!cardError" data-testid="segment-rule-loading" class="flex flex-col gap-2">
+          <h2 class="text-h4 text-accent-heading">{{ t('audience.ruleTitle') }}</h2>
+          <div class="flex flex-wrap items-center gap-2" aria-hidden="true">
+            <ListFilter class="size-4 text-ink-500" />
+            <div class="flex flex-wrap gap-2">
+              <Skeleton
+                v-for="w in ['w-32', 'w-56', 'w-48']"
+                :key="w"
+                variant="shimmer"
+                :class="['h-[30px]', w]"
+              />
+            </div>
+            <Skeleton variant="shimmer" class="ml-auto h-8 w-28 max-lg:h-11" />
+          </div>
+        </div>
+        <div v-if="segment || !cardError" class="h-px bg-border-subtle" aria-hidden="true" />
         <AudienceSummaryCard
           :audience="segment?.audience ?? null"
           :loading="loading"
           :error="cardError"
+          :provider="store.segmentGenerating ? config.provider : null"
           @retry="onRetry"
           @edit-brief="onEditBrief"
         />

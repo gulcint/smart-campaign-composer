@@ -243,6 +243,35 @@
   @apply sr-only;
 }
 
+/* Skeleton `shimmer` variant (ui.md §3.22, DESIGN.md §5): a soft brand-orange band sweeps left to
+   right over the grey track. Unlayered on purpose so it wins over the shadcn base utilities
+   (`animate-pulse`, `bg-*`). The image is 250% wide and its band sits at 50%, so moving
+   background-position from 100% to 0% carries the band from just off the left edge to just off
+   the right edge. Every block runs the same keyframes, so bands stay in phase across a layout. */
+.skeleton-shimmer {
+  background-color: var(--shimmer-base);
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    var(--shimmer-tint) 42%,
+    var(--shimmer-peak) 50%,
+    var(--shimmer-tint) 58%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-shimmer var(--dur-shimmer) ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -250,5 +279,11 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  /* No sweep: a static tinted block keeps the shape visible without motion. */
+  .skeleton-shimmer {
+    animation: none;
+    background-image: none;
+    background-color: var(--shimmer-static);
   }
 }

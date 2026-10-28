@@ -242,11 +242,13 @@ Rakamlar her sayaç/tabloda `font-variant-numeric: tabular-nums` kullanır (akar
 | `--dur-base` | 200 ms | sekme, rozet geçişi, toast giriş |
 | `--dur-slow` | 320 ms | adım geçişi, dialog |
 | `--dur-bar` | 600 ms | çubuk genişliği (SSE güncellemesi arası yumuşatma) |
+| `--dur-shimmer` | 1600 ms, `ease-in-out`, sonsuz | `Skeleton variant="shimmer"` bandı |
 | `--ease-standard` | `cubic-bezier(0.2, 0, 0, 1)` | genel |
 | `--ease-emphasized` | `cubic-bezier(0.3, 0, 0, 1)` | adım geçişi, sayaç vurgusu |
 
 - **Akış caret'i:** metnin sonunda 2 px × 1.1em `--orange-500` dikey çubuk; 1 s `steps(2)` yanıp söner; son olay (`validated`/`invalid`) gelince 200 ms'de söner ve yerine durum rozeti gelir. Caret `aria-hidden="true"`.
 - **Rozet geçişi:** `draft → validated` arası 200 ms fade + 4 px yukarı kayma; `invalid` için ek olarak alan kenarlığı bir kez 2 px yatay "nudge" (yalnızca hareket izinliyse).
+- **Yükleniyor shimmer'ı:** `Skeleton variant="shimmer"` (saf CSS, Lottie/bağımlılık yok). Zemin `--shimmer-base` (= `--track`); üstünde 100° eğik, yumuşak kenarlı bir bant (`--shimmer-tint` = `--orange-100` omuzlar, `--shimmer-peak` = `--orange-200` tepe) soldan sağa geçer. Bant görüntünün %250'si genişliğinde arka plan konumuyla taşınır, tüm bloklar aynı fazda akar. Yalnızca dekoratif dolgu; turuncu metne dönüşmez. Reduced-motion: süpürme yok, blok sabit `--shimmer-static` (= `--orange-100`) tonunda kalır. Kullanım: Kitle yükleniyor durumu, `StreamingText` bekleme iskeleti.
 - **Sayaç tween'i:** dashboard sayaçları 300 ms'de eski değerden yeniye sayar; büyük değişimde 1 kez `--orange-50` zemin flaşı.
 - **`prefers-reduced-motion: reduce`:** caret yanıp sönmez (sabit), tween ve nudge kapalı, çubuk geçişi 0 ms, adım geçişi yalnızca opaklık 120 ms; `Loader` ikonu dönmez. Global: `@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } }` + bileşen bazlı istisnalar.
 
@@ -352,7 +354,7 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | `Toast` | Geçici geri bildirim | shadcn `Sonner` (`vue-sonner`) | success, info, warning, error | otomatik kapanma 5 s (error: kalıcı, kapat butonu) | HTTP kodları |
 | `InlineError` / `ErrorCard` | Alan ve bölüm hataları | shadcn `Alert` | field (alan altı, 14 px, `--error`, ikon), section (kart, başlık + açıklama + eylem) | — | HTTP kodları |
 | `EmptyState` | Boş durumlar | shadcn `Empty` | ikon (48 px, `--orange-300` çizgi), başlık, açıklama, tek eylem | — | — |
-| `Skeleton` | Yükleniyor | shadcn `Skeleton` | satır, sayı bloğu, çubuk, balon | `--track` zemin, 1.2 s shimmer (reduced-motion'da düz) | — |
+| `Skeleton` | Yükleniyor | shadcn `Skeleton` | satır, sayı bloğu, çubuk, balon; `variant`: `pulse` (varsayılan, `--track` zemin) · `shimmer` (turuncu bant, §5) | `shimmer`: `--dur-shimmer` süpürme, reduced-motion'da sabit `--shimmer-static`; yükseklik sabit (kayma yok) | — |
 
 **HTTP kodu → arayüz eşlemesi** (hata gövdesi biçimi sözleşmede; mesajlar i18n'den):
 
@@ -412,7 +414,7 @@ Durumlar: boş, yazıyor, gönderiliyor (balon + 3 nokta), 422/413 field hatası
 │  └──────────────────────────────────────────────────────────────┘    │
 │  [Brief'i düzenle]                               ( İçeriği üret ↗ )  │
 ```
-Durumlar: skeleton (sayı bloğu + 2 çubuk), hazır, 0 kişi (uyarı + "İçeriği üret" pasif), 502. Yeniden üretim içerik varken `ConfirmDialog regenerate` (REQ-APR-03: içerik ve onay geçersiz olur).
+Durumlar: yükleniyor (kural alanında shimmer chip satırı; kartta shimmer sayı bloğu + yanında görünür durum satırı "Claude kitleyi çıkarıyor…" (sağlayıcı Claude ise) / "Kitle hesaplanıyor…" (`--text-accent`, `role=status`); SMS/Email satırlarında gerçek nokta + etiket, shimmer çubuk ve sayı; hazır düzenle aynı yükseklikler, geçişte kayma yok), hazır, 0 kişi (uyarı + "İçeriği üret" pasif), 502. Yeniden üretim içerik varken `ConfirmDialog regenerate` (REQ-APR-03: içerik ve onay geçersiz olur).
 
 ### 8.3a İçerik ve Onay neden farklı görünür
 

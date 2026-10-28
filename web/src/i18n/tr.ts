@@ -82,6 +82,7 @@ export const tr = {
   'audience.consentNote': 'Sayılar kanal izni ve iletişim bilgisi olanlara göre hesaplandı.',
   'audience.empty': 'Bu kural kimseyi seçmedi.',
   'audience.loading': 'Kitle hesaplanıyor…',
+  'audience.loading.claude': 'Claude kitleyi çıkarıyor…',
   'audience.editBrief': 'Brief’i düzenle',
   'audience.generateContent': 'İçeriği üret',
   'audience.ruleTitle': 'Segment kuralı',

@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 
 import Button from './Button.vue'
 import InlineError from './InlineError.vue'
+import Skeleton from './Skeleton.vue'
 import StatusBadge from './StatusBadge.vue'
 
 const props = withDefaults(
@@ -75,10 +76,11 @@ const badge = computed(() =>
         {{ t(provider === 'claude' ? 'stream.waiting.claude' : 'stream.waiting') }}
       </p>
       <div aria-hidden="true" class="flex flex-col gap-2">
-        <span
+        <Skeleton
           v-for="w in ['w-full', 'w-5/6', 'w-2/3']"
           :key="w"
-          :class="cn('h-3 animate-pulse rounded-pill bg-track motion-reduce:animate-none', w)"
+          variant="shimmer"
+          :class="['h-3', w]"
         />
       </div>
     </div>
