@@ -64,6 +64,42 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 }
 
+// REQ-SND-02, REQ-SND-04, REQ-SND-05
+// The worker's settings come from their environment variables: PROVIDER_BASE_URL,
+// DISPATCH_RATE_PER_SECOND and RETRY_MAX_ATTEMPTS / RETRY_BASE_DELAY / RETRY_MAX_DELAY /
+// RETRY_MAX_RATE_LIMITED / RETRY_RATE_LIMIT_WINDOW override the defaults of TestLoad_Defaults.
+func TestLoad_WorkerEnvironment(t *testing.T) {
+	t.Parallel()
+	got, err := config.Load(getenv(map[string]string{
+		"PROVIDER_BASE_URL":        "http://127.0.0.1:18090",
+		"DISPATCH_RATE_PER_SECOND": "40",
+		"RETRY_MAX_ATTEMPTS":       "3",
+		"RETRY_BASE_DELAY":         "250ms",
+		"RETRY_MAX_DELAY":          "5s",
+		"RETRY_MAX_RATE_LIMITED":   "7",
+		"RETRY_RATE_LIMIT_WINDOW":  "2m",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.ProviderBaseURL != "http://127.0.0.1:18090" {
+		t.Fatalf("ProviderBaseURL = %q, want PROVIDER_BASE_URL", got.ProviderBaseURL)
+	}
+	if got.DispatchRatePerSecond != 40 {
+		t.Fatalf("DispatchRatePerSecond = %v, want 40", got.DispatchRatePerSecond)
+	}
+	want := delivery.RetryConfig{
+		MaxAttempts:     3,
+		BaseDelay:       250 * time.Millisecond,
+		MaxDelay:        5 * time.Second,
+		MaxRateLimited:  7,
+		RateLimitWindow: 2 * time.Minute,
+	}
+	if diff := cmp.Diff(want, got.Retry); diff != "" {
+		t.Fatalf("Retry mismatch (-want +got):\n%s", diff)
+	}
+}
+
 // REQ-AI-05
 // The key is read from the ANTHROPIC_API_KEY environment variable (compose loads it from .env).
 func TestLoad_ReadsAnthropicAPIKeyFromEnvironment(t *testing.T) {

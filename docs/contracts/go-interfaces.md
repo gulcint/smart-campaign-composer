@@ -122,8 +122,9 @@ type Config struct {
 	DispatchConcurrency   int           // DISPATCH_CONCURRENCY, default 32
 	DispatchBatchSize     int           // DISPATCH_BATCH_SIZE, default 50
 	DeliveryLease         time.Duration // DELIVERY_LEASE, default 60s
-	Retry                 delivery.RetryConfig // RETRY_MAX_ATTEMPTS(5), RETRY_BASE_DELAY(1s), RETRY_MAX_DELAY(60s),
-	                                           // RETRY_MAX_RATE_LIMITED(20), RETRY_RATE_LIMIT_WINDOW(10m)
+	Retry                 delivery.RetryConfig // RETRY_MAX_ATTEMPTS(5, 1..5), RETRY_BASE_DELAY(1s), RETRY_MAX_DELAY(60s),
+	                                           // RETRY_MAX_RATE_LIMITED(20, 1..20), RETRY_RATE_LIMIT_WINDOW(10m)
+	                                           // upper bounds = deliveries CHECKs; above => ErrInvalidValue
 	WorkerRandSeed        int64         // WORKER_RAND_SEED, default 0 => seeded from crypto/rand
 }
 
@@ -737,11 +738,14 @@ func Transition(from State, ev Event) (State, error)
 const BriefMaxRunes = 2000
 
 // MaxGenerationDuration bounds one segment or content generation (VARSAYIM). The per-campaign
-// generation lock is released when the request context is cancelled (client disconnect) or, at the
-// latest, after this duration; a content stream still running then ends with the final invalid
-// event, code "llm_unavailable". While the lock is held, GenerateSegment, StartContentGeneration,
-// EditContent, Approve and Send return ErrGenerationInProgress (Send is included so that a
-// persisting content generation can never meet a campaign already in state `sending`).
+// generation lock is a lease on the campaign row (campaigns.generation_token/generation_expires_at,
+// D52), shared by every API process: it is released when the request context is cancelled (client
+// disconnect) or the generation ends and, at the latest, expires after this duration (so a crashed
+// process cannot block the campaign); a content stream still running then ends with the final
+// invalid event, code "llm_unavailable". While the lease is held, GenerateSegment,
+// StartContentGeneration, EditContent, Approve and Send return ErrGenerationInProgress (Send is included so that a
+// persisting content generation can never meet a campaign already in state `sending`); each
+// checks it under the campaign row lock in the transaction that checks the state.
 const MaxGenerationDuration = 120 * time.Second
 
 // NormalizeBrief NFC-normalizes and trims s. Errors (*validation.Error, path "brief"):
@@ -1186,13 +1190,18 @@ type Job struct {
 	FirstAttemptAt time.Time
 }
 
+// Attempts (= Job.Attempts of the claim) fences the update: it applies only while the row is
+// still in sending under that claim, so a holder whose lease expired cannot overwrite a newer
+// claim (ErrLeaseLost). 0 = not fenced.
 type SentUpdate struct {
 	At                time.Time
+	Attempts          int
 	HTTPStatus        int
 	ProviderMessageID string
 }
 type RetryUpdate struct {
 	At            time.Time
+	Attempts      int
 	NextAttemptAt time.Time
 	Count         CountKind
 	HTTPStatus    int    // 0 for transport errors
@@ -1200,22 +1209,36 @@ type RetryUpdate struct {
 }
 type FailedUpdate struct {
 	At         time.Time
+	Attempts   int
 	Reason     FailureReason
 	Count      CountKind
 	HTTPStatus int
-	LastError  string
+	LastError  string // "" => NULL
+}
+
+// ChannelLock is a held channel advisory lock (D53).
+type ChannelLock interface {
+	Held(ctx context.Context) (bool, error) // false/error once the holding connection is gone
+	Release()                               // unlock + free the connection; idempotent
 }
 
 type Store interface {
-	// TryLockChannel takes the channel's advisory lock on a dedicated connection.
-	TryLockChannel(ctx context.Context, ch Channel) (release func(), acquired bool, err error)
+	// TryLockChannel takes the channel's advisory lock on a dedicated connection; lock is nil
+	// unless acquired.
+	TryLockChannel(ctx context.Context, ch Channel) (lock ChannelLock, acquired bool, err error)
 	// Claim moves up to limit due queued rows (next_attempt_at <= now) to sending with
 	// lease_expires_at = leaseUntil, using FOR UPDATE SKIP LOCKED.
 	Claim(ctx context.Context, ch Channel, now time.Time, limit int, leaseUntil time.Time) ([]Job, error)
 	// ReclaimExpired returns sending rows whose lease expired before now to queued.
 	ReclaimExpired(ctx context.Context, ch Channel, now time.Time) (int, error)
-	// Mark* update a row currently in sending; ErrLeaseLost if it is not. Each also completes
-	// the campaign in the same transaction when no queued/sending delivery remains.
+	// Requeue returns claimed jobs whose provider request never started to queued (no counter
+	// change); rows no longer held under the job's claim are skipped.
+	Requeue(ctx context.Context, jobs []Job, now time.Time) (int, error)
+	// Mark* update a row currently in sending under the claim (see Attempts); ErrLeaseLost if it
+	// is not. Each also completes the campaign in the same transaction when no queued/sending
+	// delivery remains. A counter increment that violates a deliveries CHECK (SQLSTATE 23514) fails
+	// the row with its counters unchanged instead (ScheduleRetry: max_attempts_exceeded or
+	// rate_limit_budget_exhausted by Count; MarkFailed: Reason).
 	MarkSent(ctx context.Context, id string, u SentUpdate) error
 	ScheduleRetry(ctx context.Context, id string, u RetryUpdate) error
 	MarkFailed(ctx context.Context, id string, u FailedUpdate) error
@@ -1267,7 +1290,10 @@ func NewDispatcher(cfg DispatcherConfig, deps DispatcherDeps) (*Dispatcher, erro
 var ErrInvalidConfig = errors.New("delivery: invalid dispatcher config")
 
 // Run loops until ctx is done (returns ctx.Err()): acquires the channel lock (only the holder
-// sends), calls Store.ReclaimExpired(ctx, channel, now) before each pass, claims due jobs and processes them.
+// sends), calls Store.ReclaimExpired(ctx, channel, now) before each pass, claims due jobs and
+// processes them. ChannelLock.Held is checked before every batch and after each claim, before the
+// batch's first Limiter.Wait; when the lock is lost the batch is requeued, Leader() and
+// scc_dispatcher_leader go to 0 and Run goes back to acquiring the lock (D53).
 func (d *Dispatcher) Run(ctx context.Context) error
 
 // Leader reports whether this dispatcher currently holds the channel's advisory lock (also
@@ -1283,7 +1309,10 @@ func (d *Dispatcher) Leader() bool
 //   2. content.RenderContent + content.CheckRendered fails => MarkFailed(content_too_long,
 //      LastError "content_too_long"), NO provider call, NO limiter permit (REQ-CNT-05);
 //   3. Limiter.Wait -> Provider.Send -> Policy.Next -> Store.MarkSent / ScheduleRetry / MarkFailed.
-// Returns the number of jobs processed.
+// Jobs whose request never started (ctx cancelled while waiting for a permit) are requeued
+// (Store.Requeue). A non-transport error from Provider.Send (neither ErrTimeout nor
+// ErrConnection: no request reached the provider) fails the job as provider_rejected with
+// last_error NULL. Returns the number of jobs processed.
 func (d *Dispatcher) ProcessOnce(ctx context.Context) (int, error)
 ```
 
@@ -1513,7 +1542,11 @@ type Deps struct {
 	StatusPollInterval time.Duration
 	// HeartbeatInterval: ": keepalive" comment period on both SSE streams; zero => 15s.
 	HeartbeatInterval time.Duration
-	Logger            *slog.Logger
+	// Shutdown, when closed, ends every open SSE stream (content and status) at once, so a
+	// graceful http.Server.Shutdown does not wait for endless streams; ordinary requests are
+	// left to finish. Nil => streams end only with their request.
+	Shutdown <-chan struct{}
+	Logger   *slog.Logger
 }
 
 // New returns the full router of openapi.yaml (including /healthz, /readyz, /metrics,
@@ -1548,7 +1581,7 @@ var OpenAPI embed.FS
 
 Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clock.Fake`, `httptest.ResponseRecorder`/`httptest.Server`):
 
-- **`GET /api/campaigns/{id}/events`:** önce `Service.Status` çağrılır (hata → JSON 404 vb.); sonra `retry: 3000` ve `snapshot` yazılır. Ardından döngü: `Clock.After(StatusPollInterval)` her tetiklendiğinde `Service.Status` yeniden çağrılır; sonuç son gönderilenden `updated_at` dışında farklıysa `status` olayı yazılır; `state == completed` ise `completed` yazılır ve akış kapanır. `Clock.After(HeartbeatInterval)` ile yorum satırı. İstemci kopunca (`ctx.Done`) döngü biter. Sunucu tarafında `LISTEN/NOTIFY` kullanılmaz (VARSAYIM; tek mekanizma yoklama).
+- **`GET /api/campaigns/{id}/events`:** önce `Service.Status` çağrılır (hata → JSON 404 vb.); sonra `retry: 3000` ve `snapshot` yazılır. Ardından döngü: `Clock.After(StatusPollInterval)` her tetiklendiğinde `Service.Status` yeniden çağrılır; sonuç son gönderilenden `updated_at` dışında farklıysa `status` olayı yazılır; `state == completed` ise `completed` yazılır ve akış kapanır. `Clock.After(HeartbeatInterval)` ile yorum satırı. İstemci kopunca (`ctx.Done`) veya `Deps.Shutdown` kapanınca döngü biter. `Service.Status` art arda 5 kez hata verirse akış kapanır (D54); hata günlüğe kesinti başına bir kez, toparlanınca bir kez yazılır. Sunucu tarafında `LISTEN/NOTIFY` kullanılmaz (VARSAYIM; tek mekanizma yoklama).
 - **`POST /api/campaigns/{id}/content`:** `Service.StartContentGeneration` hata dönerse JSON hata; dönmezse HTTP 200 + SSE başlıkları ve `ContentRun.Stream(ctx, emit)`; her `composer.Event` `event: <Name()>` + JSON olarak yazılır. Heartbeat aynı `HeartbeatInterval` ile.
 - `X-Mock-LLM-Scenario` başlığı yalnız `LLMProvider == mock` iken `llm.ParseScenario` ile okunur ve `llm.WithScenario` ile `ctx`'e konur.
 

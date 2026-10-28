@@ -16,10 +16,6 @@ package contract
 // getConfig, createCampaign, listCampaigns, getCampaign, generateSegment, countSegment.
 // Phase P4 (content + approval slice) implements generateContent, listContentVersions, editContent,
 // getContentVersion, approveContent and previewContent (test/e2e/content_test.go calls each one).
-var NotImplemented = map[string]string{
-	// P5 — send + tracking slice (REQ-SND, REQ-TRK-01).
-	"sendCampaign":         "P5",
-	"getCampaignStatus":    "P5",
-	"streamCampaignEvents": "P5",
-	"listDeliveries":       "P5",
-}
+// Phase P5 (send + tracking slice) implements sendCampaign, getCampaignStatus and listDeliveries
+// (test/e2e/send_api_test.go calls each one) and streamCampaignEvents (test/e2e/tracking_test.go).
+var NotImplemented = map[string]string{}

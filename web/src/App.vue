@@ -43,9 +43,12 @@ router.afterEach((to, from) => {
     first = false
     return
   }
-  if (to.fullPath === from.fullPath) return
+  // A query-only change (failed list, `generate=1` removal) is not a step change.
+  if (to.name === from.name && to.params.campaignId === from.params.campaignId) return
   void nextTick(() => {
-    document.querySelector<HTMLElement>('[data-testid="page-title"]')?.focus()
+    document
+      .querySelector<HTMLElement>('[data-testid="page-title"]')
+      ?.focus({ preventScroll: true })
   })
 })
 </script>

@@ -24,8 +24,9 @@ export const buttonVariants = cva(
         'danger-ghost': 'bg-transparent text-error hover:bg-error-bg',
       },
       size: {
-        sm: 'h-8 px-4 text-body-sm',
-        md: 'h-10 px-5 text-body-sm',
+        // Below lg (phones and tablets are touch devices) sm/md grow to the 44 px touch target.
+        sm: 'h-8 px-4 text-body-sm max-lg:h-11',
+        md: 'h-10 px-5 text-body-sm max-lg:h-11',
         lg: 'h-12 px-6 text-body',
       },
     },

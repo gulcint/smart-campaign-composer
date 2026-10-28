@@ -92,7 +92,7 @@ const jsonId = useId()
         data-testid="segment-rule-json-toggle"
         :aria-expanded="showJson ? 'true' : 'false'"
         :aria-controls="jsonId"
-        class="ml-auto inline-flex min-h-8 items-center gap-1 rounded-pill px-3 text-body-sm font-medium text-accent-text hover:bg-accent hover:text-accent-hover"
+        class="ml-auto inline-flex min-h-8 items-center max-lg:min-h-11 gap-1 rounded-pill px-3 text-body-sm font-medium text-accent-text hover:bg-accent hover:text-accent-hover"
         @click="showJson = !showJson"
       >
         <Braces class="size-4" aria-hidden="true" />

@@ -24,7 +24,7 @@ withDefaults(
     <div class="mx-auto flex h-16 max-w-[1120px] items-center justify-between gap-4 px-4 md:px-6">
       <RouterLink
         :to="{ name: 'brief-new' }"
-        class="flex items-center gap-3 text-h4 font-bold text-ink-900 no-underline hover:text-ink-900"
+        class="flex min-h-11 items-center gap-3 text-h4 font-bold text-ink-900 no-underline hover:text-ink-900"
       >
         <!-- Owner decision 2026-10-27: Insider One logo (own dark background, no theme inversion). -->
         <img

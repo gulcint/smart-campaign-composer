@@ -28,6 +28,13 @@ export function campaignIdOf(route: Pick<RouteLocationNormalized, 'params'>): st
 export function createAppRouter(history: RouterHistory = createWebHistory()): Router {
   const router = createRouter({
     history,
+    // A step change starts at the top (App.vue focuses the h1 without scrolling); back/forward
+    // restores the saved position; a query-only change stays where it is.
+    scrollBehavior(to, from, saved) {
+      if (saved) return saved
+      if (to.name === from.name && to.params.campaignId === from.params.campaignId) return false
+      return { top: 0 }
+    },
     routes: [
       {
         path: '/',

@@ -78,7 +78,7 @@ function onKeydown(e: KeyboardEvent, from: ChannelKey) {
         :tabindex="c === modelValue ? 0 : -1"
         :class="
           cn(
-            'inline-flex h-9 items-center gap-2 rounded-pill px-4 text-body-sm font-semibold text-ink-600',
+            'inline-flex h-9 items-center max-lg:h-11 gap-2 rounded-pill px-4 text-body-sm font-semibold text-ink-600',
             'transition-colors outline-none focus-visible:shadow-focus',
             'data-[state=active]:bg-secondary data-[state=active]:text-accent-text',
           )

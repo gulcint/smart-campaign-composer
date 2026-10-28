@@ -326,12 +326,12 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 
 | Bileşen (çalışma adı) | Amaç | Base | Varyantlar | Durumlar | REQ |
 |---|---|---|---|---|---|
-| `Button` | Eylemler | shadcn `Button` + cva | `primary` (pill, `--gradient-cta`, beyaz 600 metin, `--shadow-cta`, sağda isteğe bağlı `ArrowUpRight` ↗ — referans dili) · `secondary` (pill, `--orange-50` zemin, `--orange-700` metin, 1 px `--orange-200`) · `ghost` (zeminsiz, `--text-accent`) · `danger-ghost` (`--error`). Boy: `sm` 32 / `md` 40 / `lg` 48 px; yatay 16/20/24 | default, hover (gradient-hover, gölge büyür), active (scale .98), focus-visible (`--shadow-focus`), disabled (opaklık .45, gölge yok, `cursor:not-allowed`, `aria-disabled`), loading (etiket kalır, solda `Spinner`, tıklama kilitli) | — |
+| `Button` | Eylemler | shadcn `Button` + cva | `primary` (pill, `--gradient-cta`, beyaz 600 metin, `--shadow-cta`, sağda isteğe bağlı `ArrowUpRight` ↗ — referans dili) · `secondary` (pill, `--orange-50` zemin, `--orange-700` metin, 1 px `--orange-200`) · `ghost` (zeminsiz, `--text-accent`) · `danger-ghost` (`--error`). Boy: `sm` 32 / `md` 40 / `lg` 48 px; yatay 16/20/24; <1024 px'te `sm` ve `md` 44 px'e büyür (dokunma hedefi, §8.6) | default, hover (gradient-hover, gölge büyür), active (scale .98), focus-visible (`--shadow-focus`), disabled (opaklık .45, gölge yok, `cursor:not-allowed`, `aria-disabled`), loading (etiket kalır, solda `Spinner`, tıklama kilitli) | — |
 | `StepHeader` | Adım başlığı: "ADIM 3/5 · rol" overline (`--text-accent`), tek `h1`, tek satır amaç, adım durum rozeti (`StatusBadge`), "Sıradaki: …" pill'i | custom | İçerik / Onay | durum rozeti yoksa gizli; adım numarası <768'de gizli (kompakt stepper gösterir) | REQ-UI-01 |
 | `LimitChip` | Onay özetinde salt okunur uzunluk durumu ("Şablon 135/160", "Kişiselleştirme sonrası 130/160") | custom | — | `normal` (success, `CircleCheck`), `near-limit` (warning, `TriangleAlert`), `over-limit` (error, `CircleAlert`); eşikler `CharCounter` ile aynı; sayı mono tabular | REQ-CNT-01/02/05 |
 | `AppHeader` | Wordmark, sağlayıcı rozeti, kampanya durumu | custom | desktop / mobil (wordmark kısalır: "SCC") | — | REQ-AI-03 |
 | `ProviderBadge` | "Mock LLM" / "Claude" | shadcn `Badge` | `mock`: `--warning` zemin+metin, `FlaskConical` ikon, metin "Mock LLM" · `claude`: nötr, `Sparkles` ikon | yükleniyor (skeleton pill 88×24), bilinmiyor (gizli değil: "Sağlayıcı ?" nötr) | REQ-AI-03 |
-| `CampaignStepper` | Brief → Kitle → İçerik → Onay → Takip | shadcn `Stepper` (Reka) | yatay (≥768) / kompakt ("Adım 3/5 · İçerik" + 5 segmentli mini çubuk) | adım: `completed` (`--orange-600` dolu daire + `Check`), `active` (2 px `--orange-600` halka, etiket `--text-accent` 600), `upcoming` (`--ink-300`), `locked` (kampanya durumu izin vermiyor; tıklanamaz, tooltip nedenini söyler) | durum makinesi |
+| `CampaignStepper` | Brief → Kitle → İçerik → Onay → Takip | shadcn `Stepper` (Reka) | yatay (≥768, etiketli) / kompakt (<768: "Adım 3/5 · İçerik" satırı + numaralı adım düğmeleri, yalnız aktif adımın etiketi görünür) | adım: `completed` (`--orange-600` dolu daire + `Check`), `active` (2 px `--orange-600` halka, etiket `--text-accent` 600), `upcoming` (`--ink-300`), `locked` (kampanya durumu izin vermiyor; tıklanamaz, tooltip nedenini söyler) | durum makinesi |
 | `BriefComposer` | Sohbet benzeri brief girişi | shadcn `Textarea` + custom kabuk | boş, örnek brief chip'iyle ("Örneği kullan"), gönderilmiş (kullanıcı balonu olarak üstte kalır) | idle, focus, typing (sayaç `0/2000`), near-limit (≥1800 → `--warning`), over-limit (>2000 → `--error`, gönder pasif), submitting (gönder butonu loading, textarea `readonly`), error (422/413 inline, 502 kart). ⌘/Ctrl+Enter gönderir; Enter yeni satır | REQ-AUD-00, REQ-AUD-05 |
 | `ChatBubble` | Brief ve sistem yanıtları | custom (shadcn `Bubble` değerlendirilir) | `user` (sağ, `--surface-bubble-user`, `--ink-600` metin) · `assistant` (sol, kart zemini, solda 20 px marka glyph'i — Claude logosu **değil**, üç kısa yatay çubuk) | normal, pending (3 nokta skeleton) | REQ-AUD-00 |
 | `AudienceSummaryCard` | Toplam eşleşen + kanal bazlı sayılar + izin notu | shadcn `Card` + custom | yükleniyor, hazır, boş (0 kişi), hata | toplam `numeral-xl` `--text-accent-numeral`; altında iki satır `ProgressRow` (SMS / Email: sayı ve toplam içindeki oran çubuğu kanal renginde); not satırı `Info` ikon + "Sayılar kanal izni ve iletişim bilgisi olanlara göre hesaplandı" (`--ink-500`). 0 kişi: uyarı tonu, "Bu kural kimseyi seçmedi" + "Brief'i düzenle" | REQ-AUD-03, REQ-AUD-04 |
@@ -344,7 +344,7 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | `ContentEditor` | İçeriği düzenleme | shadcn `Textarea` / `Input` | SMS gövdesi (textarea, `body-lg`), email konusu (input), email gövdesi (textarea, `body`) | readonly (akış sürerken), editable, dirty (kaydedilmemiş; "Kaydet ve doğrula" aktif), validating (spinner), invalid (alan bazlı hata), locked (`sending`/`completed`: kilit ikonu + açıklama) | REQ-APR-01/02/03 |
 | `SmsPreview` | Telefon balonu önizlemesi | custom | örnek alıcı adıyla render, ham şablon (chip'li) | boş, render, uzun mesaj (balon büyür, kaydırma yok) | REQ-APR-01, REQ-UI-01 |
 | `EmailPreview` | Sandbox'lı email çerçevesi | custom | konu satırı + gövde iframe | yükleniyor, render, hata | REQ-APR-01, REQ-UI-01 |
-| `ApprovalBar` | Onay eylemi | custom (sticky) | desktop (kart altı) / mobil (ekran altına yapışık) | `disabled` (her iki kanal `validated` değilse; neden metni görünür: "SMS doğrulanmadı" vb.), `ready`, `submitting`, `approved` (yeşil `CircleCheck` + "Onaylandı · Gönder" birincil butonu), `stale` (onay sonrası düzenleme: "Onay düştü, yeniden onayla") | REQ-APR-01/03, REQ-CNT-04/05 |
+| `ApprovalBar` | Onay eylemi | custom (sticky) | ≥640 yüzen kart (sticky, kart altı) / <640 kenardan kenara alt şerit (üst kenarlık, köşesiz, safe-area alt boşluğu, tam genişlik buton) | `disabled` (her iki kanal `validated` değilse; neden metni görünür: "SMS doğrulanmadı" vb.), `ready`, `submitting`, `approved` (yeşil `CircleCheck` + "Onaylandı · Gönder" birincil butonu), `stale` (onay sonrası düzenleme: "Onay düştü, yeniden onayla") | REQ-APR-01/03, REQ-CNT-04/05 |
 | `ConfirmDialog` | Onay/gönder/yeniden üret teyidi | shadcn `Alert Dialog` | `approve`, `send` (kanal sayıları özetlenir: "SMS 1.204 · Email 987 kişiye gidecek"), `regenerate` (mevcut içerik silinecek) | açık, submitting, hata (diyalog içinde inline) | REQ-APR-01, REQ-SND-01 |
 | `ProgressBar` / `ProgressRow` | Referans çubuk dili | custom (`role="progressbar"`) | `single` (tek dolgu `--gradient-brand-vivid`), `segmented` (sent `--success` · failed `--error` · sending `--info` · queued `--track` desen); satır: solda etiket, ortada çubuk (8 px, pill), sağda sayı + yüzde (`numeral-sm`) | indeterminate yok (her zaman sayı); güncelleme `--dur-bar` | REQ-AUD-03, REQ-TRK-01 |
 | `DeliveryCounters` | Kuyrukta / Gönderiliyor / Gönderildi / Başarısız | custom (Card) | kanal başına ve toplam | live, stale (SSE koptu: sayılar soluk + "Son güncelleme 12 sn önce"), completed | REQ-TRK-01 |
@@ -480,16 +480,37 @@ Onay sonrası bar: "Onaylandı" + ( Gönder ↗ ) → `ConfirmDialog send`. 422 
 ```
 `completed`: başlık "Kampanya tamamlandı", rozet `Tamamlandı`, başarısız sayısı sıfır değilse `--error` vurgulu ve "Başarısızları gör" listesi (kayıt alanları sözleşmeye bağlı). Kampanya düzeyinde "Başarısız" durumu gösterilmez (REQ-TRK-01).
 
-### 8.6 Mobil (<768)
+### 8.6 Responsive düzen (V13, uygulandı 2026-10-28)
 
-- Stepper kompakt: "Adım 3/5 · İçerik" + 5 segment çubuk; dokununca adım listesi `Sheet`.
-- İçerik ekranı tek sütun: editör → önizleme sekmesi (`Düzenle | Önizle` segmentli kontrol) yerine dikey sıra; `ApprovalBar` ekran altına yapışık (safe-area padding), birincil buton tam genişlik.
-- Dashboard kanal kartları alt alta; feed son 20 olay.
-- Dokunma hedefleri ≥ 44×44 px; kart iç boşluğu 16; display 32 px.
+Test genişlikleri **375 / 768 / 1280 px**; kanıt `.playwright-mcp/p5-responsive/<ekran>-<genişlik>.png` (P5 faz kapısı, REQ ve otomatik test yok). `web/index.html` `<meta name="viewport" content="width=device-width, initial-scale=1.0">` taşır (`user-scalable`/`maximum-scale` kısıtı yok; yakınlaştırma serbest). Hiçbir ekranda ve genişlikte yatay sayfa kaydırması yoktur.
+
+**Genel kurallar (her ekran):**
+- Sayfa yan boşluğu 16 px (<768), 24 px (≥768); içerik maks. 1120 px.
+- **Dokunma hedefi:** <1024 px'te (telefon ve tablet dokunmatik sayılır) her etkileşimli öğe ≥ 44×44 px: `Button` `sm`/`md` → 44 px yükseklik; stepper adımları, `ChannelTabs` sekmeleri, `VariableChip` ekleme chip'leri, kural JSON düğmesi, "Başarısızları gör" linki ve başlıktaki ana sayfa linki 44 px. ≥1024'te §7'deki masaüstü boyları geçerli. Kural genişliğe bağlıdır (`max-lg:`), `pointer: coarse`'a değil: test viewport'larında doğrulanabilir olsun diye.
+- Yapışık öğeler: `AppHeader` üstte, `ApprovalBar` altta (yalnız Onay). Yapışık bar akıştaki yerine oturur; sayfa sonunda hiçbir içeriği örtmez.
+- Hareket eklenmedi; `prefers-reduced-motion` kuralı (§5) değişmedi.
+
+**Tablet (768–1023):**
+- Stepper yatay ve etiketli; adımlar arası çizgi yalnız ≥1024'te. Overline'da adım numarası görünür.
+- Brief, Kitle: tek sütun, masaüstüyle aynı; Kitle eylemleri yan yana ("Brief'i düzenle" solda, "İçeriği üret" sağda).
+- İçerik: **tek sütun** (editör kartı → çalışma önizlemesi → eylem şeridi); iki sütun ≥1024. Eylem şeridi yatay.
+- Onay: kanal sütunları **yan yana** (≥768, §8.3a); `ApprovalBar` yüzen kart.
+- Takip: genel kart tam genişlikte, 5 sayaç tek satırda; kanal kartları yan yana; başarısız teslimat listesi tablo.
+
+**Mobil (<768):**
+- `AppHeader`: wordmark "SCC"e kısalır (<640), rozetler sağda kalır.
+- Stepper kompakt: "Adım 3/5 · İçerik" satırı + numaralı adım düğmeleri (tamamlanan `Check`, kilitli `Lock`); yalnız aktif adımın etiketi görünür, diğerleri `sr-only`. (Önceki taslaktaki 5 segmentli çubuk + `Sheet` yerine bu uygulandı: adımlar zaten doğrudan dokunulabilir, ek katman gereksiz.) `StepHeader` overline'ında adım numarası gizlenir.
+- Brief: display 32 px; composer tam genişlik, örnek chip'i ve "Kitleyi çıkar" sarılarak alt alta düşebilir.
+- Kitle: kural chip'leri sarılır; kanal satırları etiket · çubuk · sayı · yüzde düzeninde kalır; eylemler alt alta ve tam genişlik, birincil ("İçeriği üret") üstte.
+- İçerik: tek sütun; SMS editörü <640'ta en az 192 px (160 karakter `body-lg` ile ~6 satır, kaydırmasız görünür); değişken chip'leri sarılır; eylem şeridinde not ve "Onaya geç" alt alta, buton tam genişlik. Eylem şeridi yapışık değildir (üç satırlık şerit ekranın çeyreğini kaplardı).
+- Onay: kanal sütunları alt alta (SMS → Email); `ApprovalBar` <640'ta ekranın altına yapışık, kenardan kenara, üst kenarlıklı, `env(safe-area-inset-bottom)` kadar alt boşluk, tam genişlik birincil buton.
+- Takip: genel sayaçlar 2 sütun ızgara; kanal kartları alt alta. (Canlı olay akışı `ActivityFeed` sahip kararıyla kapsam dışı; yalnız sayaçlar.)
+- **Tablo/liste:** başarısız teslimat listesi ≥640'ta 4 sütunlu tablo (dar kapta kendi içinde kaydırılır, sayfa değil); <640'ta her satır iki satırlık kart: üstte müşteri kimliği (mono, kırılabilir) + kanal, altta neden + "Deneme: N". Başlık satırı ekran okuyucu için `sr-only` kalır.
+- Kart iç boşluğu 16; tipografi en küçük 12 px (`caption`).
 
 ## 9. Erişilebilirlik
 
-- **Odak:** her etkileşimli öğede `:focus-visible` → `--shadow-focus` (2 px boşluk + 2 px `--orange-600`, açık zeminlerde ≥3:1). Odak halkası asla `outline: none` ile silinmez.
+- **Odak:** her etkileşimli öğede `:focus-visible` → `--shadow-focus` (2 px boşluk + 2 px `--orange-600`, açık zeminlerde ≥3:1). Odak halkası asla `outline: none` ile silinmez. Programatik odak hedefleri (`tabindex=-1` başlıklar: adım değişince `h1`, açılan liste başlığı) halka göstermez; etkileşimli değildirler ve odak `preventScroll` ile taşınır.
 - **Akan metin:** `StreamingText` kapsayıcısı `aria-live="off"` (her delta okunmaz); ayrı, görsel olarak gizli bir `role="status"` bölgesi yalnızca durum değişimlerini okur: "SMS içeriği üretiliyor", "SMS içeriği doğrulandı", "Email konusu geçersiz: 83 karakter, sınır 80". Akış boyunca kapsayıcı `aria-busy="true"`.
 - **Sayaçlar:** `CharCounter` `aria-live="polite"` yalnızca eşik değişiminde (normal → near → over) duyurur; her tuşta değil. Alan `aria-describedby` ile sayaca ve hata listesine bağlı; over-limit'te `aria-invalid="true"`.
 - **Dashboard:** `DeliveryCounters` her SSE güncellemesinde değil, en fazla 10 sn'de bir `polite` özet ("SMS: 742 gönderildi, 9 başarısız"); `ActivityFeed` `role="log"`, `aria-live="off"` (yoğun akış ekran okuyucuyu boğmasın), tamamlanma `assertive` değil `polite` duyurulur.
@@ -550,5 +571,5 @@ web/src/
 - V9. Grafik kütüphanesi kullanılmaz; çubuklar custom.
 - V10. Varsayılan turuncu metin preset'i `accent`.
 - V11. İçerik akışında otomatik yeniden bağlanma yok; dashboard akışında var.
-- V13. Responsive kapsamı eksik (tablet 768–1023, Brief/Kitle/Onay mobil düzeni, tablo/liste, `viewport` meta, test viewport'ları 375/768/1280); P5'te tamamlanır ve §8 güncellenir (`docs/PLAN.md` P5 satırı).
+- V13. ~~Responsive kapsamı eksik~~ **Çözüldü (2026-10-28, `feat/p5-responsive`):** tablet 768–1023 kuralları, Brief/Kitle/İçerik/Onay/Takip mobil düzeni, tablo/liste davranışı, `viewport` meta ve 375/768/1280 kanıt seti §8.6'da.
 - V12. Kenar değerleri (radius, gölge, dark tema) approximated; ilk ekran görüntüsünden sonra sahiple gözden geçirilir.
