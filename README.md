@@ -199,19 +199,19 @@ Fazlar ve kapsamları ([`docs/PLAN.md`](docs/PLAN.md)):
 
 | Faz | Durum | Kapsam |
 |---|---|---|
-| P0 Kurulum | ✅ bitti | Repo, hook'lar, CI, plan |
-| P1 Sözleşmeler | ✅ bitti | Gereksinimler, OpenAPI, şemalar, arayüz ve Go sözleşmeleri |
-| P2 Seed + altyapı | ✅ bitti | Seed, migration'lar, compose, LLM fabrikası ve sahte LLM, mock provider, `make test` |
-| P3 Kitle | ✅ bitti | Segment kuralı, kişi sayıları, brief ve kitle ekranları, API sapma koruması |
-| P4 İçerik + onay | ✅ bitti | SMS/email üretimi (SSE), karakter limitleri, kişiselleştirme, sürümlü düzenleme, onay, önizleme |
-| P5 Gönderim + takip | ✅ bitti | Gönderim API'si, kuyruk ve worker, canlı durum akışı ve takip ekranı, veritabanında üretim kirası, responsive düzen |
-| P6 Sertleştirme + teslim | ⬜ başlamadı | Tarayıcıdan uçtan uca test, güvenlik taraması, kişisel bilgi temizliği, son README ve DECISIONS |
+| P0 Setup | ✅ bitti | Repo, hook'lar, CI, plan |
+| P1 Contracts | ✅ bitti | Gereksinimler, OpenAPI, şemalar, arayüz ve Go sözleşmeleri |
+| P2 Seed + Infrastructure | ✅ bitti | Seed, migration'lar, compose, LLM fabrikası ve sahte LLM, mock provider, `make test` |
+| P3 Audience | ✅ bitti | Segment kuralı, kişi sayıları, brief ve kitle ekranları, API sapma koruması |
+| P4 Content + Approval | ✅ bitti | SMS/email üretimi (SSE), karakter limitleri, kişiselleştirme, sürümlü düzenleme, onay, önizleme |
+| P5 Send + Tracking | ✅ bitti | Gönderim API'si, kuyruk ve worker, canlı durum akışı ve takip ekranı, veritabanında üretim kirası, responsive düzen |
+| P6 Hardening + Delivery | ⬜ başlamadı | Tarayıcıdan uçtan uca test, güvenlik taraması, kişisel bilgi temizliği, son README ve DECISIONS |
 
 ## Bonus
 
 | Bonus | Durum |
 |---|---|
-| CI pipeline | ✅ GitHub Actions; `main` için zorunlu `ci-ok`: lint, `make test`, gitleaks, govulncheck, OpenAPI sapma kontrolü (yalnız doküman değişen PR'da build/test atlanır, D51) |
+| CI pipeline | 🟢 tamamlandı: GitHub Actions; `main` için zorunlu `ci-ok`: lint, `make test`, gitleaks, govulncheck, OpenAPI sapma kontrolü (yalnız doküman değişen PR'da build/test atlanır, D51) |
 | Zamanlanmış gönderim | ⬜ yapılmadı |
 | A/B varyantları | ⬜ yapılmadı |
 | Kullanıcının diline göre içerik | ⬜ yapılmadı (seed'de `language` alanı var) |
