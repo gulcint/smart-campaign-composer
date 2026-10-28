@@ -6,7 +6,7 @@ export PATH := $(GOBIN):$(PATH)
 
 TEST_COMPOSE := docker compose -f compose.test.yml
 
-.PHONY: help hooks test test-hooks test-unit test-integration test-web db-roundtrip seed-manifest lint check-tool-schemas secrets sanitize-sessions check-sessions web-lint web-build check-contract-copies api-lint api-breaking api-routes api-types api-types-check
+.PHONY: help hooks test test-hooks test-unit test-integration test-e2e test-web db-roundtrip seed-manifest lint check-tool-schemas secrets sanitize-sessions check-sessions web-lint web-build check-contract-copies api-lint api-breaking api-routes api-types api-types-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -35,6 +35,10 @@ test-unit: ## Go unit tests on the host, no DB, mock LLM
 
 test-integration: ## Go tests of internal/ and cmd/ against the containerised Postgres (no E2E packages)
 	@status=0; $(TEST_COMPOSE) run --rm --build test scripts/test-container.sh ./internal/... ./cmd/... || status=$$?; \
+	$(TEST_COMPOSE) down -v --remove-orphans; exit $$status
+
+test-e2e: ## Black-box API E2E tests of test/ (e2e, contract, delivery, repo) against the containerised stack
+	@status=0; $(TEST_COMPOSE) run --rm --build test scripts/test-container.sh ./test/... || status=$$?; \
 	$(TEST_COMPOSE) down -v --remove-orphans; exit $$status
 
 db-roundtrip: ## Migrations up -> down -> up on a throwaway Postgres; schema must be identical
