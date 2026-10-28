@@ -83,8 +83,12 @@ services:
   mockprovider:
     <<: *app
     command: ["mockprovider"]
+    # Demo failure rates (D61): high enough that retries, 429 handling and the
+    # 5-attempt limit visibly happen, so some deliveries end as failed.
     environment:
       MOCK_PROVIDER_ADDR: ":8090"
+      MOCK_PROVIDER_ERROR_RATE: "0.4"
+      MOCK_PROVIDER_RATE_LIMIT_RATE: "0.1"
     restart: unless-stopped
 
   # One dispatcher per channel; deliveries go only to the mock provider (REQ-SND-05).
