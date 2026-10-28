@@ -88,7 +88,7 @@ sequenceDiagram
   A->>L: generate SMS + email (stream)
   A-->>W: SSE delta events, then validated
   A->>D: store content version (content_ready)
-  M->>W: previews, edits if needed (POST .../content-versions)
+  M->>W: previews, edits if needed (POST /api/campaigns/{id}/content-versions)
   W->>A: POST /api/campaigns/{id}/approve (approved)
   W->>A: POST /api/campaigns/{id}/send
   A->>D: deliveries rows + sending in one transaction
@@ -107,19 +107,18 @@ sequenceDiagram
 A campaign moves through the following states. There is no campaign-level error state; individual message failures show up in the counts (D4):
 
 ```mermaid
-stateDiagram-v2
-  [*] --> draft: POST /api/campaigns
-  draft --> audience_ready: POST .../segment
-  audience_ready --> audience_ready: POST .../segment
-  content_ready --> audience_ready: POST .../segment
-  approved --> audience_ready: POST .../segment
-  audience_ready --> content_ready: POST .../content or .../content-versions
-  content_ready --> content_ready: POST .../content or .../content-versions
-  approved --> content_ready: POST .../content or .../content-versions
-  content_ready --> approved: POST .../approve
-  approved --> sending: POST .../send
-  sending --> completed: when the last delivery reaches a final state
-  completed --> [*]
+%%{init: {"flowchart": {"nodeSpacing": 60, "rankSpacing": 110, "curve": "linear"}}}%%
+flowchart TD
+  start(("start")) -->|"POST /api/campaigns"| draft(["draft"])
+  draft -->|"POST /api/campaigns/{campaign_id}/segment"| audience_ready(["audience_ready<br/>(segment again: stays here)"])
+  audience_ready -->|"POST /api/campaigns/{campaign_id}/content<br/>or /content-versions"| content_ready(["content_ready<br/>(content again: stays here)"])
+  content_ready -->|"POST /api/campaigns/{campaign_id}/segment"| audience_ready
+  content_ready -->|"POST /api/campaigns/{campaign_id}/approve"| approved(["approved<br/>(approve another version: stays here)"])
+  approved -->|"POST /api/campaigns/{campaign_id}/segment"| audience_ready
+  approved -->|"POST /api/campaigns/{campaign_id}/content<br/>or /content-versions"| content_ready
+  approved -->|"POST /api/campaigns/{campaign_id}/send"| sending(["sending"])
+  sending -->|"worker: last delivery becomes sent or failed (no endpoint)"| completed(["completed"])
+  approved -.->|"same send, no recipients in either channel: approved, sending, completed in one transaction"| completed
 ```
 
 ## Functional requirements
