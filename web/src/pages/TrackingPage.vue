@@ -4,7 +4,7 @@
 // composable reconnects with backoff. `?status=failed` lists the failed deliveries (§3.20 link).
 // The ActivityFeed is out of scope by owner decision (counters only).
 import { X } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { api } from '@/api/endpoints'
@@ -39,12 +39,10 @@ const campaign = computed(() =>
 )
 const notFound = computed(() => (campaignId.value ? store.isNotFound(campaignId.value) : false))
 
-const { status, connection, lastUpdatedAt, completed, close } = useCampaignStatusStream(campaignId)
-
-// An unknown campaign answers the stream with 404 too: stop reconnecting to it.
-watch(notFound, (nf) => {
-  if (nf) close()
-})
+// An unknown campaign answers the stream with 404 too: the router guard usually knows that
+// before this page exists, so a known-404 id never opens the stream (an empty id stays idle).
+const streamId = computed(() => (notFound.value ? '' : campaignId.value))
+const { status, connection, lastUpdatedAt, completed } = useCampaignStatusStream(streamId)
 
 // The stream's state is fresher than the loaded campaign (it moves to completed live).
 const campaignState = computed(() => status.value?.state ?? campaign.value?.state ?? null)
@@ -52,10 +50,14 @@ const campaignState = computed(() => status.value?.state ?? campaign.value?.stat
 // ConnectionBanner (ui.md §4 network_error): only once a live connection was lost, not while
 // the first connection is still being made.
 const wasOpen = ref(false)
-watch(connection, (c) => {
-  if (c === 'open') wasOpen.value = true
-  ui.connectionLost = c === 'error' || (c === 'connecting' && wasOpen.value)
-})
+watch(
+  [connection, notFound],
+  ([c, nf]) => {
+    if (c === 'open') wasOpen.value = true
+    ui.connectionLost = !nf && (c === 'error' || (c === 'connecting' && wasOpen.value))
+  },
+  { immediate: true },
+)
 
 // Completion moves the campaign to `completed`: reload it so the header and stepper follow.
 watch(completed, (done) => {
@@ -68,9 +70,13 @@ const failed = ref<Delivery[] | null>(null)
 const failedTotal = ref(0)
 const failedError = ref<ApiError | null>(null)
 const failedLoading = ref(false)
+// Only the newest request may write the list (a campaign switch or a quick reopen must not be
+// overwritten by an older answer).
+let failedSeq = 0
 
 async function loadFailed() {
-  const id = campaignId.value
+  const id = streamId.value
+  const seq = ++failedSeq
   if (!id) return
   failedLoading.value = true
   failedError.value = null
@@ -80,22 +86,39 @@ async function loadFailed() {
       order: 'recent',
       limit: FAILED_LIMIT,
     })
+    if (seq !== failedSeq) return
     failed.value = page.items
     failedTotal.value = page.total
   } catch (e) {
+    if (seq !== failedSeq) return
     failedError.value = toApiError(e)
   } finally {
-    failedLoading.value = false
+    if (seq === failedSeq) failedLoading.value = false
   }
 }
 
 watch(
-  [showFailed, completed],
-  ([show]) => {
+  [showFailed, completed, streamId],
+  ([show], [, , prevId]) => {
+    if (prevId !== undefined && prevId !== streamId.value) {
+      failed.value = null
+      failedTotal.value = 0
+    }
     if (show) void loadFailed()
+    else failedSeq++
   },
   { immediate: true },
 )
+
+// Opening the list moves focus to its heading; closing it returns focus to the link (S1).
+watch(showFailed, async (show, was) => {
+  if (show === was) return
+  await nextTick()
+  const target = show
+    ? document.getElementById('delivery-failed-title')
+    : document.querySelector<HTMLElement>('[data-testid="delivery-failed-link"]')
+  target?.focus()
+})
 
 function closeFailed() {
   void router.replace({ query: { ...route.query, status: undefined } })
@@ -108,7 +131,7 @@ function reasonText(reason: string | null): string {
 }
 
 onMounted(() => {
-  if (campaignId.value) void store.load(campaignId.value)
+  if (campaignId.value && !notFound.value) void store.load(campaignId.value)
 })
 
 onBeforeUnmount(() => {
@@ -147,7 +170,11 @@ onBeforeUnmount(() => {
         class="flex flex-col gap-3 rounded-card border border-border-default bg-surface-card p-4 md:p-6"
       >
         <div class="flex items-center justify-between gap-3">
-          <h2 id="delivery-failed-title" class="text-h4 text-accent-heading">
+          <h2
+            id="delivery-failed-title"
+            tabindex="-1"
+            class="text-h4 text-accent-heading outline-none"
+          >
             {{ t('delivery.failedList.title') }}
           </h2>
           <Button variant="ghost" size="sm" @click="closeFailed">
@@ -190,6 +217,7 @@ onBeforeUnmount(() => {
                   data-testid="delivery-failed-item"
                   :data-delivery-id="d.id"
                   :data-channel="d.channel"
+                  :data-reason="d.failure_reason ?? undefined"
                   class="border-b border-border-subtle last:border-b-0"
                 >
                   <td class="py-2 pr-3 font-mono text-caption">{{ d.customer_id }}</td>
