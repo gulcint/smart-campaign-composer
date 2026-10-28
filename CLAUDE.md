@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tüm gereksinimlerin tek doğruluk kaynağı: `/Users/gulcintas/Desktop/SmartCampaignComposer/Smart Campaign Composer Case.html` (Insider One · AI Developer Case Study · 2026). Bu dosyayla çelişen bir karar verilecekse önce oraya bak; bilinçli sapmaları `DECISIONS.md`'ye yaz.
 
+Bir konuda kararsız kalınırsa (`DECISIONS.md`, `docs/PLAN.md` ve sözleşmeler çelişiyor ya da sessizse) karar case dokümanı okunarak verilir; `DECISIONS.md` önceki kararların kaydıdır, case'in yerine geçmez. Case'e dayanan karar gerekçesiyle `DECISIONS.md`'ye yazılır (sahip kararı, 2026-10-28).
+
 ## Vizyon
 
 Pazarlamacı yalnızca ne istediğini doğal dille yazar; Claude kitleyi ve kanal içeriklerini önerir; son kararı insan verir. Örnek brief:
