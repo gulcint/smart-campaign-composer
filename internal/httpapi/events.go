@@ -120,6 +120,8 @@ func (a *api) streamCampaignEvents(w http.ResponseWriter, r *http.Request) {
 // automatically and timestamps compare by their wire form.
 func statusChanged(a, b campaign.CampaignStatus) bool {
 	a.UpdatedAt, b.UpdatedAt = time.Time{}, time.Time{}
+	// A marshalling error counts as a change: sending one event too many is harmless, while
+	// treating it as "unchanged" could hide a real update.
 	ja, errA := json.Marshal(a)
 	jb, errB := json.Marshal(b)
 	return errA != nil || errB != nil || !bytes.Equal(ja, jb)
