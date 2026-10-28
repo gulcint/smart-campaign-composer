@@ -489,7 +489,7 @@ Onay sonrası bar: "Onaylandı" + ( Gönder ↗ ) → `ConfirmDialog send`. 422 
 
 ## 9. Erişilebilirlik
 
-- **Odak:** her etkileşimli öğede `:focus-visible` → `--shadow-focus` (2 px boşluk + 2 px `--orange-600`, açık zeminlerde ≥3:1). Odak halkası asla `outline: none` ile silinmez.
+- **Odak:** her etkileşimli öğede `:focus-visible` → `--shadow-focus` (2 px boşluk + 2 px `--orange-600`, açık zeminlerde ≥3:1). Odak halkası asla `outline: none` ile silinmez. Programatik odak hedefleri (`tabindex=-1` başlıklar: adım değişince `h1`, açılan liste başlığı) halka göstermez; etkileşimli değildirler ve odak `preventScroll` ile taşınır.
 - **Akan metin:** `StreamingText` kapsayıcısı `aria-live="off"` (her delta okunmaz); ayrı, görsel olarak gizli bir `role="status"` bölgesi yalnızca durum değişimlerini okur: "SMS içeriği üretiliyor", "SMS içeriği doğrulandı", "Email konusu geçersiz: 83 karakter, sınır 80". Akış boyunca kapsayıcı `aria-busy="true"`.
 - **Sayaçlar:** `CharCounter` `aria-live="polite"` yalnızca eşik değişiminde (normal → near → over) duyurur; her tuşta değil. Alan `aria-describedby` ile sayaca ve hata listesine bağlı; over-limit'te `aria-invalid="true"`.
 - **Dashboard:** `DeliveryCounters` her SSE güncellemesinde değil, en fazla 10 sn'de bir `polite` özet ("SMS: 742 gönderildi, 9 başarısız"); `ActivityFeed` `role="log"`, `aria-live="off"` (yoğun akış ekran okuyucuyu boğmasın), tamamlanma `assertive` değil `polite` duyurulur.

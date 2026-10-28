@@ -51,4 +51,14 @@ export const api = {
   /** sendCampaign — POST /api/campaigns/{campaign_id}/send (REQ-SND-01) */
   sendCampaign: (c: ApiClient, id: string, body: BodyOf<'sendCampaign'>) =>
     c.request<Ok<'sendCampaign', 202>>('POST', `${campaignPath(id)}/send`, { body }),
+
+  /** listDeliveries — GET /api/campaigns/{campaign_id}/deliveries (REQ-TRK-01 failed list) */
+  listDeliveries: (
+    c: ApiClient,
+    id: string,
+    query: NonNullable<operations['listDeliveries']['parameters']['query']>,
+  ) =>
+    c.request<Ok<'listDeliveries', 200>>('GET', `${campaignPath(id)}/deliveries`, {
+      query: query as Record<string, string | number>,
+    }),
 }

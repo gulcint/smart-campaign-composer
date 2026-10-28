@@ -1542,7 +1542,11 @@ type Deps struct {
 	StatusPollInterval time.Duration
 	// HeartbeatInterval: ": keepalive" comment period on both SSE streams; zero => 15s.
 	HeartbeatInterval time.Duration
-	Logger            *slog.Logger
+	// Shutdown, when closed, ends every open SSE stream (content and status) at once, so a
+	// graceful http.Server.Shutdown does not wait for endless streams; ordinary requests are
+	// left to finish. Nil => streams end only with their request.
+	Shutdown <-chan struct{}
+	Logger   *slog.Logger
 }
 
 // New returns the full router of openapi.yaml (including /healthz, /readyz, /metrics,
@@ -1577,7 +1581,7 @@ var OpenAPI embed.FS
 
 Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clock.Fake`, `httptest.ResponseRecorder`/`httptest.Server`):
 
-- **`GET /api/campaigns/{id}/events`:** önce `Service.Status` çağrılır (hata → JSON 404 vb.); sonra `retry: 3000` ve `snapshot` yazılır. Ardından döngü: `Clock.After(StatusPollInterval)` her tetiklendiğinde `Service.Status` yeniden çağrılır; sonuç son gönderilenden `updated_at` dışında farklıysa `status` olayı yazılır; `state == completed` ise `completed` yazılır ve akış kapanır. `Clock.After(HeartbeatInterval)` ile yorum satırı. İstemci kopunca (`ctx.Done`) döngü biter. Sunucu tarafında `LISTEN/NOTIFY` kullanılmaz (VARSAYIM; tek mekanizma yoklama).
+- **`GET /api/campaigns/{id}/events`:** önce `Service.Status` çağrılır (hata → JSON 404 vb.); sonra `retry: 3000` ve `snapshot` yazılır. Ardından döngü: `Clock.After(StatusPollInterval)` her tetiklendiğinde `Service.Status` yeniden çağrılır; sonuç son gönderilenden `updated_at` dışında farklıysa `status` olayı yazılır; `state == completed` ise `completed` yazılır ve akış kapanır. `Clock.After(HeartbeatInterval)` ile yorum satırı. İstemci kopunca (`ctx.Done`) veya `Deps.Shutdown` kapanınca döngü biter. `Service.Status` art arda 5 kez hata verirse akış kapanır (D54); hata günlüğe kesinti başına bir kez, toparlanınca bir kez yazılır. Sunucu tarafında `LISTEN/NOTIFY` kullanılmaz (VARSAYIM; tek mekanizma yoklama).
 - **`POST /api/campaigns/{id}/content`:** `Service.StartContentGeneration` hata dönerse JSON hata; dönmezse HTTP 200 + SSE başlıkları ve `ContentRun.Stream(ctx, emit)`; her `composer.Event` `event: <Name()>` + JSON olarak yazılır. Heartbeat aynı `HeartbeatInterval` ile.
 - `X-Mock-LLM-Scenario` başlığı yalnız `LLMProvider == mock` iken `llm.ParseScenario` ile okunur ve `llm.WithScenario` ile `ctx`'e konur.
 

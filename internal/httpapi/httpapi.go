@@ -3,12 +3,13 @@
 // It serves the system endpoints (/healthz, /readyz, /metrics, /api/config), the audience slice
 // (campaign create/get/list, segment generation, rule counting), the content + approval slice (SSE content
 // generation, versions, edits, approval, preview; content.go), the send + tracking routes (send,
-// status, deliveries; send.go) and the cross-cutting behaviour every
-// route shares: X-Request-ID, the 64 KiB body limit, JSON 404/405 errors, error mapping, HTTP
-// metrics and panic recovery. The live status stream (events) is still to come in P5.
+// status, deliveries; send.go; the live status SSE stream; events.go) and the cross-cutting
+// behaviour every route shares: X-Request-ID, the 64 KiB body limit, JSON 404/405 errors, error
+// mapping, HTTP metrics and panic recovery.
 package httpapi
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -39,7 +40,11 @@ type Deps struct {
 	StatusPollInterval time.Duration
 	// HeartbeatInterval: ": keepalive" comment period on both SSE streams; zero => 15s.
 	HeartbeatInterval time.Duration
-	Logger            *slog.Logger
+	// Shutdown, when closed, ends every open SSE stream (content and status) at once, so a
+	// graceful http.Server.Shutdown does not wait for endless streams; ordinary requests are
+	// left to finish. Nil => streams end only with their request.
+	Shutdown <-chan struct{}
+	Logger   *slog.Logger
 }
 
 // MaxBodyBytes is the request body limit (contracts README §3).
@@ -106,6 +111,7 @@ var routeTable = []struct {
 	{Route{http.MethodPost, "/api/campaigns/{campaign_id}/send"}, handlerOf((*api).sendCampaign)},
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/status"}, handlerOf((*api).getCampaignStatus)},
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/deliveries"}, handlerOf((*api).listDeliveries)},
+	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/events"}, handlerOf((*api).streamCampaignEvents)},
 }
 
 func handlerOf(m func(*api, http.ResponseWriter, *http.Request)) func(*api) http.Handler {
@@ -151,6 +157,22 @@ func (a *api) metricsHandler() http.Handler {
 }
 
 type api struct{ deps Deps }
+
+// streamContext derives a stream handler's context: done with the request or when Deps.Shutdown
+// closes. The watcher goroutine ends with the returned context; the caller defers cancel.
+func (a *api) streamContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	if a.deps.Shutdown != nil {
+		go func() {
+			select {
+			case <-a.deps.Shutdown:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+	return ctx, cancel
+}
 
 // ---- GET /api/config ----
 
