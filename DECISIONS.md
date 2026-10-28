@@ -241,6 +241,11 @@ PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `in
 - **Kalan pencere (bilinçli):** Denetim parti başındadır, istek başına değildir. Kilit, denetim geçtikten sonra kaybolursa eski lider **en çok bir partiyi** (`DISPATCH_BATCH_SIZE`, varsayılan 50 istek; 100/sn'de ~0,5 sn) bitirir; bu sürede yeni liderle birlikte o kanalda en çok bir partilik fazla başlangıç olabilir. Aynı teslimat iki kez gönderilmez: satırlar `FOR UPDATE SKIP LOCKED` + lease ile tek sahiplidir ve provider `Idempotency-Key` ile tekilleştirir. İstek başına denetim her gönderime bir DB gidiş-dönüşü ekleyeceği için seçilmedi.
 - **Bedel:** `delivery.Store` arayüzü değişti (`ChannelLock`, `Requeue`, güncelleme yapılarında `Attempts`); go-interfaces güncellendi, sahte depolar uyarlanmalı. `Held` her partide bir sorgu ekler.
 
+### D54 — Canlı durum akışı: yoklama hatası ve kapanış (P5)
+- **Bağlam:** `GET /events` durumu 1 sn'de bir yoklar (sse-events §2). Kalıcı bir okuma hatasında (DB erişilemez) akış açık kalıp her saniye log yazıyor, istemci ise sayaçları "Canlı" gösteriyordu. Ayrıca sonsuz SSE akışları `http.Server.Shutdown`'ı `shutdownTimeout` (10 sn) boyunca bekletiyordu (PR #87 incelemesi).
+- **Karar:** Tek bir başarısız okuma durum değişikliği sayılmaz; akış açık kalır, sonraki tikte yeniden denenir. Art arda **5** başarısız okumada (≈5 sn) sunucu akışı kapatır; istemci `stale` olur, EventSource yeniden bağlanır, açılış okuması da başarısızsa JSON hata alır ve istemci kendi geri çekilmesine (1 sn ×2, en çok 30 s) geçer. Hata günlüğe kesinti başına bir kez (`warn`), kapanışta bir kez (`error`) ve toparlanınca bir kez (`info`) yazılır. Kapanışta `cmd/api` `RegisterOnShutdown` ile `httpapi.Deps.Shutdown` kanalını kapatır: açık içerik ve durum akışları hemen biter, sıradan istekler zarifçe tamamlanır (`BaseContext` iptali bunları da keseceği için seçilmedi).
+- **Bedel:** 5 sn'den kısa kesintilerde istemci yine "Canlı" görür (sayılar en çok birkaç saniye eskidir). Kapanışta yarıda kesilen içerik akışı terminal olay almaz; istemci bunu "kesildi" olarak gösterir (sse-events §1.3), kilit bırakılır.
+
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |
@@ -256,4 +261,5 @@ PLAN §0.5 "pazarlamacı elle düzeltebilir" der; ui.md'de bunun yolu yoktu. `in
 | Email gövdesi 5000 sınırı onayda yeniden denetlenmez (D46) | Doğrulama anında denetlenir; yalnız SMS ve konu için onay-anı denetimi var |
 | Üretim kirası API süreçlerinin saatine dayanır (D52) | Süreçler arası saat kayması kiranın 120 sn'lik bitişini kaydırır; tek makinede/NTP ile ihmal edilebilir |
 | Kitle taraması eşleşen satırları Go'ya çeker | Seed ölçeğinde (5000) yeterli; üç en uzun değer SQL'de toplanarak ölçeklenebilir |
+| Canlı durum akışı 5 sn'den kısa okuma kesintisini göstermez (D54) | Sayaçlar o sürede "Canlı" kalır; 5 art arda hatada akış kapanır ve istemci `stale` olur |
 | Kanal kilidi kaybında en çok bir partilik fazla gönderim (D53) | Kilit parti başında denetlenir; kayıptan sonra eski lider en çok bir partiyi (varsayılan 50 istek) bitirir; mesaj tekrarı yok (Idempotency-Key) |
