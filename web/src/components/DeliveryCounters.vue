@@ -45,7 +45,7 @@ const ROWS: { key: Exclude<CountKey, 'total'>; dot: string }[] = [
   { key: 'sent', dot: 'bg-success' },
   { key: 'failed', dot: 'bg-error' },
   { key: 'sending', dot: 'bg-info' },
-  { key: 'queued', dot: 'bg-ink-300' },
+  { key: 'queued', dot: 'bg-neutral-status' },
 ]
 
 /** Failed counts are error-coloured only when non-zero (DESIGN.md §8.5); others stay numerals. */
@@ -53,6 +53,14 @@ const valueClass = (key: CountKey, n: number) =>
   key === 'failed' && n > 0 ? 'text-error' : 'text-accent-numeral'
 
 const show = (n: number) => (props.status ? formatNumber(n) : '—')
+/** Raw value for data-value; omitted until the first status arrives (no fake zeros). */
+const dv = (n: number) => (props.status ? n : undefined)
+
+// The stale note means "these numbers may be old": not shown while the very first connection is
+// still being made (no numbers yet), but shown when that first attempt failed (ui.md §3.20).
+const staleNote = computed(
+  () => state.value === 'stale' && (props.status !== null || props.connection === 'error'),
+)
 
 const updatedText = computed(() => {
   if (!props.lastUpdatedAt) return null
@@ -140,7 +148,7 @@ onBeforeUnmount(() => {
       :class="
         cn(
           'overflow-hidden rounded-card-lg border border-border-default bg-surface-raised shadow-raised transition-opacity',
-          state === 'stale' && 'opacity-80',
+          staleNote && 'opacity-80',
         )
       "
     >
@@ -186,7 +194,7 @@ onBeforeUnmount(() => {
         </div>
 
         <p
-          v-if="state === 'stale'"
+          v-if="staleNote"
           data-testid="delivery-stale-note"
           class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-card bg-warning-bg px-3 py-2 text-body-sm text-warning"
         >
@@ -225,7 +233,7 @@ onBeforeUnmount(() => {
             <dt class="text-caption text-ink-500">{{ t('delivery.count.total') }}</dt>
             <dd
               data-testid="delivery-count-total-total"
-              :data-value="totals.total"
+              :data-value="dv(totals.total)"
               class="text-numeral-md text-accent-numeral tabular-nums"
             >
               {{ show(totals.total) }}
@@ -238,7 +246,7 @@ onBeforeUnmount(() => {
             </dt>
             <dd
               :data-testid="`delivery-count-total-${r.key}`"
-              :data-value="totals[r.key]"
+              :data-value="dv(totals[r.key])"
               :class="cn('text-numeral-md tabular-nums', valueClass(r.key, totals[r.key]))"
             >
               {{ show(totals[r.key]) }}
@@ -267,7 +275,7 @@ onBeforeUnmount(() => {
         :class="
           cn(
             'flex min-w-0 flex-col gap-4 rounded-card border border-border-default bg-surface-card p-4 transition-opacity md:p-6',
-            state === 'stale' && 'opacity-80',
+            staleNote && 'opacity-80',
           )
         "
       >
@@ -282,7 +290,7 @@ onBeforeUnmount(() => {
           <p class="text-body-sm text-ink-600">
             <span
               :data-testid="`delivery-count-${c.key}-total`"
-              :data-value="c.counts.total"
+              :data-value="dv(c.counts.total)"
               class="text-numeral-md text-accent-numeral tabular-nums"
               >{{ show(c.counts.total) }}</span
             >
@@ -322,7 +330,7 @@ onBeforeUnmount(() => {
             </dt>
             <dd
               :data-testid="`delivery-count-${c.key}-${r.key}`"
-              :data-value="c.counts[r.key]"
+              :data-value="dv(c.counts[r.key])"
               :class="cn('text-numeral-sm tabular-nums', valueClass(r.key, c.counts[r.key]))"
             >
               {{ show(c.counts[r.key]) }}
