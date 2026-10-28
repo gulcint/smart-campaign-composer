@@ -23,6 +23,8 @@ allow_re='/Users/<user>|@example\.(com|test|org|net)|noreply@anthropic\.com|\[RE
 names="${SANITIZE_EXTRA_NAMES:-}"
 [[ -z "${CI:-}" ]] && names="${USER:-} $names"
 
+phrases="${SANITIZE_EXTRA_PHRASES:-}"
+
 status=0
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
@@ -37,6 +39,13 @@ while IFS= read -r f; do
     named=$(show "$f" | grep -nwF -- "$n" | cut -d: -f1 | sed "s/\$/: account name '$n' present/" || true)
     [[ -n "$named" ]] && hits="${hits:+$hits$'\n'}$named"
   done
+  # Full names (comma-separated SANITIZE_EXTRA_PHRASES), any case, any whitespace between the words.
+  while IFS= read -r p; do
+    p=$(printf '%s' "$p" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+    (( ${#p} >= 3 )) || continue
+    named=$(show "$f" | PHRASE="$p" perl -0777 -ne 'my $re = join q{\s+}, map { quotemeta } split " ", $ENV{PHRASE}; while (/(?<![A-Za-z0-9])$re(?![A-Za-z0-9])/gi) { my $l = (substr($_, 0, $-[0]) =~ tr/\n//) + 1; print "$l: full name present\n" }' || true)
+    [[ -n "$named" ]] && hits="${hits:+$hits$'\n'}$named"
+  done < <(printf '%s\n' "$phrases" | tr ',' '\n')
   if [[ -n "$hits" ]]; then
     echo "ai-sessions: $f still contains sensitive data (run make sanitize-sessions):" >&2
     printf '%s\n' "$hits" | sed -E 's/(sk-ant-.{4}).*/\1…/' | sed 's/^/  line /' >&2

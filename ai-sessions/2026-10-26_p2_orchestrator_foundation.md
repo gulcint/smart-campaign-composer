@@ -2808,7 +2808,7 @@
   - Migration gidiş-dönüş testi henüz yok. Migration aracı P2'de seçilecek; o
     faz make db-roundtrip hedefini eklemek zorunda, pre-push hook'u bu hedefi
     çağırıyor.
-  - Commit'lerin yazarı git ayarındaki Gulcin Tas <[REDACTED_EMAIL]>. Bu
+  - Commit'lerin yazarı git ayarındaki <user> <[REDACTED_EMAIL]>. Bu
     ayara dokunmadım.
   - Planlama session'ının export'u henüz alınmadı. /export komutunu yalnızca sen
     çalıştırabilirsin. Bu session'ın sonunda şunu çalıştırman gerekiyor:
@@ -4357,7 +4357,7 @@ ai-sessions/2026-10-26_p0_orchestrator_case-analysis-plan-bootstrap.md
     düzeltebilirim.
   - Son durum: kullanıcı adı 0, Gmail 0, make check-sessions ve gitleaks temiz.
   - Repo public olduğu için içeriği elle de gözden geçirdim. Kaldığı bilgiler:
-    GitHub kullanıcı adın (gulcint, zaten repo adresinde) ve adın Gulcin Tas
+    GitHub kullanıcı adın (gulcint, zaten repo adresinde) ve adın <user>
     (commit yazarında zaten var).
 
   Model değişikliği: Yanıtlarım artık Sonnet 5.5 ile geliyor. CLAUDE.md'deki
@@ -5621,7 +5621,7 @@ ai-sessions/2026-10-26_p1_orchestrator_requirements-design-contracts.md
     biçimindeki yol adlarındaydı. Beşini elle maskeledim ve grep ile kalmadığını
     doğruladım. Bu açığı kapatmak için sanitizer'a çok satırlı yol maskelemesi
     eklemek iyi olur; P2'ye küçük bir iş olarak ekleyebilirim.
-  - Export'ta senin adın (Gulcin Tas) ve GitHub kullanıcı adın (gulcint)
+  - Export'ta senin adın (<user>) ve GitHub kullanıcı adın (gulcint)
     geçiyor. İkisi zaten commit geçmişinde ve repo adresinde herkese açık, o
     yüzden bıraktım. İstersen maskelerim.
 
