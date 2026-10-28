@@ -258,7 +258,7 @@ onBeforeUnmount(() => {
           v-if="state === 'completed' && totals.failed > 0"
           data-testid="delivery-failed-link"
           :href="failedHref"
-          class="inline-flex w-fit items-center gap-1.5 text-body-sm font-medium text-error underline underline-offset-4 hover:text-error-strong"
+          class="inline-flex w-fit items-center gap-1.5 text-body-sm font-medium text-error underline max-lg:min-h-11 underline-offset-4 hover:text-error-strong"
           @click="openFailed"
           >{{ t('delivery.failedLink') }} ({{ formatNumber(totals.failed) }})</a
         >

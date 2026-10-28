@@ -300,6 +300,7 @@ watch(
 
     <div v-for="d in visible" :key="d.key" class="flex flex-col gap-1.5">
       <label :for="inputId(d.key)" class="text-h4 text-accent-heading">{{ t(d.label) }}</label>
+      <!-- Phones: a 160-char SMS wraps to ~6 lines at body-lg; max-sm:min-h-48 shows it whole. -->
       <textarea
         v-if="d.multiline"
         :id="inputId(d.key)"
@@ -314,7 +315,7 @@ watch(
           cn(
             'block w-full resize-y rounded-input border bg-surface-card px-4 py-3 text-ink-900 outline-none',
             'focus-visible:border-primary focus-visible:shadow-focus read-only:bg-surface-sunken read-only:text-ink-600',
-            d.key === 'sms-body' ? 'text-body-lg' : 'text-body',
+            d.key === 'sms-body' ? 'text-body-lg max-sm:min-h-48' : 'text-body',
             invalid(d) ? 'border-[1.5px] border-error' : 'border-border-default',
           )
         "

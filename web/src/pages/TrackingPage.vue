@@ -199,9 +199,11 @@ onBeforeUnmount(() => {
           {{ t('delivery.failedList.empty') }}
         </p>
         <template v-else-if="failed">
-          <div class="overflow-x-auto">
-            <table class="w-full min-w-[28rem] text-left text-body-sm">
-              <thead class="text-caption text-ink-500">
+          <!-- Below 640 px each row is a two-line card (customer + channel, reason + attempts)
+               instead of a table that would scroll sideways (DESIGN.md §8.6). -->
+          <div class="sm:overflow-x-auto">
+            <table class="w-full text-left text-body-sm sm:min-w-[28rem]">
+              <thead class="text-caption text-ink-500 max-sm:sr-only">
                 <tr class="border-b border-border-subtle">
                   <th scope="col" class="py-2 pr-3 font-medium">
                     {{ t('delivery.failedList.customer') }}
@@ -225,10 +227,12 @@ onBeforeUnmount(() => {
                   :data-delivery-id="d.id"
                   :data-channel="d.channel"
                   :data-reason="d.failure_reason ?? undefined"
-                  class="border-b border-border-subtle last:border-b-0"
+                  class="border-b border-border-subtle last:border-b-0 max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-x-3 max-sm:gap-y-1 max-sm:py-3"
                 >
-                  <td class="py-2 pr-3 font-mono text-caption">{{ d.customer_id }}</td>
-                  <td class="py-2 pr-3">
+                  <td class="py-2 pr-3 font-mono text-caption break-all max-sm:p-0">
+                    {{ d.customer_id }}
+                  </td>
+                  <td class="py-2 pr-3 max-sm:p-0 max-sm:text-right">
                     <span class="inline-flex items-center gap-1.5">
                       <span
                         :class="[
@@ -240,10 +244,13 @@ onBeforeUnmount(() => {
                       {{ d.channel === 'sms' ? t('tabs.sms') : t('tabs.email') }}
                     </span>
                   </td>
-                  <td class="py-2 pr-3 text-right tabular-nums">
-                    {{ formatNumber(d.attempts) }}
+                  <td class="py-2 pr-3 text-right tabular-nums max-sm:order-last max-sm:p-0">
+                    <span class="sm:hidden">{{ t('delivery.failedList.attempts') }}: </span
+                    >{{ formatNumber(d.attempts) }}
                   </td>
-                  <td class="py-2">{{ reasonText(d.failure_reason) }}</td>
+                  <td class="py-2 max-sm:p-0 max-sm:text-ink-600">
+                    {{ reasonText(d.failure_reason) }}
+                  </td>
                 </tr>
               </tbody>
             </table>

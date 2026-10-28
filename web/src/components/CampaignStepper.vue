@@ -29,7 +29,8 @@ function go(step: StepId) {
 
 <template>
   <nav data-testid="stepper" :aria-label="t('stepper.label')" class="w-full">
-    <!-- Compact summary below 768 px (DESIGN.md §8.6); the step row stays tappable. -->
+    <!-- Compact summary below 768 px (DESIGN.md §8.6); the step row stays tappable and every
+         step keeps a 44 px touch target below 1024 px. -->
     <p class="mb-1 text-caption text-ink-600 md:hidden" aria-hidden="true">
       {{
         t('stepper.compact', {
@@ -51,7 +52,7 @@ function go(step: StepId) {
           :title="s.status === 'locked' ? t('stepper.locked') : undefined"
           :class="
             cn(
-              'group flex min-h-11 items-center gap-2 rounded-pill px-2 py-1 text-body-sm transition-colors md:min-h-0',
+              'group flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-pill px-2 py-1 text-body-sm transition-colors lg:min-h-0 lg:min-w-0',
               s.status === 'locked' ? 'cursor-not-allowed text-ink-300' : 'hover:bg-accent',
               s.status === 'active' && 'font-semibold text-accent-text',
               s.status === 'completed' && 'text-ink-700',

@@ -58,10 +58,12 @@ function onApprove() {
 </script>
 
 <template>
+  <!-- Below 640 px the bar is edge to edge at the bottom of the screen with safe-area padding
+       and a full-width button (DESIGN.md §8.6); from 640 px it is a floating card. -->
   <div
     data-testid="approval-bar"
     :data-state="state"
-    class="sticky bottom-0 z-10 flex flex-col gap-3 rounded-card border border-border-default bg-surface-raised p-4 shadow-raised sm:flex-row sm:items-center sm:justify-between"
+    class="sticky bottom-0 z-10 flex flex-col gap-3 border-border-default bg-surface-raised p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-raised max-sm:-mx-4 max-sm:border-t sm:flex-row sm:items-center sm:justify-between sm:rounded-card sm:border"
   >
     <!-- approved: no note; the step header badge already says "Onaylandı". -->
     <p
