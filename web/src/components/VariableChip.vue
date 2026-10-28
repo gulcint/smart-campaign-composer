@@ -33,7 +33,7 @@ function onClick() {
     :aria-disabled="disabled ? 'true' : undefined"
     :class="
       cn(
-        'inline-flex h-7 items-center gap-1 rounded-pill border border-brand-line bg-secondary px-2.5 font-mono text-caption text-secondary-foreground',
+        'inline-flex h-7 items-center gap-1 rounded-pill border border-brand-line bg-secondary px-2.5 font-mono max-lg:h-11 max-lg:px-3.5 text-caption text-secondary-foreground',
         'transition-colors hover:border-brand-icon focus-visible:shadow-focus',
         'aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:border-brand-line',
       )
