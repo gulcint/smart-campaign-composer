@@ -215,13 +215,14 @@ Phases and their scope ([`docs/PLAN.md`](docs/PLAN.md)):
 | P4 Content + Approval | ✅ done | SMS/email generation (SSE), character limits, personalization, versioned editing, approval, preview |
 | P5 Send + Tracking | ✅ done | Send API, queue and worker, live status stream and tracking screen, generation lease in the database, responsive layout |
 | P6 Hardening + Delivery | ✅ done | Browser end-to-end tests, security scan, personal-data cleanup, final README and DECISIONS |
+| P7 Bonus | 🟡 in progress | Scheduled send (D62): contracts written; tests and implementation next. A/B variants and content in the user's language stay out of scope |
 
 ## Bonus
 
 | Bonus | Status |
 |---|---|
 | CI pipeline | 🟢 done: GitHub Actions; required `ci-ok` for `main`: lint, `make test`, gitleaks, govulncheck, OpenAPI drift check (build/test is skipped on docs-only PRs, D51) |
-| Scheduled send | ⬜ not done |
+| Scheduled send | 🟡 in progress (D62): a campaign is scheduled through `POST /send` with an optional `scheduled_at`, cancelled with `DELETE .../schedule`; contracts are written, implementation is next |
 | A/B variants | ⬜ not done |
 | Content in the user's language | ⬜ not done (the seed has a `language` field) |
 
