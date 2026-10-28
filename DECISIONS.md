@@ -78,7 +78,7 @@ Koruma hook'u `gh pr merge`'e yalnızca açık PR numarası + `--squash` ile ve 
 - Kişisel veri: seed yalnızca `example.com` e-postaları ve kurgusal telefon bloğu; TC kimlik/doğum tarihi/adres/ödeme alanı yok (veri minimizasyonu). Loglarda müşteri kimliği geçer, e-posta/telefon geçmez.
 - LLM/düzenleme metni arayüzde asla HTML olarak yorumlanmaz (`v-html` yasak, e-posta önizlemesi `sandbox` çerçevede).
 - Uygulamanın DB rolü DDL çalıştıramaz; migration ayrı rolle koşar (`cmd/migrate`).
-- Kimlik doğrulama yok (VARSAYIM): yerel demo; `/metrics` iç ağdan.
+- Kimlik doğrulama yok (VARSAYIM): yerel demo; API (ve `/metrics`) yalnız `127.0.0.1`'e açılır (D28, D57).
 - Repo public olduğundan `ai-sessions/` yayımlanmadan önce temizleyici + gitleaks + elle gözden geçirme zorunludur.
 
 ---
@@ -258,6 +258,24 @@ PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
 - **ActivityFeed** takip ekranında zorunlu değildir; REQ-TRK-01 yalnız sayaçları ister ve ekran yalnız sayaçları gösterir.
 - **Responsive düzen** (DESIGN.md V13) için REQ ve otomatik test yoktur; kapı 375/768/1280 px'te tüm ekranların ekran görüntüsüdür (PLAN §1.1 P5 satırı, PR #94).
 - **Bedel:** İkinci API sürecinin gerçek ağ/kapsayıcı davranışı ve E2E'deki pencere başına sayım otomatik denetlenmez; responsive gerilemeleri yalnız elle fark edilir.
+
+### D57 — `/metrics` dışarıya açıktır: case'e göre teslim edilen bir uç noktadır (sahip kararı, 2026-10-28)
+- **Bağlam:** D16 "`/metrics` iç ağdan", D28 ise "yayınlanan API portunda, yalnız 127.0.0.1" diyordu; README denetimi bu çelişkiyi açık soru olarak bıraktı. Sahip, kararın `DECISIONS.md`'ye değil case dokümanına bakılarak verilmesini istedi.
+- **Case ne diyor:** Fonksiyonel gereksinimler → Takip: "Canlı gönderim durumu, metrics ve health check endpoint'leri." Metrics, health check ve canlı durum aynı maddede, teslim edilen uç noktalar olarak sayılır; case erişimi kısıtlayan bir şey söylemez. Teslim ise `docker compose up` ile tek komutluk kurulumdur: değerlendirici sistemi kendi makinesinde açar ve uç noktaları denemek ister.
+- **Karar:** API'nin `/healthz`, `/readyz` ve `/metrics` uçları yayınlanan API portundadır (varsayılan 8080) ve port yalnız `127.0.0.1`'e bağlanır (D28 geçerli, D16 buna göre düzeltildi). Worker'ın aynı uçları iç ağda kalır; teslimat sayaçları veritabanından hesaplandığı için (D22) API'nin `/metrics`'i tüm sistemi gösterir.
+- **Bedel:** Kimlik doğrulama yok; makinedeki her yerel süreç metrikleri okuyabilir. Yerel demo için kabul edilir; gerçek ortamda metrics ayrı bir iç portta veya yetkiyle sunulurdu.
+
+### D58 — Commit geçmişi yeniden yazılmaz (sahip kararı, 2026-10-28)
+- **Bağlam:** `main`'deki squash merge commit'leri (48 adet) GitHub hesabının birincil e-postasıyla yazılmış. P6 kişisel bilgi temizliği (PLAN §1.1) geçmişin yeniden yazılmasını sahip kararına bırakmıştı.
+- **Karar:** Geçmiş yeniden yazılmaz, `main`'e force push yapılmaz. Temizlik izlenen dosyalar ve `ai-sessions/` export'larıyla sınırlıdır.
+- **Neden:** Sahibe göre e-posta gizli bir bilgi değildir. Geçmişi toplu yeniden yazmak, değerlendirmede incelenecek commit geçmişini bozar ve tek seferde yeniden oluşturulmuş gibi gösterir; force push `main` ruleset'ine de aykırıdır.
+- **Bedel:** Eski commit'lerin yazar e-postası görünür kalır.
+
+### D59 — Kanal seçimi yok: izin veren kişiye her iki kanaldan gider (sahip kararı, 2026-10-28)
+- **Bağlam:** İki izni de olan kişiye hem SMS hem email mi gitmeli, yoksa pazarlamacı kanal mı seçmeli?
+- **Case ne diyor:** Sistem brief'i "hedef kitleye ve SMS ve email mesajlarına" çevirir; akışta "SMS ve email içeriği" birlikte üretilir; kanal sınırını yalnız izin koyar ("İzni olmayan kullanıcıya o kanaldan mesaj gönderilmez"). Kanal seçimi istenmez.
+- **Karar:** Her kampanya iki kanalı da içerir. Kişi izin verdiği her kanaldan mesaj alır: iki izin varsa ikisi, biri varsa o, hiçbiri yoksa hiçbiri (D9).
+- **Bedel:** Pazarlamacı "yalnız SMS" kampanyası kuramaz. Kanal seçimi içerik üretimi, limitler, onay ve gönderim sözleşmelerinin hepsine dokunur; case çekirdek akışın sağlamlığını öne koyduğu için yapılmadı.
 
 ## Bilinen sınırlar ve riskler
 
