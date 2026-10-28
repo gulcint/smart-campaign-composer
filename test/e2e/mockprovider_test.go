@@ -1,18 +1,27 @@
 package e2e_test
 
-// The real mock provider of compose.test.yml (E2E_MOCKPROVIDER_URL), driven directly over HTTP
-// (REQ-MOCK-01, REQ-MOCK-02, REQ-SND-05). The admin endpoints are on (MOCK_PROVIDER_ADMIN=true) and
-// random 429s are off (MOCK_PROVIDER_RATE_LIMIT_RATE=0). Random 500/503 (MOCK_PROVIDER_ERROR_RATE)
-// may be on; such answers are never stored, so the helpers repeat a request until the answer is
-// not a random 5xx wherever the expected answer is deterministic. Lost responses are assumed off
-// (MOCK_PROVIDER_LOST_RESPONSE_RATE default 0) outside scripts.
+// The mock provider's own behavior over HTTP (REQ-MOCK-01, REQ-MOCK-02, REQ-SND-05). These tests use
+// the second mock provider instance of the test stack, E2E_MOCKPROVIDER_SOLO_URL, which receives no
+// worker traffic and runs with the default rates and MOCK_PROVIDER_ADMIN=true (REQ-MOCK-01). Random
+// 500/503 (MOCK_PROVIDER_ERROR_RATE, default 0.05) and random 429 (MOCK_PROVIDER_RATE_LIMIT_RATE,
+// default 0.02) are therefore on: such answers are never stored (REQ-MOCK-02 "Yalnız 202 sonuçları
+// saklanır"), so the helpers repeat a request until the answer is not a random one wherever the
+// expected answer is deterministic. Lost responses are off outside scripts
+// (MOCK_PROVIDER_LOST_RESPONSE_RATE default 0).
 //
-// Every test resets the mock provider and changes its global state, so none of them calls
-// t.Parallel (see delivery_test.go).
+// Every Idempotency-Key carries a per-run random part (runKey), so keys of earlier runs or other
+// tests can never collide; the stores are read only through this run's keys. Tests whose subject
+// is the instance's global state (reset, determinism, the sliding window, the exact request log)
+// reset the solo instance first; none of the tests calls t.Parallel, so they never interleave.
+//
+// The helpers mpReset/mpScript/mpMessages/mpRequests and mpDeleteScriptsCleanup are also used by
+// delivery_test.go against the shared instance E2E_MOCKPROVIDER_URL, which it never resets.
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,11 +38,29 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// mpClient talks to the mock provider, which is not part of openapi.yaml. Its transport is the
+// mpClient talks to the mock providers, which are not part of openapi.yaml. Its transport is the
 // testenv network guard installed on http.DefaultTransport.
 var mpClient = &http.Client{Timeout: 20 * time.Second}
 
 var msgIDRE = regexp.MustCompile(`^msg_[0-9a-f]{32}$`)
+
+// runID makes every Idempotency-Key of this test binary unique across runs.
+var runID = func() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand: %v", err))
+	}
+	return hex.EncodeToString(b)
+}()
+
+// runKey returns an Idempotency-Key that is unique to this run.
+func runKey(name string) string { return "e2e-" + runID + "-" + name }
+
+// soloURL is the mock provider instance without worker traffic.
+func soloURL(t *testing.T) string {
+	t.Helper()
+	return baseURL(t, "E2E_MOCKPROVIDER_SOLO_URL")
+}
 
 type mpMessage struct {
 	ID             string `json:"id"`
@@ -103,8 +130,18 @@ func mpSend(t *testing.T, mp, channel, key string, payload any) mpResponse {
 	return mpPost(mp+"/v1/"+channel+"/messages", "application/json", key, mustJSON(t, payload))
 }
 
-// mpSettled repeats a request while the answer is a random 500/503 and returns the first other
-// answer. A transport error is fatal (no lost responses outside scripts).
+// isRandomAnswer: an answer the mock may give at random and never stores (500/503, or 429
+// rate_limited from MOCK_PROVIDER_RATE_LIMIT_RATE), so the same request is evaluated again.
+func isRandomAnswer(r mpResponse) bool {
+	switch r.Status {
+	case http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusTooManyRequests:
+		return true
+	}
+	return false
+}
+
+// mpSettled repeats a request while the answer is a random one and returns the first other answer.
+// A transport error is fatal (no lost responses outside scripts).
 func mpSettled(t *testing.T, url, contentType, key string, body []byte) mpResponse {
 	t.Helper()
 	for range 40 {
@@ -112,11 +149,11 @@ func mpSettled(t *testing.T, url, contentType, key string, body []byte) mpRespon
 		if r.Err != nil {
 			t.Fatalf("POST %s (key %q): %v", url, key, r.Err)
 		}
-		if r.Status != http.StatusInternalServerError && r.Status != http.StatusServiceUnavailable {
+		if !isRandomAnswer(r) {
 			return r
 		}
 	}
-	t.Fatalf("POST %s (key %q) answered 5xx 40 times in a row", url, key)
+	t.Fatalf("POST %s (key %q) got a random 5xx/429 40 times in a row", url, key)
 	return mpResponse{}
 }
 
@@ -153,28 +190,42 @@ func mpAdmin(t *testing.T, method, url string, body []byte, wantStatus int) []by
 	return b
 }
 
+// mpReset is only ever called on the solo instance.
 func mpReset(t *testing.T, mp string) {
 	t.Helper()
 	mpAdmin(t, http.MethodPost, mp+"/admin/reset", nil, http.StatusNoContent)
 }
 
-// mpResetCleanup runs from t.Cleanup, after t.Context() is cancelled.
-func mpResetCleanup(t *testing.T, mp string) {
+// mpCleanupCall runs from t.Cleanup, after t.Context() is cancelled.
+func mpCleanupCall(t *testing.T, method, url string) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, mp+"/admin/reset", nil)
+	req, err := http.NewRequestWithContext(context.Background(), method, url, nil)
 	if err != nil {
-		t.Errorf("cleanup reset: %v", err)
+		t.Errorf("cleanup %s %s: %v", method, url, err)
 		return
 	}
 	resp, err := mpClient.Do(req)
 	if err != nil {
-		t.Errorf("cleanup reset: %v", err)
+		t.Errorf("cleanup %s %s: %v", method, url, err)
 		return
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("cleanup POST /admin/reset status = %d, want 204", resp.StatusCode)
+		t.Errorf("cleanup %s %s status = %d, want 204", method, url, resp.StatusCode)
 	}
+}
+
+// mpResetCleanup resets the solo instance after a test.
+func mpResetCleanup(t *testing.T, mp string) {
+	t.Helper()
+	mpCleanupCall(t, http.MethodPost, mp+"/admin/reset")
+}
+
+// mpDeleteScriptsCleanup removes scripts that were not consumed, so they cannot answer later
+// campaigns.
+func mpDeleteScriptsCleanup(t *testing.T, mp string) {
+	t.Helper()
+	mpCleanupCall(t, http.MethodDelete, mp+"/admin/scripts")
 }
 
 // mpScript queues responses for channel (+ to when non-empty).
@@ -197,7 +248,6 @@ func mpMessages(t *testing.T, mp string) []mpMessage {
 	return page.Items
 }
 
-// mpRequests returns the request log; seq starts at 1 after a reset and grows by one.
 func mpRequests(t *testing.T, mp string) []mpRequest {
 	t.Helper()
 	b := mpAdmin(t, http.MethodGet, mp+"/admin/requests", nil, http.StatusOK)
@@ -205,11 +255,6 @@ func mpRequests(t *testing.T, mp string) []mpRequest {
 		Items []mpRequest `json:"items"`
 	}
 	mustUnmarshal(t, string(b), &page)
-	for i, r := range page.Items {
-		if r.Seq != i+1 {
-			t.Fatalf("/admin/requests items[%d].seq = %d, want %d (arrival order from 1)", i, r.Seq, i+1)
-		}
-	}
 	return page.Items
 }
 
@@ -221,6 +266,19 @@ func requestsFor(reqs []mpRequest, key string) []mpRequest {
 		}
 	}
 	return out
+}
+
+// runMessageKeys returns the keys of this run's accepted messages (runKey prefix), sorted.
+func runMessageKeys(t *testing.T, mp string) []string {
+	t.Helper()
+	var keys []string
+	for _, m := range mpMessages(t, mp) {
+		if strings.HasPrefix(m.IdempotencyKey, runKey("")) {
+			keys = append(keys, m.IdempotencyKey)
+		}
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // assertAccepted checks a 202 body {"id","status","channel","idempotency_key","duplicate"} and the
@@ -281,33 +339,33 @@ func assertMPError(t *testing.T, r mpResponse, wantStatus int, wantCode string) 
 // Idempotency-Key and broken or incomplete bodies are 400 with their codes and are not stored.
 func TestE2E_MockProviderSendEndpoints(t *testing.T) {
 	// Not parallel: see the file comment.
-	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
+	mp := soloURL(t)
 	mpReset(t, mp)
 	t.Cleanup(func() { mpResetCleanup(t, mp) })
 
+	smsKey, emailKey := runKey("send-sms-1"), runKey("send-email-1")
 	t.Run("sms is accepted", func(t *testing.T) {
-		assertAccepted(t, mpSendSettled(t, mp, "sms", "send-sms-1", smsPayload("+905000000101")), "sms", "send-sms-1", false)
+		assertAccepted(t, mpSendSettled(t, mp, "sms", smsKey, smsPayload("+905000000101")), "sms", smsKey, false)
 	})
 	t.Run("email is accepted", func(t *testing.T) {
-		assertAccepted(t, mpSendSettled(t, mp, "email", "send-email-1", emailPayload("send-1@example.com")), "email", "send-email-1", false)
+		assertAccepted(t, mpSendSettled(t, mp, "email", emailKey, emailPayload("send-1@example.com")), "email", emailKey, false)
 	})
 
 	rejected := []struct {
-		name        string
-		channel     string
-		key         string
-		contentType string
-		body        string
-		code        string
+		name    string
+		channel string
+		key     string
+		body    string
+		code    string
 	}{
 		{name: "sms without Idempotency-Key", channel: "sms", body: `{"to":"+905000000102","body":"Merhaba"}`, code: "missing_idempotency_key"},
 		{name: "email without Idempotency-Key", channel: "email", body: `{"to":"a@example.com","subject":"K","text":"M","html":"<p>M</p>"}`, code: "missing_idempotency_key"},
-		{name: "broken JSON", channel: "sms", key: "send-bad-1", body: `{"to":"+905000000103",`, code: "invalid_body"},
-		{name: "sms without body", channel: "sms", key: "send-bad-2", body: `{"to":"+905000000104"}`, code: "invalid_body"},
-		{name: "sms without to", channel: "sms", key: "send-bad-3", body: `{"body":"Merhaba"}`, code: "invalid_body"},
-		{name: "email without subject", channel: "email", key: "send-bad-4", body: `{"to":"a@example.com","text":"M","html":"<p>M</p>"}`, code: "invalid_body"},
-		{name: "email without text", channel: "email", key: "send-bad-5", body: `{"to":"a@example.com","subject":"K","html":"<p>M</p>"}`, code: "invalid_body"},
-		{name: "email without html", channel: "email", key: "send-bad-6", body: `{"to":"a@example.com","subject":"K","text":"M"}`, code: "invalid_body"},
+		{name: "broken JSON", channel: "sms", key: runKey("send-bad-1"), body: `{"to":"+905000000103",`, code: "invalid_body"},
+		{name: "sms without body", channel: "sms", key: runKey("send-bad-2"), body: `{"to":"+905000000104"}`, code: "invalid_body"},
+		{name: "sms without to", channel: "sms", key: runKey("send-bad-3"), body: `{"body":"Merhaba"}`, code: "invalid_body"},
+		{name: "email without subject", channel: "email", key: runKey("send-bad-4"), body: `{"to":"a@example.com","text":"M","html":"<p>M</p>"}`, code: "invalid_body"},
+		{name: "email without text", channel: "email", key: runKey("send-bad-5"), body: `{"to":"a@example.com","subject":"K","html":"<p>M</p>"}`, code: "invalid_body"},
+		{name: "email without html", channel: "email", key: runKey("send-bad-6"), body: `{"to":"a@example.com","subject":"K","text":"M"}`, code: "invalid_body"},
 	}
 	for _, tc := range rejected {
 		t.Run("rejects "+tc.name, func(t *testing.T) {
@@ -317,13 +375,10 @@ func TestE2E_MockProviderSendEndpoints(t *testing.T) {
 	}
 
 	t.Run("only the accepted messages are stored", func(t *testing.T) {
-		var keys []string
-		for _, m := range mpMessages(t, mp) {
-			keys = append(keys, m.IdempotencyKey)
-		}
-		slices.Sort(keys)
-		if diff := cmp.Diff([]string{"send-email-1", "send-sms-1"}, keys); diff != "" {
-			t.Fatalf("/admin/messages keys mismatch (-want +got):\n%s", diff)
+		want := []string{emailKey, smsKey}
+		slices.Sort(want)
+		if diff := cmp.Diff(want, runMessageKeys(t, mp)); diff != "" {
+			t.Fatalf("/admin/messages keys of this run mismatch (-want +got):\n%s", diff)
 		}
 	})
 }
@@ -333,7 +388,7 @@ func TestE2E_MockProviderSendEndpoints(t *testing.T) {
 // in @example.com or @example.test; anything else is 400 invalid_recipient and is not stored.
 func TestE2E_MockProviderRejectsRealRecipients(t *testing.T) {
 	// Not parallel: see the file comment.
-	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
+	mp := soloURL(t)
 	mpReset(t, mp)
 	t.Cleanup(func() { mpResetCleanup(t, mp) })
 
@@ -361,7 +416,7 @@ func TestE2E_MockProviderRejectsRealRecipients(t *testing.T) {
 	var accepted []string
 	for i, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			key := fmt.Sprintf("recipient-%02d", i)
+			key := runKey(fmt.Sprintf("recipient-%02d", i))
 			payload := smsPayload(tc.to)
 			if tc.channel == "email" {
 				payload = emailPayload(tc.to)
@@ -376,14 +431,9 @@ func TestE2E_MockProviderRejectsRealRecipients(t *testing.T) {
 		})
 	}
 	t.Run("rejected recipients are not stored", func(t *testing.T) {
-		var keys []string
-		for _, m := range mpMessages(t, mp) {
-			keys = append(keys, m.IdempotencyKey)
-		}
-		slices.Sort(keys)
 		slices.Sort(accepted)
-		if diff := cmp.Diff(accepted, keys); diff != "" {
-			t.Fatalf("/admin/messages keys mismatch (-want +got):\n%s", diff)
+		if diff := cmp.Diff(accepted, runMessageKeys(t, mp)); diff != "" {
+			t.Fatalf("/admin/messages keys of this run mismatch (-want +got):\n%s", diff)
 		}
 	})
 }
@@ -395,20 +445,21 @@ func TestE2E_MockProviderRejectsRealRecipients(t *testing.T) {
 // idempotency_key_reused; a key whose request was not accepted is evaluated again.
 func TestE2E_MockProviderIdempotency(t *testing.T) {
 	// Not parallel: see the file comment.
-	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
+	mp := soloURL(t)
 	mpReset(t, mp)
 	t.Cleanup(func() { mpResetCleanup(t, mp) })
 
 	const to = "+905000000201"
-	first := mpSendSettled(t, mp, "sms", "idem-1", smsPayload(to))
-	a1 := assertAccepted(t, first, "sms", "idem-1", false)
+	k1, k2, k3 := runKey("idem-1"), runKey("idem-2"), runKey("idem-3")
+	first := mpSendSettled(t, mp, "sms", k1, smsPayload(to))
+	a1 := assertAccepted(t, first, "sms", k1, false)
 
 	// A script queued now must not be consumed by the replay (replays skip scripts).
 	mpScript(t, mp, "sms", to, []map[string]any{scripted(503)})
 
 	t.Run("replay returns the first result marked duplicate", func(t *testing.T) {
-		r := mpSend(t, mp, "sms", "idem-1", smsPayload(to))
-		a2 := assertAccepted(t, r, "sms", "idem-1", true)
+		r := mpSend(t, mp, "sms", k1, smsPayload(to))
+		a2 := assertAccepted(t, r, "sms", k1, true)
 		want := a1
 		want.Duplicate = true
 		if diff := cmp.Diff(want, a2); diff != "" {
@@ -417,7 +468,7 @@ func TestE2E_MockProviderIdempotency(t *testing.T) {
 	})
 
 	t.Run("the replay left the script in place", func(t *testing.T) {
-		r := mpSend(t, mp, "sms", "idem-2", smsPayload(to))
+		r := mpSend(t, mp, "sms", k2, smsPayload(to))
 		assertMPError(t, r, http.StatusServiceUnavailable, "internal_error")
 	})
 
@@ -431,27 +482,32 @@ func TestE2E_MockProviderIdempotency(t *testing.T) {
 	}
 	for _, tc := range reused {
 		t.Run("same key with "+tc.name+" is 409 idempotency_key_reused", func(t *testing.T) {
-			assertMPError(t, mpSendSettled(t, mp, tc.channel, "idem-1", tc.payload), http.StatusConflict, "idempotency_key_reused")
+			assertMPError(t, mpSendSettled(t, mp, tc.channel, k1, tc.payload), http.StatusConflict, "idempotency_key_reused")
 		})
 	}
 
 	t.Run("one message, request_count counts every request with the key", func(t *testing.T) {
-		msgs := mpMessages(t, mp)
-		if len(msgs) != 1 {
-			t.Fatalf("/admin/messages = %+v, want only idem-1", msgs)
+		var got []mpMessage
+		for _, m := range mpMessages(t, mp) {
+			if m.IdempotencyKey == k1 {
+				got = append(got, m)
+			}
 		}
-		got := msgs[0]
-		n := len(requestsFor(mpRequests(t, mp), "idem-1"))
-		if got.IdempotencyKey != "idem-1" || got.ID != a1.ID || got.Channel != "sms" || got.To != to || got.RequestCount != n || n < 4 || got.AcceptedAt == "" {
-			t.Fatalf("message = %+v, want idem-1 / %s / sms / %s with request_count = %d logged requests (>= 4)", got, a1.ID, to, n)
+		if len(got) != 1 {
+			t.Fatalf("/admin/messages entries for %s = %+v, want exactly one", k1, got)
+		}
+		n := len(requestsFor(mpRequests(t, mp), k1))
+		g := got[0]
+		if g.ID != a1.ID || g.Channel != "sms" || g.To != to || g.RequestCount != n || n < 4 || g.AcceptedAt == "" {
+			t.Fatalf("message = %+v, want %s / sms / %s with request_count = %d logged requests (>= 4)", g, a1.ID, to, n)
 		}
 	})
 
 	t.Run("a key that got 500 is evaluated again", func(t *testing.T) {
 		const to2 = "+905000000203"
 		mpScript(t, mp, "sms", to2, []map[string]any{scripted(500), scripted(202)})
-		assertMPError(t, mpSend(t, mp, "sms", "idem-3", smsPayload(to2)), http.StatusInternalServerError, "internal_error")
-		assertAccepted(t, mpSend(t, mp, "sms", "idem-3", smsPayload(to2)), "sms", "idem-3", false)
+		assertMPError(t, mpSend(t, mp, "sms", k3, smsPayload(to2)), http.StatusInternalServerError, "internal_error")
+		assertAccepted(t, mpSend(t, mp, "sms", k3, smsPayload(to2)), "sms", k3, false)
 	})
 }
 
@@ -462,25 +518,31 @@ func TestE2E_MockProviderIdempotency(t *testing.T) {
 // status and replay flag; /admin/messages has the one accepted message.
 func TestE2E_MockProviderScriptedSequence(t *testing.T) {
 	// Not parallel: see the file comment.
-	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
+	mp := soloURL(t)
 	mpReset(t, mp)
 	t.Cleanup(func() { mpResetCleanup(t, mp) })
 
 	const to = "+905000000301"
+	k1, k2 := runKey("seq-1"), runKey("seq-2")
 	mpScript(t, mp, "sms", to, []map[string]any{scriptedRetryAfter(429, 3), scripted(500), scripted(503), scripted(202), scripted(503)})
 
-	r := mpSend(t, mp, "sms", "seq-1", smsPayload(to))
+	r := mpSend(t, mp, "sms", k1, smsPayload(to))
 	assertMPError(t, r, http.StatusTooManyRequests, "rate_limited")
 	if got := r.Header.Get("Retry-After"); got != "3" {
 		t.Fatalf("Retry-After = %q, want the scripted 3", got)
 	}
-	assertMPError(t, mpSend(t, mp, "sms", "seq-1", smsPayload(to)), http.StatusInternalServerError, "internal_error")
-	assertMPError(t, mpSend(t, mp, "sms", "seq-1", smsPayload(to)), http.StatusServiceUnavailable, "internal_error")
-	acc := assertAccepted(t, mpSend(t, mp, "sms", "seq-1", smsPayload(to)), "sms", "seq-1", false)
-	assertAccepted(t, mpSend(t, mp, "sms", "seq-1", smsPayload(to)), "sms", "seq-1", true)
-	assertMPError(t, mpSend(t, mp, "sms", "seq-2", smsPayload(to)), http.StatusServiceUnavailable, "internal_error")
+	assertMPError(t, mpSend(t, mp, "sms", k1, smsPayload(to)), http.StatusInternalServerError, "internal_error")
+	assertMPError(t, mpSend(t, mp, "sms", k1, smsPayload(to)), http.StatusServiceUnavailable, "internal_error")
+	acc := assertAccepted(t, mpSend(t, mp, "sms", k1, smsPayload(to)), "sms", k1, false)
+	assertAccepted(t, mpSend(t, mp, "sms", k1, smsPayload(to)), "sms", k1, true)
+	assertMPError(t, mpSend(t, mp, "sms", k2, smsPayload(to)), http.StatusServiceUnavailable, "internal_error")
 
-	reqs := mpRequests(t, mp)
+	var reqs []mpRequest
+	for _, q := range mpRequests(t, mp) {
+		if q.IdempotencyKey == k1 || q.IdempotencyKey == k2 {
+			reqs = append(reqs, q)
+		}
+	}
 	type row struct {
 		Channel, Key, To string
 		Status           int
@@ -491,24 +553,32 @@ func TestE2E_MockProviderScriptedSequence(t *testing.T) {
 		got = append(got, row{q.Channel, q.IdempotencyKey, q.To, q.Status, q.Replayed})
 	}
 	want := []row{
-		{"sms", "seq-1", to, 429, false},
-		{"sms", "seq-1", to, 500, false},
-		{"sms", "seq-1", to, 503, false},
-		{"sms", "seq-1", to, 202, false},
-		{"sms", "seq-1", to, 202, true},
-		{"sms", "seq-2", to, 503, false},
+		{"sms", k1, to, 429, false},
+		{"sms", k1, to, 500, false},
+		{"sms", k1, to, 503, false},
+		{"sms", k1, to, 202, false},
+		{"sms", k1, to, 202, true},
+		{"sms", k2, to, 503, false},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("/admin/requests mismatch (-want +got):\n%s", diff)
 	}
 	for i := 1; i < len(reqs); i++ {
+		if reqs[i].Seq <= reqs[i-1].Seq {
+			t.Fatalf("seq does not grow in arrival order: %d then %d", reqs[i-1].Seq, reqs[i].Seq)
+		}
 		if parseTime(t, "received_at", reqs[i].ReceivedAt).Before(parseTime(t, "received_at", reqs[i-1].ReceivedAt)) {
 			t.Fatalf("received_at goes back between seq %d and %d", reqs[i-1].Seq, reqs[i].Seq)
 		}
 	}
-	msgs := mpMessages(t, mp)
-	if len(msgs) != 1 || msgs[0].ID != acc.ID || msgs[0].IdempotencyKey != "seq-1" || msgs[0].RequestCount != 5 {
-		t.Fatalf("/admin/messages = %+v, want only seq-1 (%s) with request_count 5", msgs, acc.ID)
+	var msgs []mpMessage
+	for _, m := range mpMessages(t, mp) {
+		if m.IdempotencyKey == k1 || m.IdempotencyKey == k2 {
+			msgs = append(msgs, m)
+		}
+	}
+	if len(msgs) != 1 || msgs[0].ID != acc.ID || msgs[0].IdempotencyKey != k1 || msgs[0].RequestCount != 5 {
+		t.Fatalf("/admin/messages = %+v, want only %s (%s) with request_count 5", msgs, k1, acc.ID)
 	}
 }
 
@@ -518,7 +588,7 @@ func TestE2E_MockProviderScriptedSequence(t *testing.T) {
 // /admin/scripts removes what is left.
 func TestE2E_MockProviderScriptQueues(t *testing.T) {
 	// Not parallel: see the file comment.
-	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
+	mp := soloURL(t)
 	mpReset(t, mp)
 	t.Cleanup(func() { mpResetCleanup(t, mp) })
 
@@ -526,22 +596,23 @@ func TestE2E_MockProviderScriptQueues(t *testing.T) {
 	mpScript(t, mp, "sms", "", []map[string]any{scripted(500), scripted(400), scripted(400)})
 	mpScript(t, mp, "sms", a, []map[string]any{scripted(503)})
 
-	if r := mpSend(t, mp, "sms", "q-1", smsPayload(a)); r.Err != nil || r.Status != http.StatusServiceUnavailable {
+	if r := mpSend(t, mp, "sms", runKey("q-1"), smsPayload(a)); r.Err != nil || r.Status != http.StatusServiceUnavailable {
 		t.Fatalf("first request to the scripted recipient = %d (%v), want its own 503", r.Status, r.Err)
 	}
-	if r := mpSend(t, mp, "sms", "q-2", smsPayload(a)); r.Err != nil || r.Status != http.StatusInternalServerError {
+	if r := mpSend(t, mp, "sms", runKey("q-2"), smsPayload(a)); r.Err != nil || r.Status != http.StatusInternalServerError {
 		t.Fatalf("second request to the scripted recipient = %d (%v), want the channel queue's 500", r.Status, r.Err)
 	}
-	if r := mpSend(t, mp, "sms", "q-3", smsPayload(b)); r.Err != nil || r.Status != http.StatusBadRequest {
+	if r := mpSend(t, mp, "sms", runKey("q-3"), smsPayload(b)); r.Err != nil || r.Status != http.StatusBadRequest {
 		t.Fatalf("request to another recipient = %d (%v), want the channel queue's 400", r.Status, r.Err)
 	}
 
-	r := mpSendSettled(t, mp, "email", "q-4", emailPayload("queue@example.com"))
-	assertAccepted(t, r, "email", "q-4", false)
+	k4 := runKey("q-4")
+	assertAccepted(t, mpSendSettled(t, mp, "email", k4, emailPayload("queue@example.com")), "email", k4, false)
 
 	mpAdmin(t, http.MethodDelete, mp+"/admin/scripts", nil, http.StatusNoContent)
-	assertAccepted(t, mpSendSettled(t, mp, "sms", "q-5", smsPayload(b)), "sms", "q-5", false)
-	for _, q := range requestsFor(mpRequests(t, mp), "q-5") {
+	k5 := runKey("q-5")
+	assertAccepted(t, mpSendSettled(t, mp, "sms", k5, smsPayload(b)), "sms", k5, false)
+	for _, q := range requestsFor(mpRequests(t, mp), k5) {
 		if q.Status == http.StatusBadRequest {
 			t.Fatalf("a deleted script still answered: %+v", q)
 		}
@@ -553,34 +624,44 @@ func TestE2E_MockProviderScriptQueues(t *testing.T) {
 // (logged with status 0); the retry with the same key is a replay, not a second message.
 func TestE2E_MockProviderLostResponse(t *testing.T) {
 	// Not parallel: see the file comment.
-	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
+	mp := soloURL(t)
 	mpReset(t, mp)
 	t.Cleanup(func() { mpResetCleanup(t, mp) })
 
 	const to = "+905000000501"
+	key := runKey("lost-1")
 	mpScript(t, mp, "sms", to, []map[string]any{{"status": 202, "lost_response": true}})
-	if r := mpSend(t, mp, "sms", "lost-1", smsPayload(to)); r.Err == nil {
+	if r := mpSend(t, mp, "sms", key, smsPayload(to)); r.Err == nil {
 		t.Fatalf("lost response answered %d: %s; want a connection error", r.Status, r.Body)
 	}
-	msgs := mpMessages(t, mp)
-	if len(msgs) != 1 || msgs[0].IdempotencyKey != "lost-1" || msgs[0].RequestCount != 1 || !msgIDRE.MatchString(msgs[0].ID) {
-		t.Fatalf("/admin/messages after a lost response = %+v, want lost-1 stored with request_count 1", msgs)
+	msgsFor := func(t *testing.T) []mpMessage {
+		t.Helper()
+		var out []mpMessage
+		for _, m := range mpMessages(t, mp) {
+			if m.IdempotencyKey == key {
+				out = append(out, m)
+			}
+		}
+		return out
 	}
-	if reqs := mpRequests(t, mp); len(reqs) != 1 || reqs[0].Status != 0 || reqs[0].Replayed {
-		t.Fatalf("/admin/requests = %+v, want one entry with status 0", reqs)
+	msgs := msgsFor(t)
+	if len(msgs) != 1 || msgs[0].RequestCount != 1 || msgs[0].To != to || !msgIDRE.MatchString(msgs[0].ID) {
+		t.Fatalf("/admin/messages after a lost response = %+v, want %s stored with request_count 1", msgs, key)
+	}
+	if reqs := requestsFor(mpRequests(t, mp), key); len(reqs) != 1 || reqs[0].Status != 0 || reqs[0].Replayed {
+		t.Fatalf("/admin/requests for %s = %+v, want one entry with status 0", key, reqs)
 	}
 
-	a := assertAccepted(t, mpSend(t, mp, "sms", "lost-1", smsPayload(to)), "sms", "lost-1", true)
+	a := assertAccepted(t, mpSend(t, mp, "sms", key, smsPayload(to)), "sms", key, true)
 	if a.ID != msgs[0].ID {
 		t.Fatalf("replay id = %s, want the stored %s", a.ID, msgs[0].ID)
 	}
-	msgs = mpMessages(t, mp)
-	if len(msgs) != 1 || msgs[0].RequestCount != 2 {
+	if msgs = msgsFor(t); len(msgs) != 1 || msgs[0].RequestCount != 2 {
 		t.Fatalf("/admin/messages after the retry = %+v, want one message with request_count 2", msgs)
 	}
-	reqs := mpRequests(t, mp)
+	reqs := requestsFor(mpRequests(t, mp), key)
 	if len(reqs) != 2 || reqs[1].Status != http.StatusAccepted || !reqs[1].Replayed {
-		t.Fatalf("/admin/requests = %+v, want the retry logged as 202 replayed", reqs)
+		t.Fatalf("/admin/requests for %s = %+v, want the retry logged as 202 replayed", key, reqs)
 	}
 }
 
@@ -589,12 +670,13 @@ func TestE2E_MockProviderLostResponse(t *testing.T) {
 // the scripts.
 func TestE2E_MockProviderReset(t *testing.T) {
 	// Not parallel: see the file comment.
-	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
+	mp := soloURL(t)
 	mpReset(t, mp)
 	t.Cleanup(func() { mpResetCleanup(t, mp) })
 
 	const to = "+905000000601"
-	assertAccepted(t, mpSendSettled(t, mp, "sms", "reset-1", smsPayload(to)), "sms", "reset-1", false)
+	key := runKey("reset-1")
+	assertAccepted(t, mpSendSettled(t, mp, "sms", key, smsPayload(to)), "sms", key, false)
 	mpScript(t, mp, "sms", to, []map[string]any{scripted(400)})
 	mpReset(t, mp)
 
@@ -604,21 +686,29 @@ func TestE2E_MockProviderReset(t *testing.T) {
 	if reqs := mpRequests(t, mp); len(reqs) != 0 {
 		t.Fatalf("/admin/requests after reset = %+v, want empty", reqs)
 	}
-	assertAccepted(t, mpSendSettled(t, mp, "sms", "reset-1", smsPayload(to)), "sms", "reset-1", false)
-	for _, q := range mpRequests(t, mp) {
+	assertAccepted(t, mpSendSettled(t, mp, "sms", key, smsPayload(to)), "sms", key, false)
+	reqs := mpRequests(t, mp)
+	for i, q := range reqs {
+		if q.Seq != i+1 {
+			t.Fatalf("/admin/requests items[%d].seq = %d after reset, want %d", i, q.Seq, i+1)
+		}
 		if q.Status == http.StatusBadRequest {
 			t.Fatalf("a script survived the reset: %+v", q)
 		}
+	}
+	if len(reqs) == 0 {
+		t.Fatal("/admin/requests is empty after a request")
 	}
 }
 
 // REQ-MOCK-01
 // Determinism: after a reset (generators re-seeded from MOCK_PROVIDER_SEED) the same in-channel
 // arrival order gives the same decision sequence, and SMS and e-mail decisions are independent:
-// interleaving the two channels changes neither sequence.
+// interleaving the two channels changes neither sequence. Keys differ per run (the decisions depend
+// on the arrival order, not on the key).
 func TestE2E_MockProviderDeterministicDecisions(t *testing.T) {
 	// Not parallel: see the file comment.
-	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
+	mp := soloURL(t)
 	t.Cleanup(func() { mpResetCleanup(t, mp) })
 
 	const n = 60
@@ -649,8 +739,8 @@ func TestE2E_MockProviderDeterministicDecisions(t *testing.T) {
 	}
 	var smsOnly, emailOnly, mixed []step
 	for i := range n {
-		sms := step{"sms", fmt.Sprintf("det-sms-%02d", i)}
-		email := step{"email", fmt.Sprintf("det-email-%02d", i)}
+		sms := step{"sms", runKey(fmt.Sprintf("det-sms-%02d", i))}
+		email := step{"email", runKey(fmt.Sprintf("det-email-%02d", i))}
 		smsOnly = append(smsOnly, sms)
 		emailOnly = append(emailOnly, email)
 		mixed = append(mixed, sms, email)
@@ -671,21 +761,24 @@ func TestE2E_MockProviderDeterministicDecisions(t *testing.T) {
 	}
 }
 
-// REQ-MOCK-02, REQ-SND-02
-// The mock's own sliding-window limit: with random 429 off, a burst of 150 concurrent SMS requests
-// that all arrive within one second gets 429 rate_limited with an integer Retry-After for
-// everything above 100, and never more than 100 non-429 answers in any window of the mock's own
-// received_at; the e-mail counter is independent, so an e-mail sent right after is not limited.
+// REQ-MOCK-02
+// The mock's own sliding-window limit: a burst of 150 concurrent SMS requests that all arrive
+// within one second gets 429 rate_limited with an integer Retry-After for everything above 100, and
+// never more than 100 non-429 answers in any window of the mock's own received_at; the e-mail
+// counter is independent, so an e-mail sent right after is accepted. The solo instance runs with
+// the default random 429 rate, which can only add 429s, so the bounds below still hold.
 func TestE2E_MockProviderRateLimit(t *testing.T) {
 	// Not parallel: see the file comment.
-	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
+	mp := soloURL(t)
 	mpReset(t, mp)
 	t.Cleanup(func() { mpResetCleanup(t, mp) })
 
 	const burst = 150
 	results := make([]mpResponse, burst)
+	keys := make([]string, burst)
 	var wg sync.WaitGroup
 	for i := range burst {
+		keys[i] = runKey("burst-" + strconv.Itoa(i))
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -694,13 +787,13 @@ func TestE2E_MockProviderRateLimit(t *testing.T) {
 				results[i] = mpResponse{Err: err}
 				return
 			}
-			results[i] = mpPost(mp+"/v1/sms/messages", "application/json", "burst-"+strconv.Itoa(i), body)
+			results[i] = mpPost(mp+"/v1/sms/messages", "application/json", keys[i], body)
 		}()
 	}
 	wg.Wait()
 
-	email := mpSendSettled(t, mp, "email", "burst-email", emailPayload("burst@example.com"))
-	assertAccepted(t, email, "email", "burst-email", false)
+	emailKey := runKey("burst-email")
+	assertAccepted(t, mpSendSettled(t, mp, "email", emailKey, emailPayload("burst@example.com")), "email", emailKey, false)
 
 	limited := 0
 	retryAfter := ""
@@ -723,9 +816,13 @@ func TestE2E_MockProviderRateLimit(t *testing.T) {
 		retryAfter = ra
 	}
 
+	own := map[string]bool{}
+	for _, k := range keys {
+		own[k] = true
+	}
 	var all, passed []time.Time
 	for _, q := range mpRequests(t, mp) {
-		if q.Channel != "sms" {
+		if q.Channel != "sms" || !own[q.IdempotencyKey] {
 			continue
 		}
 		ts := parseTime(t, "received_at", q.ReceivedAt)
@@ -735,7 +832,7 @@ func TestE2E_MockProviderRateLimit(t *testing.T) {
 		}
 	}
 	if len(all) != burst {
-		t.Fatalf("/admin/requests has %d sms entries, want %d", len(all), burst)
+		t.Fatalf("/admin/requests has %d entries for the burst keys, want %d", len(all), burst)
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].Before(all[j]) })
 	sort.Slice(passed, func(i, j int) bool { return passed[i].Before(passed[j]) })

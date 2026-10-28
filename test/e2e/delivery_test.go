@@ -1,15 +1,22 @@
 package e2e_test
 
-// P5 delivery end to end against the compose.test.yml stack: api + worker + the real mock provider
-// (MOCK_PROVIDER_ADMIN=true so /admin/* is available, MOCK_PROVIDER_RATE_LIMIT_RATE=0 so random 429s
-// are off; REQ-SND-02). Every campaign here uses the example brief, so all of them reach the same
-// customers.
+// P5 delivery end to end against the compose.test.yml stack: api + worker + the mock provider
+// instance the worker sends to (E2E_MOCKPROVIDER_URL; MOCK_PROVIDER_ADMIN=true so /admin/* is
+// available, MOCK_PROVIDER_RATE_LIMIT_RATE=0 so random 429s are off; REQ-SND-02, REQ-MOCK-01).
+// Every campaign here uses the example brief, so all of them reach the same seeded customers.
 //
-// These tests share global state: the mock provider's message store, request log and scripts
-// (/admin/reset, /admin/scripts), and the delivery metrics, which are derived from all deliveries in
-// the database. They therefore do NOT call t.Parallel. Go runs every sequential top-level test
-// before it resumes any parallel one, so no other E2E test sends, scripts or resets while they run,
-// and each of them waits until its campaigns are completed before it returns.
+// That instance is shared: the worker also delivers other tests' campaigns to it (REQ-MOCK-01).
+// These tests therefore never reset it and read /admin/messages and /admin/requests only through
+// their own delivery ids (= Idempotency-Key).
+//
+// Both tests are sequential (no t.Parallel): Go starts the parallel tests only after every
+// sequential one has finished, so the only deliveries that can move alongside them are lingering
+// deliveries of earlier sequential tests. Each test first waits (waitDeliveriesDrained, bounded)
+// until /metrics shows scc_deliveries_queued and scc_deliveries_in_flight at 0 for both channels;
+// after that no other campaign sends while it runs, which keeps scripts keyed by channel + to
+// (the only script key of REQ-MOCK-01) for its own campaign and makes the exact REQ-TRK-02 sums
+// hold. As a safety net the scripted test still fails with a clear diagnosis if a request under a
+// foreign Idempotency-Key reaches a scripted recipient.
 
 import (
 	"bufio"
@@ -534,10 +541,50 @@ func scrapeMetrics(t *testing.T, api string) metricSet {
 	return out
 }
 
+// drainDeadline bounds the wait for lingering deliveries of earlier sequential tests.
+const drainDeadline = 120 * time.Second
+
+// waitDeliveriesDrained polls GET /metrics until scc_deliveries_queued and
+// scc_deliveries_in_flight are 0 for both channels (REQ-TRK-02), i.e. no delivery of any campaign is
+// waiting or being sent. Parallel tests have not started while the sequential tests run, so the only
+// deliveries that can still be moving are those of earlier sequential tests.
+func waitDeliveriesDrained(t *testing.T, api string) {
+	t.Helper()
+	busy := func(m metricSet) []string {
+		var out []string
+		for _, c := range deliveryChannels {
+			for _, name := range []string{"scc_deliveries_queued", "scc_deliveries_in_flight"} {
+				if v := m[metricKey{name: name, channel: c}]; v != 0 {
+					out = append(out, name+"{channel=\""+c+"\"}="+strconv.FormatFloat(v, 'f', -1, 64))
+				}
+			}
+		}
+		return out
+	}
+	last := busy(scrapeMetrics(t, api))
+	if len(last) == 0 {
+		return
+	}
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.After(drainDeadline)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("deliveries of earlier tests did not drain within %s: %v", drainDeadline, last)
+		case <-ticker.C:
+			if last = busy(scrapeMetrics(t, api)); len(last) == 0 {
+				return
+			}
+		}
+	}
+}
+
 // assertMetricDeltas: between a scrape before the send and one after completion, the metrics moved
-// exactly by this campaign's deliveries, and nothing is queued or in flight afterwards (REQ-TRK-02).
-// Deltas are used because the metrics count every delivery in the shared database; no other
-// campaign is sending while the sequential tests run.
+// by exactly this campaign's deliveries, and nothing is queued or in flight afterwards (REQ-TRK-02,
+// "başka kampanya yokken"). The metrics count every delivery in the shared database; the callers
+// are sequential tests that waited for all earlier deliveries to drain (waitDeliveriesDrained)
+// before the send, and parallel tests have not started yet, so no other campaign moves them.
 func assertMetricDeltas(t *testing.T, before, after metricSet, ds []deliveryDoc) {
 	t.Helper()
 	for _, c := range deliveryChannels {
@@ -602,25 +649,35 @@ func indexRequests(reqs []mpRequest) map[string][]mpRequest {
 
 // ---- tests ----
 
+// providerCalled reports whether a terminal delivery must have reached the provider: deliveries
+// failed by the send-time checks never call it (REQ-AUD-04, REQ-CNT-05, REQ-SND-02).
+func providerCalled(d deliveryDoc) bool {
+	return d.FailureReason == nil || (*d.FailureReason != "recipient_unavailable" && *d.FailureReason != "content_too_long")
+}
+
 // REQ-SND-01, REQ-SND-02, REQ-SND-03, REQ-SND-04, REQ-SND-05, REQ-TRK-01, REQ-TRK-02, REQ-SEC-01
-// A full example-brief campaign through the worker and the real mock provider: the live stream
-// goes snapshot -> status* -> completed; the campaign ends completed with every delivery terminal;
-// the mock's own 100/s limit never answered 429 (REQ-SND-02 E2E criterion); every delivery was
-// sent with its own id as Idempotency-Key and accepted at most once; the metrics moved by exactly
-// this campaign; a second send is refused and creates nothing.
+// A full example-brief campaign through the worker and the mock provider: the live stream goes
+// snapshot -> status* -> completed; the campaign ends completed with every delivery terminal; no
+// request of this campaign got 429 from the mock's own 100/s limit (REQ-SND-02 E2E criterion,
+// counted through this campaign's keys because the instance is shared); every delivery that
+// reached the provider is logged under its own id as Idempotency-Key and was accepted at most
+// once; the metrics moved by exactly this campaign and nothing is queued or in flight afterwards;
+// a second send is refused and creates nothing.
 func TestE2E_DeliveryFullCampaign(t *testing.T) {
 	// Not parallel: see the file comment.
 	api := baseURL(t, "E2E_API_URL")
 	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
 	m := readManifest(t)
-	mpReset(t, mp)
-	t.Cleanup(func() { mpResetCleanup(t, mp) })
+	waitDeliveriesDrained(t, api)
 
 	r := runCampaign(t, api, m)
-	reqs := mpRequests(t, mp)
-	msgs := mpMessages(t, mp)
-	byKeyMsg := indexMessages(msgs)
-	byKeyReq := indexRequests(reqs)
+	// Indexed by Idempotency-Key and only ever read through this campaign's delivery ids.
+	byKeyMsg := indexMessages(mpMessages(t, mp))
+	byKeyReq := indexRequests(mpRequests(t, mp))
+	var reqs []mpRequest
+	for _, d := range r.deliveries {
+		reqs = append(reqs, byKeyReq[d.ID]...)
+	}
 
 	t.Run("campaign is completed", func(t *testing.T) {
 		status, _, body := doJSON(t, http.MethodGet, api+"/api/campaigns/"+r.id, nil, nil)
@@ -645,7 +702,7 @@ func TestE2E_DeliveryFullCampaign(t *testing.T) {
 
 	t.Run("the mock provider never rate-limited the worker", func(t *testing.T) {
 		if len(reqs) == 0 {
-			t.Fatal("GET /admin/requests is empty after a full campaign")
+			t.Fatal("GET /admin/requests has no request under this campaign's delivery ids")
 		}
 		for _, q := range reqs {
 			if q.Status == http.StatusTooManyRequests {
@@ -655,30 +712,20 @@ func TestE2E_DeliveryFullCampaign(t *testing.T) {
 	})
 
 	t.Run("every request carries the delivery id and nothing is accepted twice", func(t *testing.T) {
-		ids := map[string]deliveryDoc{}
-		for _, d := range r.deliveries {
-			ids[d.ID] = d
-		}
-		for _, q := range reqs {
-			d, ok := ids[q.IdempotencyKey]
-			if !ok {
-				t.Fatalf("request %+v: Idempotency-Key is not a delivery id of the campaign", q)
-			}
-			if q.Channel != d.Channel {
-				t.Fatalf("request %+v went to channel %s, delivery %s is %s", q, q.Channel, d.ID, d.Channel)
-			}
-			if q.Status == http.StatusConflict {
-				t.Fatalf("request %+v got 409: the same key was reused with another channel or recipient", q)
-			}
-		}
-		for _, msg := range msgs {
-			if _, ok := ids[msg.IdempotencyKey]; !ok {
-				t.Fatalf("accepted message %+v has a key that is no delivery id of the campaign", msg)
-			}
-		}
 		for _, d := range r.deliveries {
 			got := byKeyMsg[d.ID]
 			rq := byKeyReq[d.ID]
+			if providerCalled(d) && len(rq) == 0 {
+				t.Fatalf("delivery %s (%s, %s) reached no provider request under Idempotency-Key = its id", d.ID, d.Status, str(d.FailureReason))
+			}
+			for _, q := range rq {
+				if q.Channel != d.Channel {
+					t.Fatalf("request %+v went to channel %s, delivery %s is %s", q, q.Channel, d.ID, d.Channel)
+				}
+				if q.Status == http.StatusConflict {
+					t.Fatalf("request %+v got 409: the same key was reused with another channel or recipient", q)
+				}
+			}
 			if len(got) > 1 {
 				t.Fatalf("delivery %s was accepted %d times: %+v", d.ID, len(got), got)
 			}
@@ -749,8 +796,10 @@ type scriptCase struct {
 
 func scripted(status int) map[string]any { return map[string]any{"status": status} }
 
+// scriptedRetryAfter scripts an answer with a Retry-After header. REQ-MOCK-01: "retry_after" is a
+// JSON string, the Retry-After header value written as-is (e.g. "3").
 func scriptedRetryAfter(status, seconds int) map[string]any {
-	return map[string]any{"status": status, "retry_after": seconds}
+	return map[string]any{"status": status, "retry_after": strconv.Itoa(seconds)}
 }
 
 func repeatScripted(n int, item map[string]any) []map[string]any {
@@ -772,17 +821,19 @@ func repeatInt(n, v int) []int {
 // REQ-SND-04, REQ-SND-03, REQ-TRK-01, REQ-TRK-02, REQ-MOCK-01
 // The retry table against forced provider answers: /admin/scripts queues an exact response
 // sequence for one recipient (channel + to), which bypasses the mock's random decisions. A first
-// campaign learns each customer's address from /admin/messages; a second campaign then runs with
-// the scripts. For every scripted delivery the counters, failure_reason, last_http_status/last_error
-// and the request sequence logged under its id (= Idempotency-Key on every attempt) are checked.
-// The campaign is completed although some deliveries failed.
+// campaign learns each customer's address from /admin/messages (through its own delivery ids); a
+// second campaign then runs with the scripts. For every scripted delivery the counters,
+// failure_reason, last_http_status/last_error and the request sequence logged under its id
+// (= Idempotency-Key on every attempt) are checked. The campaign is completed although some
+// deliveries failed. A scripted answer consumed by another test's campaign is reported as such
+// (see the file comment). Leftover scripts are deleted at the end.
 func TestE2E_DeliveryScriptedProviderResponses(t *testing.T) {
 	// Not parallel: see the file comment.
 	api := baseURL(t, "E2E_API_URL")
 	mp := baseURL(t, "E2E_MOCKPROVIDER_URL")
 	m := readManifest(t)
-	mpReset(t, mp)
-	t.Cleanup(func() { mpResetCleanup(t, mp) })
+	t.Cleanup(func() { mpDeleteScriptsCleanup(t, mp) })
+	waitDeliveriesDrained(t, api)
 
 	cases := []scriptCase{
 		{
@@ -902,14 +953,36 @@ func TestE2E_DeliveryScriptedProviderResponses(t *testing.T) {
 		}
 	}
 
-	// 2. Script every case, then run the second campaign.
-	mpReset(t, mp)
+	// 2. Script every case, then run the second campaign. lastSeq marks where the log stood when
+	// the scripts were queued.
+	waitDeliveriesDrained(t, api)
+	lastSeq := 0
+	for _, q := range mpRequests(t, mp) {
+		lastSeq = max(lastSeq, q.Seq)
+	}
 	for i, tc := range cases {
 		mpScript(t, mp, tc.channel, addr[tc.channel][picked[i]], tc.responses)
 	}
 	run := runCampaign(t, api, m)
-	reqs := indexRequests(mpRequests(t, mp))
+	allReqs := mpRequests(t, mp)
+	reqs := indexRequests(allReqs)
 	msgs := indexMessages(mpMessages(t, mp))
+
+	t.Run("no other campaign consumed a scripted answer", func(t *testing.T) {
+		own := map[string]bool{}
+		for _, d := range run.deliveries {
+			own[d.ID] = true
+		}
+		scriptedTo := map[string]string{}
+		for i, tc := range cases {
+			scriptedTo[tc.channel+"|"+addr[tc.channel][picked[i]]] = tc.name
+		}
+		for _, q := range allReqs {
+			if name, ok := scriptedTo[q.Channel+"|"+q.To]; ok && q.Seq > lastSeq && !own[q.IdempotencyKey] {
+				t.Fatalf("request %+v to the recipient scripted for %q carries a foreign Idempotency-Key: another test's campaign reached the same seeded customer on the shared mock provider and may have consumed a scripted answer", q, name)
+			}
+		}
+	})
 
 	failingIDs := map[string]bool{}
 	for i, tc := range cases {
