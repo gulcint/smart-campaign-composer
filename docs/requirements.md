@@ -333,6 +333,8 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
   - `GET /admin/messages` → 200 `{"items": [{"id", "channel", "to", "idempotency_key", "accepted_at", "request_count"}]}` — kabul edilmiş tekil mesajlar. `request_count` o anahtarla gelen **her** isteği sayar: doğrulamadan önce sayılır ve sonucu ne olursa olsun (4xx, 5xx, 429, kayıp yanıt, replay, kabul) dahildir; kabulden önceki başarısız istekler de sayıya girer.
   - `GET /admin/requests` → 200 `{"items": [{"seq", "channel", "idempotency_key", "to", "received_at", "status", "replayed"}]}` — değerlendirilen her istek, varış sırasıyla (`seq` 1'den); kayıp yanıtta `status` = `0`. `POST /admin/reset` istek kaydını temizlediği için sonraki ilk isteğin `seq`'i yeniden `1`'dir.
 
+- Test ortamı (`compose.test.yml`) mock provider'ı iki örnekle çalıştırır: worker'ın teslimat gönderdiği `E2E_MOCKPROVIDER_URL` ve worker trafiği almayan, varsayılan hata oranlarıyla çalışan `E2E_MOCKPROVIDER_SOLO_URL` (ikisinde de `MOCK_PROVIDER_ADMIN=true`). Mock provider'ın kendi davranışını sınayan E2E testleri (uç noktalar, idempotency, senaryolar, sıfırlama, determinizm, hız sınırı) `E2E_MOCKPROVIDER_SOLO_URL`'i kullanır. Teslimat ve worker testleri `E2E_MOCKPROVIDER_URL`'i kullanır ve sayımlarını kendi kampanyalarının teslimat kimlikleriyle (`Idempotency-Key`) süzer, çünkü paylaşılan örneğe başka testlerin kampanyaları da teslimat gönderebilir.
+
 ### REQ-MOCK-02 — Kendi hız sınırı ve idempotency · Faz P5 · VARSAYIM
 - Mock provider kanal başına 100/sn'yi aşan isteğe `Retry-After` ile 429 döner.
 - Aynı `Idempotency-Key` ile gelen ikinci istek mesajı tekrar kabul etmez; ilk sonucu döndürür.
