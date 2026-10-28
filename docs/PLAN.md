@@ -500,23 +500,23 @@ A, §0.3'te ilk düşünülen yoldu; B'nin seçilme nedeni gönderim anlamının
 **Durum makinesi (D4 genişler):**
 
 ```
-approved ──PUT /schedule──▶ scheduled ──zamanı geldi (worker) / POST /send──▶ sending ──▶ completed
-    ▲                           │  ▲
-    └──────DELETE /schedule─────┘  └── PUT /schedule (yeniden planlama, durum aynı)
+approved ──POST /send + scheduled_at──▶ scheduled ──zamanı geldi (worker) / POST /send──▶ sending ──▶ completed
+    ▲                                      │  ▲
+    └────────DELETE /schedule──────────────┘  └── POST /send + scheduled_at (yeniden planlama, durum aynı)
 ```
 
-- `scheduled`'da düzenleme, segment/içerik üretimi ve onay **409 `invalid_state`** (VARSAYIM). Pazarlamacı önce iptal eder (`approved`'a döner), sonra bugünkü kurallar geçerlidir: düzenleme onayı düşürür (REQ-APR-03). Gerekçe: planı sessizce düşüren bir düzenleme, "planlandı" sanılan kampanyanın hiç gitmemesine yol açar; açık iptal savunulabilir. (Alternatif: düzenleme planı da düşürür — açık soru 2.)
+- `scheduled`'da düzenleme, segment/içerik üretimi ve onay **409 `invalid_state`**: bu ek bir özellik değil, durum makinesinin sonucudur (bu işlemlerin izinli durum kümesinde `scheduled` yoktur). Pazarlamacı önce planı iptal eder (`approved`'a döner), sonra bugünkü kurallar geçerlidir: düzenleme onayı düşürür (REQ-APR-03). Case yalnız zamanlanmış gönderim ister; planlı kampanyada düzenleme için ayrı bir akış tasarlanmadı (D62).
 - Önizleme (`preview`) `scheduled`'da serbesttir.
-- **Üretim kilidi (D41, D52):** `PUT /schedule` gönderimle aynı denetimi kendi satır kilitli transaction'ında yapar (`LockedCampaign.CheckNoGeneration` → 409 `generation_in_progress`). `scheduled`'da üretim başlatılamadığı için (denetim sırası `invalid_state` › `generation_in_progress`) zamanı gelen kampanyada kira bulunamaz; döngü yine de aynı denetimi savunma amaçlı çağırır. Planlama ile üretim başlangıcı aynı anda gelirse satır kilidi yüzünden yalnız biri kabul edilir.
+- **Üretim kilidi (D41, D52):** `POST /send` (planlı veya anlık) gönderimle aynı denetimi kendi satır kilitli transaction'ında yapar (`LockedCampaign.CheckNoGeneration` → 409 `generation_in_progress`). `scheduled`'da üretim başlatılamadığı için (denetim sırası `invalid_state` › `generation_in_progress`) zamanı gelen kampanyada kira bulunamaz; döngü yine de aynı denetimi savunma amaçlı çağırır. Planlama ile üretim başlangıcı aynı anda gelirse satır kilidi yüzünden yalnız biri kabul edilir.
 
 **API (`docs/contracts/openapi.yaml`):**
-- `PUT /api/campaigns/{campaign_id}/schedule`, gövde `{"content_version_id", "scheduled_at"}` → **200** `{"campaign_id", "state": "scheduled", "content_version_id", "scheduled_at"}`. `approved`'da planlar, `scheduled`'da yeniden planlar. Teslimat oluşturmaz.
-- `DELETE /api/campaigns/{campaign_id}/schedule` → **200** `{"campaign_id", "state": "approved", "scheduled_at": null}`; `scheduled` dışında 409 `invalid_state` (gönderim başlamışsa iptal yok).
-- `POST /send` artık `approved` **veya** `scheduled`'da kabul edilir ("şimdi gönder" planı aynı transaction'da düşürür; iki istekli iptal+gönder yarışı yok). Diğer davranışı ve 202 gövdesi değişmez.
+- `POST /api/campaigns/{campaign_id}/send`, gövde `{"content_version_id", "scheduled_at"?}`; `scheduled_at` isteğe bağlıdır (D62). Yoksa bugünkü anlık gönderim (değişmez). Varsa kampanya `approved`'dan `scheduled`'a geçer, teslimat oluşmaz → **202** `{"campaign_id", "state": "scheduled", "content_version_id", "scheduled_at", "deliveries": {"total": 0, "sms": 0, "email": 0}}`. `scheduled`'da `scheduled_at` ile gelen istek yeniden planlar (durum aynı, 202); `scheduled`'da `scheduled_at` olmadan gelen istek "şimdi gönder"dir (plan aynı transaction'da düşer, bugünkü 202 gövdesi). `SendResult`'a nullable `scheduled_at` eklenir.
+- `DELETE /api/campaigns/{campaign_id}/schedule` → **200** `{"campaign_id", "state": "approved", "scheduled_at": null}`; `scheduled` dışında 409 `invalid_state` (gönderim başlamışsa iptal yok). Planı iptal etmenin tek yolu budur (D62).
+- `POST /send` artık `approved` **veya** `scheduled`'da kabul edilir (yukarıdaki üç davranış); iki istekli iptal+gönder yarışı yoktur, çünkü "şimdi gönder" planı aynı transaction'da düşürür.
 - `Campaign` ve `CampaignStatus` şemalarına `scheduled_at` (nullable, UTC `Z`) eklenir; `CampaignState` enum'una `scheduled`. Bu bir yanıt enum'u eklemesidir (`oasdiff` uyarısı, kırıcı değil; D41'deki gibi).
 - **Doğrulama (422 `validation_failed`, yol `scheduled_at`):** RFC 3339, **ofset zorunlu** (`Z` veya `+03:00`; ofsetsiz yerel saat `invalid_value`); `scheduled_at` ≥ şimdi + `SCHEDULE_MIN_LEAD` (varsayılan 1 dk, alan kodu `schedule_too_soon`); ≤ şimdi + 30 gün (`schedule_too_far`). Saklama ve yanıt UTC. "Şimdi" enjekte `clock.Clock`'tur.
 - **Denetim sırası** (gönderimle aynı kalıp, D42): biçimsiz path 404 › gövde 400/413/422 › 404 `campaign_not_found` › 404 `content_version_not_found` › 409 `generation_in_progress` › 409 `invalid_state` › 409 `stale_content_version`.
-- Seçenek olarak `POST /send`'e isteğe bağlı `scheduled_at` alanı da düşünüldü; reddedilme nedeni: `/send`'in "202 + teslimat sayıları" anlamı bozulur ve iptal/yeniden planlama için yine ayrı uç gerekir (açık soru 1).
+- Ayrı `PUT /schedule` ucu da düşünüldü; sahip tek uç (`POST /send` + isteğe bağlı `scheduled_at`) ve yalnız iptal için ayrı uç seçti (D62). Karşılığında `/send` hem anlık hem planlı gönderimi taşır ve planlı yanıtta teslimat sayıları 0 döner.
 
 **Saat dilimi (VARSAYIM):** API yalnız mutlak zaman alır (ofsetli RFC 3339), veritabanı `timestamptz`, yanıtlar UTC. Arayüz zamanı **Europe/Istanbul** olarak girer ve gösterir (etiket "TSİ"), tarayıcının saat diliminden bağımsız; dönüşüm `Intl` ile IANA bölgesi üzerinden yapılır (Türkiye 2016'dan beri sabit UTC+3, yine de sabit ofset yazılmaz).
 
@@ -525,7 +525,7 @@ approved ──PUT /schedule──▶ scheduled ──zamanı geldi (worker) / P
 - Başlatma, `CreateDeliveries`'in gövdesinden çıkarılan paylaşılan fonksiyondur (`startSendingLocked`): aynı segment derlemesi (kampanyanın saklı referans zamanıyla), aynı izin filtresi, aynı `INSERT … UNIQUE(campaign_id, channel, customer_id)`, `state = 'sending'`, `sending_started_at = now`, kitle boşsa aynı transaction'da `completed`. API'nin `Send`'i ve döngü bu tek fonksiyonu çağırır; anlam ayrışamaz.
 - **Meşgul yoklama yok:** sorgu yalnız kısmi indeksi tarar ve iş yoksa hiçbir satır kilitlemez; dispatcher zaten 200 ms'de bir yokluyor (D5), 1 sn'lik indeksli sorgu ek yük değildir. `LISTEN/NOTIFY` reddedildi: ayrı bağlantı ve yeniden bağlanma mantığı ister, dakika hassasiyetli bir plan için kazancı yok (VARSAYIM). Hassasiyet: planlanan an + ≤ 1 sn + ilk partinin claim süresi.
 - **Çoklu worker:** advisory lock gerekmez; `SKIP LOCKED` + kilit altında durum yeniden denetimi aynı kampanyanın iki kez başlatılmasını imkânsız kılar (ikinci transaction `sending` görür, atlar). Yine de olsa `UNIQUE` kısıtı ikinci teslimat setini reddeder.
-- **Yeniden başlatma güvenliği:** bellekte zamanlayıcı yok; tek doğruluk kaynağı satırdır. Başlatma transaction'ı commit edilmeden çöken worker hiçbir iz bırakmaz, satır `scheduled` kalır, sonraki tur başlatır. Worker kapalıyken zamanı geçen kampanya, worker açılınca **geç de olsa** başlatılır (azami gecikme sınırı yok, VARSAYIM; açık soru 3); gecikme (`sending_started_at − scheduled_at`) loglanır.
+- **Yeniden başlatma güvenliği:** bellekte zamanlayıcı yok; tek doğruluk kaynağı satırdır. Başlatma transaction'ı commit edilmeden çöken worker hiçbir iz bırakmaz, satır `scheduled` kalır, sonraki tur başlatır. Worker kapalıyken zamanı geçen kampanya, worker açılınca **geç de olsa** başlatılır (azami gecikme sınırı yok, D62); gecikme (`sending_started_at − scheduled_at`) loglanır.
 - **İptal–başlatma yarışı:** ikisi de kampanya satır kilidini alır; önce commit eden kazanır. Döngü önce kazanırsa `DELETE /schedule` 409 `invalid_state` alır ("gönderim başladı"); iptal önce kazanırsa döngü satırı `approved` görür ve atlar.
 - **Değişmeyenler:** idempotency anahtarı ve `Idempotency-Key` (= teslimat id), kanal başına ≤ 100/sn (aynı anda zamanı gelen birçok kampanya yalnız kuyruğu uzatır), retry ve 429 bütçesi (`first_attempt_at` ilk claim'de dolar, planlanan bekleme bütçeyi tüketmez), claim'deki izin yeniden okuması (REQ-AUD-04).
 - **Metrics (`docs/contracts/metrics.md`):** `scc_campaigns_scheduled` (gauge, `scheduled` durumundaki kampanya sayısı) ve `scc_scheduled_sends_started_total` (counter). Sağlık uçları değişmez.
@@ -540,9 +540,9 @@ approved ──PUT /schedule──▶ scheduled ──zamanı geldi (worker) / P
 
 Test yazarı yalnız `docs/requirements.md`'den çalıştığı için (D50) testte gerekecek her ad, yol, alan kodu ve ortam değişkeni REQ metnine yazılır. "Kapsam dışı ve bonus" paragrafı güncellenir (zamanlanmış gönderim artık REQ'li; A/B ve dil kapsam dışı). Taslak kabul ölçütleri:
 
-- **REQ-SCH-01 — Gönderim ileri bir zamana planlanır · Faz P7 · [DOK] bonus + VARSAYIM tasarım:** `PUT …/schedule` istek/yanıt biçimi; `approved` → `scheduled`; teslimat oluşmaz (`deliveries.total` = 0, `status.counts.total` = 0); `scheduled_at` UTC döner, `GET /api/campaigns/{id}` ve `/status`'ta görünür; ofsetsiz zaman, `SCHEDULE_MIN_LEAD`'den yakın, 30 günden uzak → 422 ve alan kodları; tam denetim sırası; üretim sürerken 409 `generation_in_progress` (iki `campaign.NewService` örneğiyle, REQ-SND-01'deki kalıp).
+- **REQ-SCH-01 — Gönderim ileri bir zamana planlanır · Faz P7 · [DOK] bonus + VARSAYIM tasarım:** `POST …/send` + `scheduled_at` istek/yanıt biçimi; `approved` → `scheduled`; teslimat oluşmaz (`deliveries.total` = 0, `status.counts.total` = 0); `scheduled_at` UTC döner, `GET /api/campaigns/{id}` ve `/status`'ta görünür; ofsetsiz zaman, `SCHEDULE_MIN_LEAD`'den yakın, 30 günden uzak → 422 ve alan kodları; tam denetim sırası; üretim sürerken 409 `generation_in_progress` (iki `campaign.NewService` örneğiyle, REQ-SND-01'deki kalıp).
 - **REQ-SCH-02 — Zamanı gelince gönderim kendiliğinden başlar · Faz P7 · VARSAYIM:** `campaign.Scheduler`'ın tek turu (`RunOnce(ctx)`; sahte saat `scheduled_at`'in öncesinde → başlatmaz, sonrasında → başlatır); başlatılan kampanyada teslimat sayıları anlık gönderimle aynı kurala uyar (kanal kitlesi, izin, tekillik); `sending_started_at` ≥ `scheduled_at`; iki eşzamanlı `RunOnce` aynı kampanyayı bir kez başlatır; başlatma transaction'ı geri alınırsa kampanya `scheduled` kalır ve sonraki turda başlar; geçmişte kalmış plan ilk turda başlar.
-- **REQ-SCH-03 — Plan iptal edilir, değiştirilir, öne alınır · Faz P7 · VARSAYIM:** `DELETE …/schedule` → `approved`, `scheduled_at` = `null`; `scheduled` dışında 409 `invalid_state`; `PUT` ile yeniden planlama; `scheduled`'da `POST /send` → 202 ve plan düşer; `scheduled`'da düzenleme, segment/içerik üretimi ve onay → 409 `invalid_state`, hiçbir sürüm/onay kaydı oluşmaz.
+- **REQ-SCH-03 — Plan iptal edilir, değiştirilir, öne alınır · Faz P7 · VARSAYIM:** `DELETE …/schedule` → `approved`, `scheduled_at` = `null`; `scheduled` dışında 409 `invalid_state`; `scheduled`'da `POST /send` + `scheduled_at` ile yeniden planlama; `scheduled`'da `scheduled_at`'siz `POST /send` → 202 ve plan düşer; `scheduled`'da düzenleme, segment/içerik üretimi ve onay → 409 `invalid_state`, hiçbir sürüm/onay kaydı oluşmaz.
 - **REQ-SCH-04 — Arayüz: planlama ve geri sayım · Faz P7 · VARSAYIM:** §9.2'deki testid'ler, TSİ gösterimi (test ortamının `TZ`'sinden bağımsız), geri sayım (`vi.useFakeTimers()`), iptal ve "şimdi gönder" akışı, `delivery-counters` `data-state="scheduled"`.
 
 İzlenebilirlik tablosuna dört satır eklenir: SCH-01 `unit, integration, e2e`; SCH-02 `integration, e2e`; SCH-03 `integration, e2e`; SCH-04 `web-unit`.
@@ -553,7 +553,7 @@ Test yazarı yalnız `docs/requirements.md`'den çalıştığı için (D50) test
 |---|---|
 | **Unit** | Zaman penceresi doğrulaması (sahte saat: sınırın 1 sn altı/üstü, 30 gün sınırı, ofsetsiz ve biçimsiz değer); denetim sırası; durum geçiş tablosu (`scheduled` giriş/çıkışları) |
 | **Entegrasyon (DB)** | Tetikleyici yeni geçişlere izin verir, `scheduled → content_ready` gibi yasakları 23514 ile reddeder; kısıtlar (`scheduled` ⇒ `scheduled_at` dolu); `RunOnce` sahte saatle başlatır/başlatmaz; iki eşzamanlı `RunOnce` → tek teslimat seti; iptal–başlatma yarışında tek kazanan; geri alınan başlatma sonrası yeniden deneme; iki API örneğiyle üretim kilidi |
-| **API E2E** | Key'siz: brief → segment → içerik → onay → `PUT /schedule` (yakın zaman; test yığınında `SCHEDULE_MIN_LEAD=0s`) → `scheduled` → worker başlatır → `completed`; iptal → `approved` → `POST /send` çalışır; 422/409 vakaları; yeni işlemler en az bir kez çağrılır (D30 `OPENAPI_VALIDATE=strict`) |
+| **API E2E** | Key'siz: brief → segment → içerik → onay → `POST /send` + `scheduled_at` (yakın zaman; test yığınında `SCHEDULE_MIN_LEAD=0s`) → `scheduled` → worker başlatır → `completed`; iptal → `approved` → `POST /send` çalışır; 422/409 vakaları; yeni işlemler en az bir kez çağrılır (D30 `OPENAPI_VALIDATE=strict`) |
 | **Gönderim — gerçek mock provider** | Değişmez; planlı kampanya başladıktan sonra aynı hız/tekillik iddiaları geçerli (ek senaryo gerekmez) |
 | **Frontend (Vitest)** | Diyalog kip değişimi ve istemci denetimi; 422 alan hatası; TSİ biçimi; geri sayım ve sıfırda "Başlatılıyor…"; `status` olayıyla sayaçlara geçiş; iptal ve "şimdi gönder" |
 | **Elle** | 375/768/1280 px'de Onay diyaloğu ve Takip plan paneli ekran görüntüsü PR'da (P5 responsive kuralı) |
@@ -582,18 +582,13 @@ P2–P6 ile aynı akış (§1.2, §3): sözleşme → test → kod; hiçbir rol 
 
 | Konu | VARSAYIM / risk | Azaltma |
 |---|---|---|
-| Kitle anı | Gönderim anında izin ve iletişim bilgisi okunur, ama segmentin göreli pencereleri ("son 30 gün") **segment üretimindeki referans zamana** bağlı kalır (onaylanan kitle tanımı değişmez) | Arayüz planlama diyaloğunda kanal sayılarının gönderim anında değişebileceğini belirtir (açık soru 4) |
+| Kitle anı | Gönderim anında izin ve iletişim bilgisi okunur, ama segmentin göreli pencereleri ("son 30 gün") **segment üretimindeki referans zamana** bağlı kalır (onaylanan kitle tanımı değişmez) | Arayüz planlama diyaloğunda kanal sayılarının gönderim anında değişebileceğini belirtir (D62) |
 | Planlıyken değişiklik | Düzenleme/üretim/onay 409; önce iptal | Onay ekranında açıklama + iptal düğmesi |
-| Geç başlatma | Worker kapalıyken kaçan plan açılınca başlatılır; sınır yok | Gecikme loglanır; sahip isterse azami gecikme eklenir (açık soru 3) |
+| Geç başlatma | Worker kapalıyken kaçan plan açılınca başlatılır; sınır yok | Gecikme loglanır; sahip isterse azami gecikme eklenir (D62) |
 | En kısa / en uzun ufuk | `SCHEDULE_MIN_LEAD` 1 dk, ufuk 30 gün | Ortam değişkeniyle ayarlanır; testte 0 |
 | Saat dilimi | API ofsetli mutlak zaman; arayüz yalnız Europe/Istanbul | Vitest `TZ`'den bağımsız biçimi sınar |
 | Saat kayması | Başlatma worker'ın saatine, doğrulama API'nin saatine dayanır (D52'deki sınırla aynı) | Tek makine/NTP; ≤ 1 sn hassasiyet iddia edilir |
 | Durum makinesi değişikliği | Yeni durum mevcut ekranların `state` anahtarlı dallarını kırabilir | `scheduled` için her sayfada açık dal; mevcut testler değiştirilmeden yeşil kalmalı (kapı) |
 | Uzun süre açık SSE | Planlı kampanyanın Takip sayfası günlerce açık kalabilir | Bugünkü 1 sn yoklama + 15 sn keepalive yeter; sekme kapanınca akış kapanır |
 
-**Sahibe açık sorular (P7'nin ilk işi, 2026-10-28'de yanıtlanmadı):** P7 hangi session'da başlarsa başlasın, sözleşme PR'ından önce bu beş soru sahibe sorulur; yanıtlar ve gerekçeleri `DECISIONS.md` D62'ye yazılır, sonra §9.2–9.3 yanıtlara göre güncellenir. Parantez içindeki öneri, sahip aksini söylemezse uygulanacak varsayılandır.
-1. Ayrı `PUT/DELETE …/schedule` uçları mı (öneri), yoksa `POST /send`'e isteğe bağlı `scheduled_at` mı?
-2. `scheduled`'da düzenleme 409 mu (öneri), yoksa düzenleme planı sessizce düşürüp `content_ready`'e mi döner?
-3. Worker kapalıyken kaçan plan: geç de olsa gönderilsin mi (öneri), yoksa belirli bir gecikmeden (ör. 1 sa) sonra gönderilmeyip işaretlensin mi?
-4. Göreli segment pencereleri planlanan ana göre yeniden mi hesaplansın? Öneri: hayır (onaylanan kitle tanımı değişmesin).
-5. Ufuk sınırları (en az 1 dk, en çok 30 gün) ve yalnız TSİ arayüzü uygun mu?
+**Sahip kararları (2026-10-28, `DECISIONS.md` D62):** (1) planlama `POST /send`'e isteğe bağlı `scheduled_at` ile yapılır, iptal için ayrı `DELETE …/schedule`; (2) `scheduled`'da düzenleme 409 `invalid_state` (durum makinesinin sonucu, ek akış yok); (3) worker kapalıyken kaçan plan geç de olsa gönderilir; (4) göreli pencereler planlanan ana göre yeniden hesaplanmaz (hazırlama anındaki referans zamana bağlı kalır); (5) ufuk sınırları (en az 1 dk, en çok 30 gün) ve yalnız TSİ arayüzü, sahip itiraz etmediği için varsayılan olarak uygulanır.

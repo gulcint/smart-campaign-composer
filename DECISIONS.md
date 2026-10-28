@@ -288,6 +288,17 @@ PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
 - **Karar:** `compose.yml` mock provider'a `MOCK_PROVIDER_ERROR_RATE=0.4` ve `MOCK_PROVIDER_RATE_LIMIT_RATE=0.1` verir. 5xx denemeleri 5'te sınırlı olduğundan teslimatların ≈ %1'i (0,4⁵) `failed` olur; retry ve 429 yolları her kampanyada görünür. Koddaki varsayılanlar ve `compose.test.yml` değişmez, testler etkilenmez.
 - **Alternatif:** 0,6 / 0,3 denendi: 300 istekte 32 başarı; teslimatların ≈ %45'i başarısız olur ve kampanya dakikalarca sürer. "Zaman zaman" ifadesine uymadığı için seçilmedi.
 
+### D62 — Zamanlanmış gönderim (P7a): tek uç, geç de olsa gönder, kitle hazırlama anında (sahip kararı, 2026-10-28)
+- **Bağlam:** Case bonus olarak yalnız "Zamanlanmış gönderim" der; uç biçimi, düzenleme, geç kalma ve kitle anı konusunda yönlendirme yoktur. Sahip kapsamı küçük tutmayı seçti: case'in istediği çekirdek ("çekirdek akışı sağlam yap") korunur.
+- **Karar:**
+  1. Planlama `POST /api/campaigns/{campaign_id}/send` gövdesine isteğe bağlı `scheduled_at` alanıyla yapılır; yoksa gönderim anlıktır (bugünkü davranış). Plan iptali için ayrı `DELETE …/schedule` vardır. Yeniden planlama aynı uca yeni `scheduled_at` ile gönderilir; `scheduled`'da `scheduled_at`'siz istek "şimdi gönder"dir.
+  2. `scheduled` durumunda düzenleme, segment/içerik üretimi ve onay `409 invalid_state` döner. Bu ek bir akış değil, durum makinesinin sonucudur; yazım hatası için pazarlamacı planı iptal eder, düzeltir ve yeniden planlar. Planlı kampanya için ayrı bir düzenleme akışı tasarlanmadı.
+  3. Worker kapalıyken zamanı geçen plan, worker açılınca **geç de olsa** gönderilir; azami gecikme sınırı yoktur. Gecikme (`sending_started_at − scheduled_at`) loglanır.
+  4. Göreli segment pencereleri ("son 30 gün") planlanan ana göre yeniden hesaplanmaz; segment üretimindeki referans zamana bağlı kalır. Pazarlamacının onayladığı kitle tanımı değişmez. İzin ve iletişim bilgisi gönderim anında okunur.
+  5. Ufuk sınırları: en az 1 dk (`SCHEDULE_MIN_LEAD`), en çok 30 gün; arayüz yalnız TSİ (Europe/Istanbul). Sahip itiraz etmediği için PLAN'daki varsayılan uygulanır.
+- **Alternatifler:** Ayrı `PUT/DELETE …/schedule` uçları (planlı ve anlık gönderimin anlamı net kalırdı, ama sahip tek ucu seçti); düzenlemenin planı sessizce düşürmesi (planlı sanılan kampanyanın hiç gitmemesi riski); gecikme üst sınırı (zamana bağlı bir mesajı geç göndermeyi önler, ama yeni durum ve işaretleme ekler).
+- **Bedel:** `POST /send` iki anlam taşır (anlık ve planlı) ve planlı yanıtta teslimat sayıları 0 döner. Çok geç gönderilen bir plan zamana bağlı bir mesajı yanlış zamanda gönderebilir (kabul edildi, README "Known limits"te belirtilecek).
+
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |
