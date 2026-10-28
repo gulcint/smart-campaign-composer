@@ -148,9 +148,14 @@ async function onConfirm() {
     } else {
       const versionId = c.approval?.content_version_id ?? latest.value?.id
       if (!versionId) return
-      await api.sendCampaign(client, id, { content_version_id: versionId })
+      const sent = await api.sendCampaign(client, id, { content_version_id: versionId })
       dialogOpen.value = false
       await refetch()
+      notify({
+        variant: 'success',
+        messageId: 'toast.sendStarted',
+        params: { total: sent.deliveries.total },
+      })
       void router.push({ name: 'tracking', params: { campaignId: id } })
     }
   } catch (e) {
