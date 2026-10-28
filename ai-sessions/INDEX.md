@@ -11,3 +11,4 @@ File name: `YYYY-MM-DD_p<phase>_<role>_<topic>.md`. claude.ai share links go in 
 | 2026-10-27 | P3 | orchestrator | Audience slice: segment DSL, audience API and UI, OpenAPI drift guard, reviews, consent audit | `2026-10-27_p3_orchestrator_audience.md` |
 | 2026-10-27 | P4 | orchestrator | Content and approval slice: SSE generation, limits, editing, approval, UX split, test and CI cleanup | `2026-10-27_p4_orchestrator_content_approval.md` |
 | 2026-10-28 | P5 | orchestrator | Send and tracking slice: generation lease, queue/worker, retry, SSE tracking, responsive; early P6 UI/doc fixes | `2026-10-28_p5_orchestrator_send-tracking.md` |
+| 2026-10-28 | P6 | orchestrator | Hardening and delivery: personal-info cleanup, two-worker live check, browser E2E with mock and real LLM, README state diagram | `2026-10-28_p6_orchestrator_hardening.md` |
