@@ -200,7 +200,7 @@ onMounted(async () => {
         data-testid="approval-summary"
         :data-state="campaign?.state ?? 'loading'"
         aria-labelledby="approval-summary-title"
-        class="overflow-hidden rounded-card-lg border border-border-default bg-surface-raised shadow-raised"
+        class="overflow-clip rounded-card-lg border border-border-default bg-surface-raised shadow-raised"
       >
         <div class="h-1 bg-gradient-brand" aria-hidden="true" />
         <div
@@ -227,7 +227,7 @@ onMounted(async () => {
         <ol v-else class="border-t border-border-subtle">
           <!-- 1 · Who -->
           <li
-            class="grid gap-3 border-b border-dashed border-border-default px-4 py-5 sm:grid-cols-[9rem_1fr] sm:gap-6 md:px-8"
+            class="grid scroll-mb-48 gap-3 border-b border-dashed border-border-default px-4 py-5 sm:grid-cols-[9rem_1fr] sm:gap-6 md:px-8"
           >
             <h3 class="flex items-center gap-2 text-overline text-ink-600" lang="tr">
               <Users class="size-4 text-brand-icon" aria-hidden="true" />
@@ -273,7 +273,7 @@ onMounted(async () => {
 
           <!-- 2 · What: the API-rendered text for one sample recipient, as plain text. -->
           <li
-            class="grid gap-3 border-b border-dashed border-border-default px-4 py-5 sm:grid-cols-[9rem_1fr] sm:gap-6 md:px-8"
+            class="grid scroll-mb-48 gap-3 border-b border-dashed border-border-default px-4 py-5 sm:grid-cols-[9rem_1fr] sm:gap-6 md:px-8"
           >
             <h3 class="flex items-center gap-2 text-overline text-ink-600" lang="tr">
               <FileText class="size-4 text-brand-icon" aria-hidden="true" />
@@ -311,7 +311,7 @@ onMounted(async () => {
                     tabindex="0"
                     role="region"
                     :aria-label="t('approval.emailBody')"
-                    class="max-h-72 overflow-y-auto rounded-sm text-body-sm break-words whitespace-pre-line text-ink-700 focus-visible:shadow-focus focus-visible:outline-none"
+                    class="max-h-72 scroll-mb-48 overflow-y-auto rounded-sm text-body-sm break-words whitespace-pre-line text-ink-700 focus-visible:shadow-focus focus-visible:outline-none"
                   >
                     {{ preview.email.text }}
                   </div>
@@ -344,7 +344,7 @@ onMounted(async () => {
           <!-- 3 · Fits: worst case after personalisation, a single pass/fail (REQ-CNT-05). -->
           <li
             v-if="limitCheck"
-            class="grid gap-3 px-4 py-5 sm:grid-cols-[9rem_1fr] sm:gap-6 md:px-8"
+            class="grid scroll-mb-48 gap-3 px-4 py-5 sm:grid-cols-[9rem_1fr] sm:gap-6 md:px-8"
           >
             <h3 class="flex items-center gap-2 text-overline text-ink-600" lang="tr">
               <component
@@ -383,10 +383,15 @@ onMounted(async () => {
           </li>
         </ol>
 
-        <!-- The decision: in the flow, at the end of the summary; never covers content. -->
+        <!-- The decision (DESIGN.md §8.4): last block of the card, sticky to the viewport bottom
+             while the card is scrolled past and resting at the card's end. It is opaque and follows
+             the last row in the flow, so scrolling always uncovers what it passes over; rows and the
+             email body carry scroll-margin so focus never lands under it. At 375 px it is 177 px
+             high (22 % of an 812 px viewport, under the 25 % limit), so it stays sticky there too. -->
         <div
           v-if="campaign"
-          class="border-t border-border-subtle bg-surface-sunken/70 px-4 py-5 md:px-8"
+          data-testid="approval-decision"
+          class="border-t border-border-default bg-surface-sunken px-4 py-5 sticky bottom-0 z-10 md:px-8"
         >
           <ApprovalBar
             :campaign-state="campaign.state"

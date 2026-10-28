@@ -150,7 +150,7 @@ Bugün denenebilecek olan: `docker compose up` bitince tarayıcıda <http://127.
 - Elle yapılan denemede gözlenen gönderim hızı kanal başına yaklaşık 50/sn'dir, 100 sınırının altında; otomatik bir hız ölçümü yoktur.
 - Gönderim anı uzunluk denetimi (`CheckRendered`) bir alıcı için iki kanalın metnini birlikte denetler: SMS metni kişiselleştirmeyle 160'ı aşarsa o kişinin email teslimatı da `content_too_long` ile başarısız olur (veya tersi). Kanal bazlı denetim sözleşme değişikliği gerektirir.
 - Dokunmatik boyutlar (44 px) ekran genişliğine göre (`max-lg:`, <1024 px) uygulanır, `pointer: coarse`'a göre değil; dar pencereli masaüstü de büyük hedef görür.
-- İçerik ekranının eylem şeridi mobilde yapışkan değildir (sayfanın sonunda kalır); Onay ekranının `ApprovalBar`'ı da yapışkan değildir (P6; özet kartının sonunda).
+- İçerik ekranının eylem şeridi mobilde yapışkan değildir (sayfanın sonunda kalır); Onay ekranının karar paneli yalnız özet kartın içinde yapışkandır (kart sonunda yerine oturur, P6).
 - Swagger UI gibi etkileşimli API dokümanı yoktur (sahip kararıyla kaldırıldı, D36). API başvurusu: [`docs/contracts/openapi.yaml`](docs/contracts/openapi.yaml).
 - Otomatik testler yalnızca `docs/requirements.md`'den türetilir (D50); yalnız sözleşmede yazan birçok davranış testsizdir.
 - Gerçek Claude istemcisinin otomatik testi yoktur; şehir yazımı ve SMS uzunluğu gibi davranışlar elle doğrulanmalıdır.

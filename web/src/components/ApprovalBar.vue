@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // ui.md §3.17 (REQ-APR-01, -03, REQ-CNT-04, -05): approve / send decision panel. The first
 // matching state wins: approved › stale › submitting › ready › disabled (with a visible reason).
-// It sits in the page flow (DESIGN.md §8.4): never sticky, so it can never cover content.
+// It does not position itself: ApprovalPage pins its wrapper inside the summary card (DESIGN.md §8.4).
 import { ArrowUpRight, CircleCheck, Info, Send, TriangleAlert } from '@lucide/vue'
 import { computed, useId } from 'vue'
 

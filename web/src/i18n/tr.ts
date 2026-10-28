@@ -213,6 +213,7 @@ export const tr = {
   'confirm.regenerate.body': 'Mevcut içerik ve varsa onay geçersiz olur.',
   'confirm.sendCounts': 'SMS {sms} · Email {email} kişiye gidecek',
   'confirm.confirm': 'Onayla',
+  'confirm.send.confirm': 'Gönder',
   'confirm.cancel': 'Vazgeç',
 
   // --- Preview (P4, required ids) ---

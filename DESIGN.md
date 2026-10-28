@@ -343,7 +343,7 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | `ContentEditor` | İçeriği düzenleme | shadcn `Textarea` / `Input` | SMS gövdesi (textarea, `body-lg`), email konusu (input), email gövdesi (textarea, `body`) | readonly (akış sürerken), editable, dirty (kaydedilmemiş; "Kaydet ve doğrula" aktif), validating (spinner), invalid (alan bazlı hata), locked (`sending`/`completed`: kilit ikonu + açıklama) | REQ-APR-01/02/03 |
 | `SmsPreview` | Telefon balonu önizlemesi | custom | örnek alıcı adıyla render, ham şablon (chip'li) | boş, render, uzun mesaj (balon büyür, kaydırma yok) | REQ-APR-01, REQ-UI-01 |
 | `EmailPreview` | Sandbox'lı email çerçevesi | custom | konu satırı + gövde iframe | yükleniyor, render, hata | REQ-APR-01, REQ-UI-01 |
-| `ApprovalBar` | Onay/gönder karar paneli | custom (akış içinde, yapışık değil) | ≥640 tek satır: not solda, ikincil + birincil eylem sağda / <640 not üstte, eylemler alt alta tam genişlik (birincil önce). Kendi kartı/gölgesi yok; Onay özet kartının sonunda `--surface-sunken` zeminde durur | `disabled` (neden metni görünür), `ready` ("Onayladıktan sonra gönderebilirsin"), `submitting`, `approved` (yeşil `CircleCheck` + "Onaylandı · düzenlersen onay düşer" + ( Gönder ) birincil), `stale` ("Onay düştü, yeniden onayla") | REQ-APR-01/03, REQ-CNT-04/05 |
+| `ApprovalBar` | Onay/gönder karar paneli | custom (konumlanmaz; Onay'da ebeveyn kart içinde `sticky bottom-0`) | ≥640 tek satır: not solda, ikincil + birincil eylem sağda / <640 not üstte, eylemler alt alta tam genişlik (birincil önce). Kendi kartı/gölgesi yok; Onay özet kartının sonunda opak `--surface-sunken` zeminde, kart içinde yapışık | `disabled` (neden metni görünür), `ready` ("Onayladıktan sonra gönderebilirsin"), `submitting`, `approved` (yeşil `CircleCheck` + "Onaylandı · düzenlersen onay düşer" + ( Gönder ) birincil), `stale` ("Onay düştü, yeniden onayla") | REQ-APR-01/03, REQ-CNT-04/05 |
 | `ConfirmDialog` | Onay/gönder/yeniden üret teyidi | shadcn `Alert Dialog` | `approve`, `send` (kanal sayıları özetlenir: "SMS 1.204 · Email 987 kişiye gidecek"), `regenerate` (mevcut içerik silinecek) | açık, submitting, hata (diyalog içinde inline) | REQ-APR-01, REQ-SND-01 |
 | `ProgressBar` / `ProgressRow` | Referans çubuk dili | custom (`role="progressbar"`) | `single` (tek dolgu `--gradient-brand-vivid`), `segmented` (sent `--success` · failed `--error` · sending `--info` · queued `--track` desen); satır: solda etiket, ortada çubuk (8 px, pill), sağda sayı + yüzde (`numeral-sm`) | indeterminate yok (her zaman sayı); güncelleme `--dur-bar` | REQ-AUD-03, REQ-TRK-01 |
 | `DeliveryCounters` | Kuyrukta / Gönderiliyor / Gönderildi / Başarısız | custom (Card) | kanal başına ve toplam | live, stale (SSE koptu: sayılar soluk + "Son güncelleme 12 sn önce"), completed | REQ-TRK-01 |
@@ -462,13 +462,13 @@ Email sekmesinde: konu `Input` + sayaç `/80`, gövde `Textarea`; sağda `EmailP
 │            │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │            │
 │            │ ✓ UZUNLUK   Kişiselleştirme sonrası da sınırlar içinde │   │
 │            │             SMS 160/160 · Konu 42/80 · …      │            │
-│            │░ⓘ Onayladıktan sonra… [✎ Taslağı düzenle](Onayla ↗)░│            │
+│            │░ⓘ Onayladıktan sonra… [✎ Taslağı düzenle](Onayla ↗)░│  ← sticky │
 │            └───────────────────────────────────────────────┘            │
 ```
 - Tek sütun, maks. 768 px, ortalı (İçerik'in 1120 px iki panelinden bilerek farklı). Satır etiketi sütunu ≥640 px'te 144 px; altında etiket satırın üstüne gelir. Satırlar arası kesik çizgi (`--border-default`), makbuz hissi.
 - **Ne gidiyor:** API'nin tek örnek alıcı için render ettiği düz metin (`preview.sms.text`, `preview.email.subject`, `preview.email.text`); kanal renginde 2 px sol çizgi, `--ink-900`/`--ink-700` metin (LLM metni turuncu yapılmaz, §4.1). Email gövdesi 288 px'i aşarsa kendi içinde kayar (klavyeyle odaklanabilir bölge).
 - **Uzunluk:** tek sinyal; geçtiyse `--success` + `CircleCheck`, aşıyorsa `--error` + `CircleAlert` ve "onay reddedilir". Ayrıntı mono tabular tek satır.
-- **Karar paneli:** kartın son bölümü (`--surface-sunken` %70); `ApprovalBar` akış içindedir, **yapışık değildir**, hiçbir genişlikte içeriği örtmez. Onay sonrası not "Onaylandı · düzenlersen onay düşer" + ( Gönder ) → `ConfirmDialog send` (kanal sayıları). 422 (REQ-CNT-05 onay anı aşımı) diyalog içinde. "Taslağı düzenle" → İçerik adımı.
+- **Karar paneli:** kartın son bölümü (opak `--surface-sunken`, üst kenarlık `--border-default`). Kartın akışı içinde `sticky bottom-0`: kısa görünümlerde (ör. 1280×900) kart kaydırılırken görünümün altına iğnelenir, kart sonuna gelince son satırın (Uzunluk) altında yerine oturur; böylece karar kaydırmadan görünür, kaydırmanın sonunda hiçbir içeriği örtmez ve iğneliyken üstünden geçtiği içerik kaydırınca açılır. Satırlar ve email gövdesi 192 px `scroll-margin-bottom` taşır (odak panelin altına düşmez). 375 px'te panel 177 px (812 px görünümün %22'si, %25 sınırının altında) olduğu için telefonda da yapışıktır. Onay sonrası not "Onaylandı · düzenlersen onay düşer" + ( Gönder ) → `ConfirmDialog send` (kanal sayıları). 422 (REQ-CNT-05 onay anı aşımı) diyalog içinde. "Taslağı düzenle" → İçerik adımı.
 - Kaldırılanlar (P6): sayfa rozeti (`AppHeader` ile tekrar), "1 Onayla → 2 Gönder" mini adım listesi, "Sürüm · Claude üretti" kaynağı, kart logosu, `LimitChip`'ler (4 adet → tek satır), "Gidecek metin" etiketleri, balon/çerçeve/örnek gezme, ayrı düzenleme ipucu şeridi, uzun alt başlık.
 
 ### 8.5 Takip / Dashboard
@@ -495,7 +495,7 @@ Test genişlikleri **375 / 768 / 1280 px**; kanıt `.playwright-mcp/p5-responsiv
 **Genel kurallar (her ekran):**
 - Sayfa yan boşluğu 16 px (<768), 24 px (≥768); içerik maks. 1120 px.
 - **Dokunma hedefi:** <1024 px'te (telefon ve tablet dokunmatik sayılır) her etkileşimli öğe ≥ 44×44 px: `Button` `sm`/`md` → 44 px yükseklik; stepper adımları, `ChannelTabs` sekmeleri, `VariableChip` ekleme chip'leri, kural JSON düğmesi, "Başarısızları gör" linki ve başlıktaki ana sayfa linki 44 px. ≥1024'te §7'deki masaüstü boyları geçerli. Kural genişliğe bağlıdır (`max-lg:`), `pointer: coarse`'a değil: test viewport'larında doğrulanabilir olsun diye.
-- Yapışık öğe yalnız `AppHeader` (üstte). `ApprovalBar` P6'dan beri akış içindedir (Onay kartının sonunda); hiçbir genişlikte içeriği örtmez.
+- Yapışık öğeler: `AppHeader` üstte; Onay'da karar paneli altta, ama yalnız özet kartın içinde (`sticky bottom-0`, kart sonunda yerine oturur; §8.4). Sayfa sonunda hiçbir içeriği örtmez.
 - Hareket eklenmedi; `prefers-reduced-motion` kuralı (§5) değişmedi.
 
 **Tablet (768–1023):**

@@ -278,5 +278,5 @@ PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
 | Gönderim anı uzunluk denetimi iki kanalı birlikte denetler | `CheckRendered` alıcının SMS ve konu metnini birlikte denetler; bir kanaldaki taşma diğer kanalın teslimatını da `content_too_long` ile başarısız yapar. Kanal bazlı denetim sözleşme değişikliği gerektirir |
 | Gözlenen gönderim hızı kanal başına ~50/sn | Elle yapılan denemede; 100/sn sınırının altında, otomatik hız ölçümü yok |
 | Dokunma hedefleri genişliğe bağlı (`max-lg:`), `pointer: coarse`'a değil | Test viewport'larında doğrulanabilsin diye (DESIGN.md §8.6); dar masaüstü penceresi de 44 px hedef görür |
-| İçerik ekranının eylem şeridi mobilde yapışkan değil | Sayfa sonunda kalır; Onay ekranının `ApprovalBar`'ı da P6'dan beri akış içindedir (yapışık bar email önizlemesini örtüyordu) |
+| İçerik ekranının eylem şeridi mobilde yapışkan değil | Sayfa sonunda kalır; Onay ekranının karar paneli P6'dan beri özet kartın içinde `sticky bottom-0`dur (sayfa düzeyindeki yapışık bar email önizlemesini örtüyordu) |
 | Kanal kilidi kaybında en çok bir partilik fazla gönderim (D53) | Kilit parti başında denetlenir; kayıptan sonra eski lider en çok bir partiyi (varsayılan 50 istek) bitirir; mesaj tekrarı yok (Idempotency-Key) |
