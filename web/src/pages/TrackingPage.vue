@@ -39,9 +39,10 @@ const campaign = computed(() =>
 )
 const notFound = computed(() => (campaignId.value ? store.isNotFound(campaignId.value) : false))
 
-// An unknown campaign answers the stream with 404 too: the router guard usually knows that
-// before this page exists, so a known-404 id never opens the stream (an empty id stays idle).
-const streamId = computed(() => (notFound.value ? '' : campaignId.value))
+// The stream opens only for a campaign that loaded without error (REQ-TRK-01: an unknown
+// campaign creates no EventSource at all). Until then, and for a known 404, the id is empty and
+// the stream stays idle; if a reload later reports 404, the stream closes again.
+const streamId = computed(() => (campaign.value && !notFound.value ? campaignId.value : ''))
 const { status, connection, lastUpdatedAt, completed } = useCampaignStatusStream(streamId)
 
 // The stream's state is fresher than the loaded campaign (it moves to completed live).
