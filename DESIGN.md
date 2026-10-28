@@ -18,7 +18,7 @@ Pazarlamacı ne istediğini yazar; sistem kitleyi ve metni önerir; son söz ins
 
 ## 2. Kaynaklar
 
-Referanslar `assets/InsiderOne.jpeg` ve `assets/InsiderOne2.jpeg` (800×800; üçüncü taraf pazarlama görselleri olduğu için repoda yoktur, `.gitignore`'dadır). Renkler Python + Pillow 11.3 ile 3×3 piksel ortalaması veya bölgesel renk modu alınarak ölçüldü; JPEG sıkıştırması nedeniyle ±4 birim sapma beklenir. Pazarlama görsellerinden yalnızca palet, tipografi karakteri ve biçim dili türetildi; görsellerin kendisi, ikonlar ve pazarlama metni alınmadı. **İstisna (sahip kararı, 2026-10-27):** `assets/InsiderOneLogo.jpeg` yalnızca şu yerlerde kullanılır: uygulama başlığı, favicon/sekme ikonu, boş ve yükleniyor durumları (düşük kontrastlı küçük işaret), onay sayfası özet kartı (dekoratif rozet) ve email önizleme çerçevesinin üst şeridi (sandbox'lı iframe'in dışında; `srcdoc` içine konmaz). Dosya `web/public/brand/insider-one-logo.jpeg` olarak repodadır (`assets/` klasörü `.gitignore`'da olduğu için o adla bir klasör kullanılamaz); favicon PNG'leri (`favicon-16.png`, `favicon-32.png`) aynı dosyadan `sips` ile türetilmiştir. `assets/` altındaki diğer görseller kullanılmaz. Uygulamanın kendi wordmark'ı "Smart Campaign Composer" logonun yanında kalır.
+Referanslar `assets/InsiderOne.jpeg` ve `assets/InsiderOne2.jpeg` (800×800; üçüncü taraf pazarlama görselleri olduğu için repoda yoktur, `.gitignore`'dadır). Renkler Python + Pillow 11.3 ile 3×3 piksel ortalaması veya bölgesel renk modu alınarak ölçüldü; JPEG sıkıştırması nedeniyle ±4 birim sapma beklenir. Pazarlama görsellerinden yalnızca palet, tipografi karakteri ve biçim dili türetildi; görsellerin kendisi, ikonlar ve pazarlama metni alınmadı. **İstisna (sahip kararı, 2026-10-27):** `assets/InsiderOneLogo.jpeg` yalnızca şu yerlerde kullanılır: uygulama başlığı, favicon/sekme ikonu, boş ve yükleniyor durumları (düşük kontrastlı küçük işaret) ve email önizleme çerçevesinin üst şeridi (sandbox'lı iframe'in dışında; `srcdoc` içine konmaz). Dosya `web/public/brand/insider-one-logo.jpeg` olarak repodadır (`assets/` klasörü `.gitignore`'da olduğu için o adla bir klasör kullanılamaz); favicon PNG'leri (`favicon-16.png`, `favicon-32.png`) aynı dosyadan `sips` ile türetilmiştir. `assets/` altındaki diğer görseller kullanılmaz. Uygulamanın kendi wordmark'ı "Smart Campaign Composer" logonun yanında kalır.
 
 | Öğe | Görsel 1 (sohbet + çubuklar) | Görsel 2 (canlı durum kartı) | Bizde nereye gitti |
 |---|---|---|---|
@@ -328,7 +328,6 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 |---|---|---|---|---|---|
 | `Button` | Eylemler | shadcn `Button` + cva | `primary` (pill, `--gradient-cta`, beyaz 600 metin, `--shadow-cta`, sağda isteğe bağlı `ArrowUpRight` ↗ — referans dili) · `secondary` (pill, `--orange-50` zemin, `--orange-700` metin, 1 px `--orange-200`) · `ghost` (zeminsiz, `--text-accent`) · `danger-ghost` (`--error`). Boy: `sm` 32 / `md` 40 / `lg` 48 px; yatay 16/20/24; <1024 px'te `sm` ve `md` 44 px'e büyür (dokunma hedefi, §8.6) | default, hover (gradient-hover, gölge büyür), active (scale .98), focus-visible (`--shadow-focus`), disabled (opaklık .45, gölge yok, `cursor:not-allowed`, `aria-disabled`), loading (etiket kalır, solda `Spinner`, tıklama kilitli) | — |
 | `StepHeader` | Adım başlığı: "ADIM 3/5 · rol" overline (`--text-accent`), tek `h1`, tek satır amaç, adım durum rozeti (`StatusBadge`), "Sıradaki: …" pill'i | custom | İçerik / Onay | durum rozeti yoksa gizli; adım numarası <768'de gizli (kompakt stepper gösterir) | REQ-UI-01 |
-| `LimitChip` | Onay özetinde salt okunur uzunluk durumu ("Şablon 135/160", "Kişiselleştirme sonrası 130/160") | custom | — | `normal` (success, `CircleCheck`), `near-limit` (warning, `TriangleAlert`), `over-limit` (error, `CircleAlert`); eşikler `CharCounter` ile aynı; sayı mono tabular | REQ-CNT-01/02/05 |
 | `AppHeader` | Wordmark, sağlayıcı rozeti, kampanya durumu | custom | desktop / mobil (wordmark kısalır: "SCC") | — | REQ-AI-03 |
 | `ProviderBadge` | "Mock LLM" / "Claude" | shadcn `Badge` | `mock`: `--warning` zemin+metin, `FlaskConical` ikon, metin "Mock LLM" · `claude`: nötr, `Sparkles` ikon | yükleniyor (skeleton pill 88×24), bilinmiyor (gizli değil: "Sağlayıcı ?" nötr) | REQ-AI-03 |
 | `CampaignStepper` | Brief → Kitle → İçerik → Onay → Takip | shadcn `Stepper` (Reka) | yatay (≥768, etiketli) / kompakt (<768: "Adım 3/5 · İçerik" satırı + numaralı adım düğmeleri, yalnız aktif adımın etiketi görünür) | adım: `completed` (`--orange-600` dolu daire + `Check`), `active` (2 px `--orange-600` halka, etiket `--text-accent` 600), `upcoming` (`--ink-300`), `locked` (kampanya durumu izin vermiyor; tıklanamaz, tooltip nedenini söyler) | durum makinesi |
@@ -344,7 +343,7 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | `ContentEditor` | İçeriği düzenleme | shadcn `Textarea` / `Input` | SMS gövdesi (textarea, `body-lg`), email konusu (input), email gövdesi (textarea, `body`) | readonly (akış sürerken), editable, dirty (kaydedilmemiş; "Kaydet ve doğrula" aktif), validating (spinner), invalid (alan bazlı hata), locked (`sending`/`completed`: kilit ikonu + açıklama) | REQ-APR-01/02/03 |
 | `SmsPreview` | Telefon balonu önizlemesi | custom | örnek alıcı adıyla render, ham şablon (chip'li) | boş, render, uzun mesaj (balon büyür, kaydırma yok) | REQ-APR-01, REQ-UI-01 |
 | `EmailPreview` | Sandbox'lı email çerçevesi | custom | konu satırı + gövde iframe | yükleniyor, render, hata | REQ-APR-01, REQ-UI-01 |
-| `ApprovalBar` | Onay eylemi | custom (sticky) | ≥640 yüzen kart (sticky, kart altı) / <640 kenardan kenara alt şerit (üst kenarlık, köşesiz, safe-area alt boşluğu, tam genişlik buton) | `disabled` (her iki kanal `validated` değilse; neden metni görünür: "SMS doğrulanmadı" vb.), `ready`, `submitting`, `approved` (yeşil `CircleCheck` + "Onaylandı · Gönder" birincil butonu), `stale` (onay sonrası düzenleme: "Onay düştü, yeniden onayla") | REQ-APR-01/03, REQ-CNT-04/05 |
+| `ApprovalBar` | Onay/gönder karar paneli | custom (konumlanmaz; Onay'da ebeveyn kart içinde `sticky bottom-0`) | ≥640 tek satır: not solda, ikincil + birincil eylem sağda / <640 not üstte, eylemler alt alta tam genişlik (birincil önce). Kendi kartı/gölgesi yok; Onay özet kartının sonunda opak `--surface-sunken` zeminde, kart içinde yapışık | `disabled` (neden metni görünür), `ready` ("Onayladıktan sonra gönderebilirsin"), `submitting`, `approved` (yeşil `CircleCheck` + "Onaylandı · düzenlersen onay düşer" + ( Gönder ) birincil), `stale` ("Onay düştü, yeniden onayla") | REQ-APR-01/03, REQ-CNT-04/05 |
 | `ConfirmDialog` | Onay/gönder/yeniden üret teyidi | shadcn `Alert Dialog` | `approve`, `send` (kanal sayıları özetlenir: "SMS 1.204 · Email 987 kişiye gidecek"), `regenerate` (mevcut içerik silinecek) | açık, submitting, hata (diyalog içinde inline) | REQ-APR-01, REQ-SND-01 |
 | `ProgressBar` / `ProgressRow` | Referans çubuk dili | custom (`role="progressbar"`) | `single` (tek dolgu `--gradient-brand-vivid`), `segmented` (sent `--success` · failed `--error` · sending `--info` · queued `--track` desen); satır: solda etiket, ortada çubuk (8 px, pill), sağda sayı + yüzde (`numeral-sm`) | indeterminate yok (her zaman sayı); güncelleme `--dur-bar` | REQ-AUD-03, REQ-TRK-01 |
 | `DeliveryCounters` | Kuyrukta / Gönderiliyor / Gönderildi / Başarısız | custom (Card) | kanal başına ve toplam | live, stale (SSE koptu: sayılar soluk + "Son güncelleme 12 sn önce"), completed | REQ-TRK-01 |
@@ -416,18 +415,18 @@ Durumlar: skeleton (sayı bloğu + 2 çubuk), hazır, 0 kişi (uyarı + "İçeri
 
 ### 8.3a İçerik ve Onay neden farklı görünür
 
-İki ekran aynı veriyi (SMS + email metni, önizleme) gösterdiği için önceki sürümde birbirine çok benziyordu. Rol ayrımı:
+İki ekran aynı veriyi (SMS + email metni, önizleme) gösterdiği için birbirine çok benziyordu; sahip geri bildirimi (P6): "kullanıcıda aynı ekranda işlem yapma hissi oluşuyor". Rol ayrımı:
 
 | | İçerik (Adım 3 · "Üret ve düzenle") | Onay (Adım 4 · "Son kontrol ve karar") |
 |---|---|---|
 | Soru | "Metin iyi mi?" | "Bunu, bu kişilere gönderiyor muyum?" |
-| Kart rolü | Çalışma tezgâhı: editör kartı (`--surface-card`) + kesik çizgili, `--surface-sunken` zeminli **çalışma önizlemesi** | Tek **gönderim özeti** kartı (`--surface-raised`, `--shadow-raised`, üstte 4 px `--gradient-brand-vivid` şerit, logo rozeti): kanal başına alıcı sayısı, `LimitChip`'ler, gidecek metin bir kez |
-| Kanal geçişi | `ChannelTabs` (bir kanal düzenlenir) | Sekme yok: iki kanal yan yana (≥768) / alt alta |
-| Durum | `step-header-status` içerik rozeti (Taslak / Doğrulandı / Geçersiz / Akış kesildi) | kampanya rozeti (İçerik hazır / Onaylandı / Gönderiliyor) + "1 Onayla → 2 Gönder" karar listesi |
-| Birincil eylem | "Onaya geç" (eylem şeridinde, tek); `editor-save` yalnız kaydedilebilirken birincil | `ApprovalBar`: "Onayla", onaydan sonra "Gönder" |
-| İkincil | "Yeniden üret", "Taslağı düzenle" (invalid) | "Taslağı düzenle" (ghost, kart altı; onaylıysa "onay düşer" uyarısı) |
-
-Kaldırılan tekrarlar: Onay'daki ayrı "Kitle · SMS · Email" satırı (sayılar artık kanal sütun başlığında), "Sürüm"ün ortada yalnız başına durduğu satır (sürüm + kaynak kart başlığında), İçerik'teki "Önizle ve onayla" etiketi (onay İçerik'te verilmez → "Onaya geç").
+| Yerleşim | Geniş (1120 px), iki panel ≥1024: editör kartı + kesik çizgili **çalışma önizlemesi** | Dar (768 px), ortalı **tek kart**: üç kontrol satırı (Kime · Ne gidiyor · Uzunluk) + kart sonunda karar paneli; makbuz/manifesto dili |
+| Metnin görünüşü | Telefon balonu (`SmsPreview`), sandbox'lı email çerçevesi (`EmailPreview`), "Örnek 1/5 · Sonraki örnek" | Düz belge: kanal renginde 2 px sol çizgili metin blokları, örnek alıcı adı tek satır; balon, çerçeve, örnek gezme yok |
+| Uzunluk | `CharCounter` (her alanda, canlı) | Tek geçti/kaldı satırı (kişiselleştirme sonrası en kötü durum) |
+| Kanal geçişi | `ChannelTabs` | Sekme yok: iki kanal aynı satırda alt alta |
+| Durum | `step-header-status` içerik rozeti | Sayfada rozet yok (kampanya durumu `AppHeader`'da); onay durumu karar panelinin notunda |
+| Birincil eylem | "Onaya geç" (eylem şeridi) | `ApprovalBar`: "Onayla", onaydan sonra "Gönder" |
+| İkincil | "Yeniden üret", "Taslağı düzenle" (invalid) | "Taslağı düzenle" (ghost, birincilin yanında) |
 
 ### 8.3 İçerik (iki sütun ≥1024; solda editör/akış, sağda önizleme)
 
@@ -449,19 +448,28 @@ Email sekmesinde: konu `Input` + sayaç `/80`, gövde `Textarea`; sağda `EmailP
 ### 8.4 Onay
 
 ```
-│ ADIM 4/5 · SON KONTROL VE KARAR                       [İçerik hazır] │
-│ Gönderimi onayla                                                    │
-│ Bu adımda düzenleme yapılmaz: …        (1 Onayla) ── (2 Gönder)     │
-│ ┌▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┐ │
-│ │ [logo] Gönderim özeti                    Sürüm 4 · Elle düzenlendi │ │
-│ │ ● SMS                    342 alıcı │ ● Email               361 alıcı│ │
-│ │ [✓ Şablon 135/160] [✓ … 130/160]   │ [✓ Konu 42/80] [✓ … 42/80]     │ │
-│ │ GİDECEK METİN  SmsPreview          │ GİDECEK METİN  EmailPreview    │ │
-│ │ Metinde değişiklik mi gerekiyor?  ✎ Taslağı düzenle               │ │
-│ └──────────────────────────────────────────────────────────────────┘ │
-│ ═ ApprovalBar ══ ✓ İki kanal doğrulandı      ( Onayla ↗ ) ═══════ │
+│            ADIM 4/5 · SON KONTROL VE KARAR                          │
+│            Gönderimi onayla                                         │
+│            Kime ve tam olarak ne gideceğini kontrol et; …           │
+│            ┌▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┐            │
+│            │ Gönderim özeti                      [Sürüm 4] │            │
+│            │ KİME        ● SMS 342 alıcı  ● Email 361 alıcı│            │
+│            │             Kanal izni ve iletişim bilgisi olan│            │
+│            │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │            │
+│            │ NE GİDİYOR  Örnek alıcı: Şerife               │            │
+│            │             ▌SMS  Merhaba Şerife, …           │            │
+│            │             ▌Email Konu: …  / gövde metni     │            │
+│            │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │            │
+│            │ ✓ UZUNLUK   Kişiselleştirme sonrası da sınırlar içinde │   │
+│            │             SMS 160/160 · Konu 42/80 · …      │            │
+│            │░ⓘ Onayladıktan sonra… [✎ Taslağı düzenle](Onayla ↗)░│  ← sticky │
+│            └───────────────────────────────────────────────┘            │
 ```
-Onay sonrası bar: "Onaylandı" + ( Gönder ↗ ) → `ConfirmDialog send`. 422 (REQ-CNT-05 kişiselleştirme sonrası aşım) diyalog içinde ilgili kanal satırına bağlı hata olarak gösterilir. "Taslağı düzenle" → İçerik adımına döner; onaylıyken düzenleme onayı düşürür (`stale`), kart altındaki not bunu baştan söyler. Onay ekranında düzenleme arayüzü (sekme, editör, sayaç, chip) yoktur.
+- Tek sütun, maks. 768 px, ortalı (İçerik'in 1120 px iki panelinden bilerek farklı). Satır etiketi sütunu ≥640 px'te 144 px; altında etiket satırın üstüne gelir. Satırlar arası kesik çizgi (`--border-default`), makbuz hissi.
+- **Ne gidiyor:** API'nin tek örnek alıcı için render ettiği düz metin (`preview.sms.text`, `preview.email.subject`, `preview.email.text`); kanal renginde 2 px sol çizgi, `--ink-900`/`--ink-700` metin (LLM metni turuncu yapılmaz, §4.1). Email gövdesi 288 px'i aşarsa kendi içinde kayar (klavyeyle odaklanabilir bölge).
+- **Uzunluk:** tek sinyal; geçtiyse `--success` + `CircleCheck`, aşıyorsa `--error` + `CircleAlert` ve "onay reddedilir". Ayrıntı mono tabular tek satır.
+- **Karar paneli:** kartın son bölümü (opak `--surface-sunken`, üst kenarlık `--border-default`). Kartın akışı içinde `sticky bottom-0`: kısa görünümlerde (ör. 1280×900) kart kaydırılırken görünümün altına iğnelenir, kart sonuna gelince son satırın (Uzunluk) altında yerine oturur; böylece karar kaydırmadan görünür, kaydırmanın sonunda hiçbir içeriği örtmez ve iğneliyken üstünden geçtiği içerik kaydırınca açılır. Satırlar ve email gövdesi 192 px `scroll-margin-bottom` taşır (odak panelin altına düşmez). 375 px'te panel 177 px (812 px görünümün %22'si, %25 sınırının altında) olduğu için telefonda da yapışıktır. Onay sonrası not "Onaylandı · düzenlersen onay düşer" + ( Gönder ) → `ConfirmDialog send` (kanal sayıları). 422 (REQ-CNT-05 onay anı aşımı) diyalog içinde. "Taslağı düzenle" → İçerik adımı.
+- Kaldırılanlar (P6): sayfa rozeti (`AppHeader` ile tekrar), "1 Onayla → 2 Gönder" mini adım listesi, "Sürüm · Claude üretti" kaynağı, kart logosu, `LimitChip`'ler (4 adet → tek satır), "Gidecek metin" etiketleri, balon/çerçeve/örnek gezme, ayrı düzenleme ipucu şeridi, uzun alt başlık.
 
 ### 8.5 Takip / Dashboard
 
@@ -487,14 +495,14 @@ Test genişlikleri **375 / 768 / 1280 px**; kanıt `.playwright-mcp/p5-responsiv
 **Genel kurallar (her ekran):**
 - Sayfa yan boşluğu 16 px (<768), 24 px (≥768); içerik maks. 1120 px.
 - **Dokunma hedefi:** <1024 px'te (telefon ve tablet dokunmatik sayılır) her etkileşimli öğe ≥ 44×44 px: `Button` `sm`/`md` → 44 px yükseklik; stepper adımları, `ChannelTabs` sekmeleri, `VariableChip` ekleme chip'leri, kural JSON düğmesi, "Başarısızları gör" linki ve başlıktaki ana sayfa linki 44 px. ≥1024'te §7'deki masaüstü boyları geçerli. Kural genişliğe bağlıdır (`max-lg:`), `pointer: coarse`'a değil: test viewport'larında doğrulanabilir olsun diye.
-- Yapışık öğeler: `AppHeader` üstte, `ApprovalBar` altta (yalnız Onay). Yapışık bar akıştaki yerine oturur; sayfa sonunda hiçbir içeriği örtmez.
+- Yapışık öğeler: `AppHeader` üstte; Onay'da karar paneli altta, ama yalnız özet kartın içinde (`sticky bottom-0`, kart sonunda yerine oturur; §8.4). Sayfa sonunda hiçbir içeriği örtmez.
 - Hareket eklenmedi; `prefers-reduced-motion` kuralı (§5) değişmedi.
 
 **Tablet (768–1023):**
 - Stepper yatay ve etiketli; adımlar arası çizgi yalnız ≥1024'te. Overline'da adım numarası görünür.
 - Brief, Kitle: tek sütun, masaüstüyle aynı; Kitle eylemleri yan yana ("Brief'i düzenle" solda, "İçeriği üret" sağda).
 - İçerik: **tek sütun** (editör kartı → çalışma önizlemesi → eylem şeridi); iki sütun ≥1024. Eylem şeridi yatay.
-- Onay: kanal sütunları **yan yana** (≥768, §8.3a); `ApprovalBar` yüzen kart.
+- Onay: tek ortalı kart (§8.4); satır etiketleri solda, karar paneli tek satır.
 - Takip: genel kart tam genişlikte, 5 sayaç tek satırda; kanal kartları yan yana; başarısız teslimat listesi tablo.
 
 **Mobil (<768):**
@@ -503,7 +511,7 @@ Test genişlikleri **375 / 768 / 1280 px**; kanıt `.playwright-mcp/p5-responsiv
 - Brief: display 32 px; composer tam genişlik, örnek chip'i ve "Kitleyi çıkar" sarılarak alt alta düşebilir.
 - Kitle: kural chip'leri sarılır; kanal satırları etiket · çubuk · sayı · yüzde düzeninde kalır; eylemler alt alta ve tam genişlik, birincil ("İçeriği üret") üstte.
 - İçerik: tek sütun; SMS editörü <640'ta en az 192 px (160 karakter `body-lg` ile ~6 satır, kaydırmasız görünür); değişken chip'leri sarılır; eylem şeridinde not ve "Onaya geç" alt alta, buton tam genişlik. Eylem şeridi yapışık değildir (üç satırlık şerit ekranın çeyreğini kaplardı).
-- Onay: kanal sütunları alt alta (SMS → Email); `ApprovalBar` <640'ta ekranın altına yapışık, kenardan kenara, üst kenarlıklı, `env(safe-area-inset-bottom)` kadar alt boşluk, tam genişlik birincil buton.
+- Onay: satır etiketleri içeriğin üstünde; karar panelinde not üstte, "Onayla"/"Gönder" ve "Taslağı düzenle" alt alta, tam genişlik, 44 px+; panel yapışık değildir.
 - Takip: genel sayaçlar 2 sütun ızgara; kanal kartları alt alta. (Canlı olay akışı `ActivityFeed` sahip kararıyla kapsam dışı; yalnız sayaçlar.)
 - **Tablo/liste:** başarısız teslimat listesi ≥640'ta 4 sütunlu tablo (dar kapta kendi içinde kaydırılır, sayfa değil); <640'ta her satır iki satırlık kart: üstte müşteri kimliği (mono, kırılabilir) + kanal, altta neden + "Deneme: N". Başlık satırı ekran okuyucu için `sr-only` kalır.
 - Kart iç boşluğu 16; tipografi en küçük 12 px (`caption`).
