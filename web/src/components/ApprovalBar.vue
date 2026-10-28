@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// ui.md §3.17 (REQ-APR-01, -03, REQ-CNT-04, -05): approve / send bar. The first matching
-// state wins: approved › stale › submitting › ready › disabled (with a visible reason).
+// ui.md §3.17 (REQ-APR-01, -03, REQ-CNT-04, -05): approve / send decision panel. The first
+// matching state wins: approved › stale › submitting › ready › disabled (with a visible reason).
+// It does not position itself: ApprovalPage pins its wrapper inside the summary card (DESIGN.md §8.4).
 import { ArrowUpRight, CircleCheck, Info, Send, TriangleAlert } from '@lucide/vue'
 import { computed, useId } from 'vue'
 
@@ -58,21 +59,20 @@ function onApprove() {
 </script>
 
 <template>
-  <!-- Below 640 px the bar is edge to edge at the bottom of the screen with safe-area padding
-       and a full-width button (DESIGN.md §8.6); from 640 px it is a floating card. -->
+  <!-- One row from 640 px (note left, actions right); below it the note sits above full-width
+       actions with the primary button first. The default slot holds secondary actions. -->
   <div
     data-testid="approval-bar"
     :data-state="state"
-    class="sticky bottom-0 z-10 flex flex-col gap-3 border-border-default bg-surface-raised p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-raised max-sm:-mx-4 max-sm:border-t sm:flex-row sm:items-center sm:justify-between sm:rounded-card sm:border"
+    class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
   >
-    <!-- approved: no note; the step header badge already says "Onaylandı". -->
     <p
       v-if="state === 'stale'"
       data-testid="approval-stale-note"
       role="status"
-      class="flex items-center gap-1.5 text-body-sm font-semibold text-warning"
+      class="flex items-center gap-2 text-body-sm font-semibold text-warning"
     >
-      <TriangleAlert class="size-5" aria-hidden="true" />
+      <TriangleAlert class="size-5 shrink-0" aria-hidden="true" />
       {{ t('approval.staleNote') }}
     </p>
     <p
@@ -80,39 +80,47 @@ function onApprove() {
       :id="reasonId"
       data-testid="approval-reason"
       :data-reason="reason"
-      class="flex items-center gap-1.5 text-body-sm text-ink-600"
+      class="flex items-center gap-2 text-body-sm text-ink-600"
     >
-      <Info class="size-4" aria-hidden="true" />
+      <Info class="size-4 shrink-0" aria-hidden="true" />
       {{ t(`approval.reason.${reason}`) }}
     </p>
-    <p v-else-if="state !== 'approved'" class="flex items-center gap-1.5 text-body-sm text-ink-600">
-      <CircleCheck class="size-4 text-success" aria-hidden="true" />
+    <p v-else-if="state === 'approved'" class="flex items-center gap-2 text-body-sm text-ink-700">
+      <CircleCheck class="size-5 shrink-0 text-success" aria-hidden="true" />
+      <span
+        ><span class="font-semibold text-success">{{ t('status.campaign.approved') }}</span> ·
+        {{ t('approval.approvedNote') }}</span
+      >
+    </p>
+    <p v-else class="flex items-center gap-2 text-body-sm text-ink-600">
+      <Info class="size-4 shrink-0 text-ink-500" aria-hidden="true" />
       {{ t('approval.readyNote') }}
     </p>
 
-    <Button
-      v-if="state === 'approved'"
-      data-testid="approval-send"
-      size="lg"
-      class="sm:ml-auto"
-      :loading="submitting"
-      @click="emit('send')"
-    >
-      <Send aria-hidden="true" />
-      {{ t('approval.send') }}
-    </Button>
-    <Button
-      v-else
-      data-testid="approval-approve"
-      size="lg"
-      class="sm:ml-auto"
-      :disabled="state === 'disabled'"
-      :loading="state === 'submitting'"
-      :aria-describedby="state === 'disabled' ? reasonId : undefined"
-      @click="onApprove"
-    >
-      {{ t('approval.approve') }}
-      <ArrowUpRight aria-hidden="true" />
-    </Button>
+    <div class="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:gap-3">
+      <slot />
+      <Button
+        v-if="state === 'approved'"
+        data-testid="approval-send"
+        size="lg"
+        :loading="submitting"
+        @click="emit('send')"
+      >
+        <Send aria-hidden="true" />
+        {{ t('approval.send') }}
+      </Button>
+      <Button
+        v-else
+        data-testid="approval-approve"
+        size="lg"
+        :disabled="state === 'disabled'"
+        :loading="state === 'submitting'"
+        :aria-describedby="state === 'disabled' ? reasonId : undefined"
+        @click="onApprove"
+      >
+        {{ t('approval.approve') }}
+        <ArrowUpRight aria-hidden="true" />
+      </Button>
+    </div>
   </div>
 </template>
