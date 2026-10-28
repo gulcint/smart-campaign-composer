@@ -528,5 +528,5 @@ Her test fonksiyonu `// REQ-XXX-NN` yorumu taşır. Faz kapılarında testsiz RE
 | REQ-SEED-02 | unit, integration | | |
 | REQ-DLV-01 | — | | |
 | REQ-DLV-02 | unit, contract | | |
-| REQ-DLV-03 | contract | | |
+| REQ-DLV-03 | — | | |
 | REQ-DLV-04 | — | | |
