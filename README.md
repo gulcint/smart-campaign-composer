@@ -246,6 +246,7 @@ Henüz yapılmayanlar:
 - Tarayıcıdan uçtan uca test yok (API düzeyinde var: `test/e2e`, key'siz tam kampanya brief → `completed`).
 - CodeQL ve imaj taraması yok (D27); CI `web-image`, `compose-ports` ve `actionlint` kontrollerini çalıştırmaz (D27, D51).
 - Bonuslardan yalnızca CI yapıldı.
+- Kampanya için kanal seçimi yok: kişi izin verdiği her kanaldan mesaj alır (case iki kanalı birlikte ister, D59).
 - Swagger UI gibi etkileşimli API dokümanı yok (sahip kararıyla kaldırıldı, D36).
 
 Bilinen sınırlar:

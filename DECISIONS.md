@@ -271,6 +271,12 @@ PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
 - **Neden:** Sahibe göre e-posta gizli bir bilgi değildir. Geçmişi toplu yeniden yazmak, değerlendirmede incelenecek commit geçmişini bozar ve tek seferde yeniden oluşturulmuş gibi gösterir; force push `main` ruleset'ine de aykırıdır.
 - **Bedel:** Eski commit'lerin yazar e-postası görünür kalır.
 
+### D59 — Kanal seçimi yok: izin veren kişiye her iki kanaldan gider (sahip kararı, 2026-10-28)
+- **Bağlam:** İki izni de olan kişiye hem SMS hem email mi gitmeli, yoksa pazarlamacı kanal mı seçmeli?
+- **Case ne diyor:** Sistem brief'i "hedef kitleye ve SMS ve email mesajlarına" çevirir; akışta "SMS ve email içeriği" birlikte üretilir; kanal sınırını yalnız izin koyar ("İzni olmayan kullanıcıya o kanaldan mesaj gönderilmez"). Kanal seçimi istenmez.
+- **Karar:** Her kampanya iki kanalı da içerir. Kişi izin verdiği her kanaldan mesaj alır: iki izin varsa ikisi, biri varsa o, hiçbiri yoksa hiçbiri (D9).
+- **Bedel:** Pazarlamacı "yalnız SMS" kampanyası kuramaz. Kanal seçimi içerik üretimi, limitler, onay ve gönderim sözleşmelerinin hepsine dokunur; case çekirdek akışın sağlamlığını öne koyduğu için yapılmadı.
+
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |
