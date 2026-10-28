@@ -65,7 +65,7 @@ func newClaude(cfg FactoryConfig) *claudeClient {
 	}
 	model := cfg.Model
 	if model == "" {
-		model = "claude-opus-5-5"
+		model = "claude-sonnet-5-5"
 	}
 	maxTokens := int64(cfg.MaxTokens)
 	if maxTokens <= 0 {
