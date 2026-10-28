@@ -226,6 +226,13 @@
     outline-offset: 2px;
     box-shadow: var(--shadow-focus);
   }
+  /* Programmatic focus targets (tabindex=-1 headings after a step change, DESIGN.md §9) are not
+     interactive: they take focus for screen readers and show no ring. */
+  h1[tabindex='-1']:focus-visible,
+  h2[tabindex='-1']:focus-visible {
+    outline: none;
+    box-shadow: none;
+  }
   ::placeholder {
     color: var(--ink-500);
     opacity: 1;
