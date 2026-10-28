@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // ui.md §3.11 / DESIGN.md §3.4: always icon + text, never colour alone.
 import {
+  CalendarClock,
   Check,
   CircleAlert,
   CircleCheck,
@@ -47,6 +48,7 @@ const LOOK: Record<string, { tone: Tone; icon: Component }> = {
   'campaign.audience_ready': { tone: 'info', icon: Users },
   'campaign.content_ready': { tone: 'info', icon: Sparkles },
   'campaign.approved': { tone: 'success', icon: ThumbsUp },
+  'campaign.scheduled': { tone: 'info', icon: CalendarClock },
   'campaign.sending': { tone: 'info', icon: Send },
   'campaign.completed': { tone: 'brand', icon: Flag },
 }

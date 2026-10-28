@@ -204,6 +204,8 @@ export const tr = {
   'approval.send': 'Gönder',
   'approval.readyNote': 'Onayladıktan sonra gönderebilirsin',
   'approval.approvedNote': 'düzenlersen onay düşer',
+  'approval.scheduledNote': 'Planlandı: {time}. Değiştirmek için planı iptal et.',
+  'approval.toTracking': 'Takibe git',
 
   // --- Confirm dialog ---
   'confirm.approve.title': 'İçeriği onayla',
@@ -216,6 +218,17 @@ export const tr = {
   'confirm.confirm': 'Onayla',
   'confirm.send.confirm': 'Gönder',
   'confirm.cancel': 'Vazgeç',
+  'confirm.schedule.title': 'Gönderimi planla',
+  'confirm.schedule.body':
+    'Kampanya seçtiğin anda kendiliğinden gönderilir. Plan iptal edilene kadar içerik ve kitle değiştirilemez.',
+  'confirm.schedule.confirm': 'Planla',
+  'confirm.schedule.audienceNote':
+    'Kanal izinleri gönderim anında yeniden okunur; alıcı sayıları o ana kadar değişebilir.',
+  'confirm.sendMode.label': 'Ne zaman gönderilsin?',
+  'confirm.sendMode.now': 'Şimdi gönder',
+  'confirm.sendMode.later': 'İleri bir tarihte gönder',
+  'confirm.scheduledAt.label': 'Gönderim zamanı',
+  'confirm.scheduledAt.hint': 'En erken {min} dakika sonra, en geç 30 gün içinde.',
 
   // --- Preview (P4, required ids) ---
   'preview.emailFrameTitle': 'Email önizlemesi',
@@ -265,10 +278,24 @@ export const tr = {
 
   // --- Connection / toasts ---
   'connection.lost': 'Bağlantı koptu, yeniden bağlanılıyor…',
+  'schedule.tz': 'TSİ',
+  'schedule.title': 'Gönderim planlandı',
+  'schedule.timeLabel': 'Planlanan zaman',
+  'schedule.remainingLabel': 'Kalan süre',
+  'schedule.countdown': '{hms}',
+  'schedule.countdownDays': '{d} gün {hms}',
+  'schedule.starting': 'Başlatılıyor…',
+  'schedule.cancel': 'Planı iptal et',
+  'schedule.sendNow': 'Şimdi gönder',
+  'schedule.startedNote': 'Planlanan: {time}',
+
   'toast.close': 'Kapat',
   'toast.region': 'Bildirimler',
   'toast.contentSaved': 'İçerik kaydedildi ve doğrulandı.',
   'toast.approved': 'İçerik onaylandı.',
+  'toast.sendStarted': 'Gönderim başladı: {total} mesaj kuyruğa alındı.',
+  'toast.scheduled': 'Gönderim {time} için planlandı.',
+  'toast.scheduleCanceled': 'Plan iptal edildi; kampanya yeniden onaylı.',
 
   // --- Empty states / pages ---
   'empty.campaign_not_found.title': 'Kampanya bulunamadı',
@@ -341,6 +368,8 @@ export const tr = {
   'field_error.empty_group': 'Kuralda boş bir grup var.',
   'field_error.max_depth_exceeded': 'Kural çok derin iç içe.',
   'field_error.max_conditions_exceeded': 'Kuralda çok fazla koşul var.',
+  'field_error.schedule_too_soon': 'Gönderim zamanı çok yakın ya da geçmişte.',
+  'field_error.schedule_too_far': 'Gönderim zamanı en fazla 30 gün sonrası olabilir.',
   'field_error.payload_too_large': 'Metin çok büyük.',
   'field_error.unknown': 'Bu alan geçersiz.',
 } as const

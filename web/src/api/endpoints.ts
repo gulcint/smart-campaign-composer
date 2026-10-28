@@ -52,6 +52,10 @@ export const api = {
   sendCampaign: (c: ApiClient, id: string, body: BodyOf<'sendCampaign'>) =>
     c.request<Ok<'sendCampaign', 202>>('POST', `${campaignPath(id)}/send`, { body }),
 
+  /** cancelSchedule — DELETE /api/campaigns/{campaign_id}/schedule (REQ-SCH-03) */
+  cancelSchedule: (c: ApiClient, id: string) =>
+    c.request<Ok<'cancelSchedule', 200>>('DELETE', `${campaignPath(id)}/schedule`),
+
   /** listDeliveries — GET /api/campaigns/{campaign_id}/deliveries (REQ-TRK-01 failed list) */
   listDeliveries: (
     c: ApiClient,
