@@ -116,8 +116,10 @@ watch(showFailed, async (show, was) => {
   await nextTick()
   const target = show
     ? document.getElementById('delivery-failed-title')
-    : document.querySelector<HTMLElement>('[data-testid="delivery-failed-link"]')
-  target?.focus()
+    : (document.querySelector<HTMLElement>('[data-testid="delivery-failed-link"]') ??
+      // No link (no failures, or not completed): fall back to the page title, not <body>.
+      document.querySelector<HTMLElement>('[data-testid="page-title"]'))
+  target?.focus({ preventScroll: !show })
 })
 
 function closeFailed() {
