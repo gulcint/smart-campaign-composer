@@ -479,7 +479,7 @@ Yeni iş yok; plan bonusun karşılandığını açıkça göstermek için kır�
 
 **Hedef:** Onaylı kampanya "şimdi" yerine ileri bir zamana planlanabilir; o zaman gelince gönderim, bugünkü `POST /send` ile **birebir aynı** transaction'la başlar. Kuyruk, hız sınırı, retry ve idempotency değişmez.
 
-**Seçenekler (karar D61 olarak `DECISIONS.md`'ye yazılır):**
+**Seçenekler (karar D62 olarak `DECISIONS.md`'ye yazılır):**
 
 | | A — Teslimatlar planlamada doğar, `next_attempt_at = scheduled_at` | **B — Plan kampanyada durur, teslimatlar zamanı gelince doğar (seçilen)** |
 |---|---|---|
@@ -562,7 +562,7 @@ Test yazarı yalnız `docs/requirements.md`'den çalıştığı için (D50) test
 
 P2–P6 ile aynı akış (§1.2, §3): sözleşme → test → kod; hiçbir rol kendi işini onaylamaz.
 
-1. **Sözleşme** — `docs/p7-schedule-contracts` → `main` (mimar): `docs/requirements.md` (REQ-SCH-01..04, durum makinesi tablosu, HTTP 409 satırı, kapsam dışı paragrafı), `openapi.yaml`, `db-schema.md`, `go-interfaces.md` (`Service.Schedule`/`CancelSchedule`, `Scheduler.RunOnce`, store imzaları), `ui.md`, `metrics.md`, DESIGN.md'de plan paneli, `DECISIONS.md` D61 (+ bu bölümdeki VARSAYIM'lar). **Kabul:** `api-contract` yeşil; sahip REQ metnini onayladı.
+1. **Sözleşme** — `docs/p7-schedule-contracts` → `main` (mimar): `docs/requirements.md` (REQ-SCH-01..04, durum makinesi tablosu, HTTP 409 satırı, kapsam dışı paragrafı), `openapi.yaml`, `db-schema.md`, `go-interfaces.md` (`Service.Schedule`/`CancelSchedule`, `Scheduler.RunOnce`, store imzaları), `ui.md`, `metrics.md`, DESIGN.md'de plan paneli, `DECISIONS.md` D62 (+ bu bölümdeki VARSAYIM'lar). **Kabul:** `api-contract` yeşil; sahip REQ metnini onayladı.
 2. **Dilim branch'i** — `slice/p7-schedule` güncel `main`'den.
 3. **Testler** — `scripts/test-writer-worktree.sh origin/slice/p7-schedule test/p7-schedule`, ayrı session'da `claude --agent test-writer`; yalnız REQ-SCH kabul ölçütlerinden; eksik ad varsa "REQ eksik" döner (adım 1'e). **Kabul:** her REQ-SCH en az bir testle eşli, testler kırmızı, PR `slice`'a merge.
 4. **Backend** — `feat/p7-schedule-backend`: migration 0008 (+down), `startSendingLocked` çıkarımı, servis + HTTP uçları, `campaign.Scheduler` + `cmd/worker` bağlantısı, config (`SCHEDULE_MIN_LEAD`, `SCHEDULER_INTERVAL`), metrics. **Kabul:** Go testleri yeşil, `make db-roundtrip` yeşil, mevcut REQ-SND testleri değişmeden yeşil.
@@ -576,7 +576,7 @@ P2–P6 ile aynı akış (§1.2, §3): sözleşme → test → kod; hiçbir rol 
 - `make db-roundtrip` yeşil (0008 `up → down → up`, şema diff'i boş); `make test` key'siz yeşil.
 - Mevcut REQ-SND/REQ-TRK testleri değiştirilmeden yeşil (anlık gönderim anlamı korunuyor).
 - Elle kanıt: compose yığınında 2 dk sonraya planlanan kampanya planlanan dakikada `sending`'e geçer; planlıyken `docker compose restart worker` sonrası yine başlar; iptal edilen kampanya hiç teslimat üretmez.
-- `README.md` bonuslarda CI'ın yanında zamanlanmış gönderimi anar (README'yi o fazın sahibi düzenler); `DECISIONS.md` D61 güncel.
+- `README.md` bonuslarda CI'ın yanında zamanlanmış gönderimi anar (README'yi o fazın sahibi düzenler); `DECISIONS.md` D62 güncel.
 
 ### 9.7 Riskler ve VARSAYIM'lar
 
