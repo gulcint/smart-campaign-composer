@@ -340,7 +340,7 @@ grep -E "ci-ok|fail"" completed (exit code 0)
 
   Bu P5 dahil main'deki bütün export'ları kapsıyor. Bir şeyin kaçıp kaçmadığını
   görmek için sanitizer'ın yakalayamayacağı varyantlar da olabilir, örneğin
-  sadece ilk ad ("Gülçin") tek başına geçiyorsa. İstersen onu da ayrıca ararım.
+  sadece ilk ad ("<first name>") tek başına geçiyorsa. İstersen onu da ayrıca ararım.
 
 ✻ Brewed for 13s · done 21:40
 

@@ -447,7 +447,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 - [ ] GitHub public repo; README'deki kurulum adımları temiz bir klondan doğrulandı
 - [ ] `docker compose up` tek komut, **key'siz** çalışır (web arayüzü + api + worker + seed + mock provider + mock LLM) (R12)
 - [ ] `make test` yalnızca Docker + make ile, key'siz
-- [ ] `README.md`: kurulum, mimari özeti, bonus olarak CI, yetiştirilemeyenler (yapılmayan bonuslar dahil: A/B, dile göre içerik, zamanlanmış gönderim)
+- [ ] `README.md`: kurulum, mimari özeti, bonus olarak CI, yetiştirilemeyenler (Bonus tablosu: yapılmayan A/B, dile göre içerik, zamanlanmış gönderim; sınırlar: "Known limits" bölümü)
 - [ ] `DECISIONS.md`: bu plandaki tüm VARSAYIM'lar ve gerekçeleri
 - [ ] `ai-sessions/` + `INDEX.md`: tüm session'lar, temizlenmiş
 - [ ] Kişisel bilgi yok: izlenen dosyalarda ve session export'larında ad-soyad, kişisel e-posta ve yerel bilgisayar yolları temizlendi; squash merge commit'leri noreply adresiyle yazılıyor (geçmiş commit'ler yeniden yazılmaz, D58)

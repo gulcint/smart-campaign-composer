@@ -202,7 +202,7 @@ flowchart LR
 | Tests that run with `make test` | ✅ Go (unit, integration, API-level E2E) and Vitest, in containers, no key |
 | `README.md`: setup and a short architecture summary | ✅ this file |
 | `DECISIONS.md`: important decisions and their reasons | ✅ [`DECISIONS.md`](DECISIONS.md) |
-| `ai-sessions/`: Claude session exports | ✅ P0-P5, sanitized; P6 to be added ([`ai-sessions/INDEX.md`](ai-sessions/INDEX.md)) |
+| `ai-sessions/`: Claude session exports | ✅ P0-P6, sanitized ([`ai-sessions/INDEX.md`](ai-sessions/INDEX.md)) |
 
 Phases and their scope ([`docs/PLAN.md`](docs/PLAN.md)):
 
@@ -214,7 +214,7 @@ Phases and their scope ([`docs/PLAN.md`](docs/PLAN.md)):
 | P3 Audience | ✅ done | Segment rule, audience counts, brief and audience screens, API drift guard |
 | P4 Content + Approval | ✅ done | SMS/email generation (SSE), character limits, personalization, versioned editing, approval, preview |
 | P5 Send + Tracking | ✅ done | Send API, queue and worker, live status stream and tracking screen, generation lease in the database, responsive layout |
-| P6 Hardening + Delivery | 🟡 in progress | Browser end-to-end tests, security scan, personal-data cleanup, final README and DECISIONS |
+| P6 Hardening + Delivery | ✅ done | Browser end-to-end tests, security scan, personal-data cleanup, final README and DECISIONS |
 
 ## Bonus
 
