@@ -283,6 +283,11 @@ PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
 - **Neden:** Strict araçlar ve onarım turu zaten `claude-sonnet-5-5` ile gerçek API'de doğrulanmıştı (D23, D32); `tool_choice: auto` ve parametre kısıtları iki modelde aynıdır (D7), istemci kodu değişmez.
 - **Bedel:** "Deterministik" modelin sabit olması demektir; çıktı metni yine her çağrıda değişebilir (`temperature` gönderilmez, D7). Kalite farkı yalnız elle denenir; gerçek istemcinin otomatik testi yoktur.
 
+### D61 — Demo yığınında mock provider hata oranları yükseltildi (sahip kararı, 2026-10-28)
+- **Bağlam:** Case, mock provider'ın "retry ve rate limit mantığını gerçekten test edebilmek için zaman zaman hata, gecikme ve 429" döndürmesini ister. Koddaki varsayılanlarla (%5 hata, %2 429) bir teslimatın 5 denemeyi tüketme olasılığı ≈ 0,05⁵'tir; demoda `failed` teslimat ve "Başarısızları gör" pratikte hiç görünmüyordu.
+- **Karar:** `compose.yml` mock provider'a `MOCK_PROVIDER_ERROR_RATE=0.4` ve `MOCK_PROVIDER_RATE_LIMIT_RATE=0.1` verir. 5xx denemeleri 5'te sınırlı olduğundan teslimatların ≈ %1'i (0,4⁵) `failed` olur; retry ve 429 yolları her kampanyada görünür. Koddaki varsayılanlar ve `compose.test.yml` değişmez, testler etkilenmez.
+- **Alternatif:** 0,6 / 0,3 denendi: 300 istekte 32 başarı; teslimatların ≈ %45'i başarısız olur ve kampanya dakikalarca sürer. "Zaman zaman" ifadesine uymadığı için seçilmedi.
+
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |
