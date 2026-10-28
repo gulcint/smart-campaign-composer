@@ -11,6 +11,31 @@ import type { CampaignStatus, ConnectionState } from '@/api/types'
 const BACKOFF_START_MS = 1000
 const BACKOFF_MAX_MS = 30_000
 
+const COUNT_KEYS = ['total', 'queued', 'sending', 'sent', 'failed'] as const
+
+function isCounts(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return COUNT_KEYS.every((k) => typeof o[k] === 'number')
+}
+
+/** Minimal shape guard: enough for the counters to render without throwing. */
+function isCampaignStatus(v: unknown): v is CampaignStatus {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  const bc = o.by_channel as Record<string, unknown> | null | undefined
+  return (
+    typeof o.campaign_id === 'string' &&
+    typeof o.state === 'string' &&
+    typeof o.updated_at === 'string' &&
+    isCounts(o.counts) &&
+    typeof bc === 'object' &&
+    bc !== null &&
+    isCounts(bc.sms) &&
+    isCounts(bc.email)
+  )
+}
+
 export function useCampaignStatusStream(campaignId: Ref<string>) {
   const factory =
     inject(EventSourceFactoryKey, null) ??
@@ -27,12 +52,13 @@ export function useCampaignStatusStream(campaignId: Ref<string>) {
   let stopped = false
 
   function apply(data: string): CampaignStatus | null {
-    let next: CampaignStatus
+    let next: unknown
     try {
-      next = JSON.parse(data) as CampaignStatus
+      next = JSON.parse(data)
     } catch {
       return null // a broken frame changes nothing; the next poll brings a full status again
     }
+    if (!isCampaignStatus(next)) return null
     status.value = next
     lastUpdatedAt.value = next.updated_at
     return next
@@ -54,7 +80,11 @@ export function useCampaignStatusStream(campaignId: Ref<string>) {
   function connect() {
     dropSource()
     const id = campaignId.value
-    if (stopped || completed.value || !id) return
+    if (!id) {
+      connection.value = 'idle' // nothing to watch (no or unknown campaign)
+      return
+    }
+    if (stopped || completed.value) return
     const es = factory(`/api/campaigns/${encodeURIComponent(id)}/events`)
     source = es
     connection.value = 'connecting'
@@ -84,8 +114,8 @@ export function useCampaignStatusStream(campaignId: Ref<string>) {
     es.addEventListener('snapshot', onStatus)
     es.addEventListener('status', onStatus)
     es.addEventListener('completed', (ev) => {
-      if (source !== es) return
-      apply(ev.data)
+      // A malformed final frame is ignored; the reconnect gets snapshot + completed again.
+      if (source !== es || !apply(ev.data)) return
       completed.value = true
       close()
     })
