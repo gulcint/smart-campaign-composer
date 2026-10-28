@@ -77,6 +77,12 @@
   --brand-ring: var(--orange-600);
   --brand-line: var(--orange-200);
   --brand-icon-line: var(--orange-300);
+  /* Loading shimmer (DESIGN.md §5): grey track, soft orange tint sweeps left to right.
+     Decorative fills only, never text. Reduced motion shows the static tint instead. */
+  --shimmer-base: var(--track);
+  --shimmer-tint: var(--orange-100);
+  --shimmer-peak: var(--orange-200);
+  --shimmer-static: var(--orange-100);
 
   /* --- Shape (§5) --- */
   --radius-pill: 9999px;
@@ -97,6 +103,7 @@
   --dur-base: 200ms;
   --dur-slow: 320ms;
   --dur-bar: 600ms;
+  --dur-shimmer: 1600ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
 

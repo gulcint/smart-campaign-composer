@@ -4,19 +4,24 @@ import { Info, PencilLine, TriangleAlert } from '@lucide/vue'
 import { computed } from 'vue'
 
 import type { ApiError } from '@/api/errors'
-import type { Audience } from '@/api/types'
+import type { Audience, LlmProvider } from '@/api/types'
 import { formatNumber, t } from '@/i18n'
 
+import AudienceSkeleton from './AudienceSkeleton.vue'
 import Button from './Button.vue'
 import ErrorCard from './ErrorCard.vue'
 import ProgressBar from './ProgressBar.vue'
-import Skeleton from './Skeleton.vue'
 
-const props = defineProps<{
-  audience: Audience | null
-  loading: boolean
-  error: ApiError | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    audience: Audience | null
+    loading: boolean
+    error: ApiError | null
+    /** LLM building the segment right now; null when only loading (no generation). */
+    provider?: LlmProvider | null
+  }>(),
+  { provider: null },
+)
 const emit = defineEmits<{ 'edit-brief': []; retry: [] }>()
 
 const state = computed(() => {
@@ -58,11 +63,9 @@ const channels = computed(() => {
     :aria-busy="state === 'loading' ? 'true' : undefined"
     class="flex flex-col gap-5"
   >
+    <!-- Loading: AudienceSkeleton mirrors the ready layout below (no jump on swap). -->
     <template v-if="state === 'loading'">
-      <span class="sr-only" role="status">{{ t('audience.loading') }}</span>
-      <Skeleton class="h-11 w-40 rounded-sm" />
-      <Skeleton class="h-2 w-full" />
-      <Skeleton class="h-2 w-4/5" />
+      <AudienceSkeleton :provider="provider" />
     </template>
 
     <ErrorCard

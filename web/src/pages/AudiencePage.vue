@@ -9,15 +9,18 @@ import Button from '@/components/Button.vue'
 import ChatBubble from '@/components/ChatBubble.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import SegmentRuleSkeleton from '@/components/SegmentRuleSkeleton.vue'
 import SegmentRuleView from '@/components/SegmentRuleView.vue'
 import { t } from '@/i18n'
 import { isLockedForEditing } from '@/lib/steps'
 import { campaignIdOf } from '@/router'
 import { useCampaignStore } from '@/stores/campaign'
+import { useConfigStore } from '@/stores/config'
 
 const route = useRoute()
 const router = useRouter()
 const store = useCampaignStore()
+const config = useConfigStore()
 
 const campaignId = computed(() => (route ? campaignIdOf(route) : null))
 const campaign = computed(() =>
@@ -109,11 +112,14 @@ async function onRetry() {
           <h2 class="text-h4 text-accent-heading">{{ t('audience.ruleTitle') }}</h2>
           <SegmentRuleView :rule="segment.rule" />
         </div>
-        <div v-if="segment" class="h-px bg-border-subtle" aria-hidden="true" />
+        <!-- No rule yet: shimmer chips row so the section reads as loading, not empty. -->
+        <SegmentRuleSkeleton v-else-if="!cardError" data-testid="segment-rule-loading" />
+        <div v-if="segment || !cardError" class="h-px bg-border-subtle" aria-hidden="true" />
         <AudienceSummaryCard
           :audience="segment?.audience ?? null"
           :loading="loading"
           :error="cardError"
+          :provider="store.segmentGenerating ? config.provider : null"
           @retry="onRetry"
           @edit-brief="onEditBrief"
         />
