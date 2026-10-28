@@ -1,110 +1,53 @@
 # Smart Campaign Composer
 
-The marketer writes what they want in plain language. Claude proposes the target audience and the SMS and email copy, and a human makes the final decision. Approved messages go out through a queue, and delivery is tracked live.
+A marketer writes what they want in plain language. Claude suggests the audience and the SMS and email text. A human checks and approves. Approved messages go out through a queue, and you can watch the delivery live.
 
 | | |
 |---|---|
-| Frontend | Vue 3 (Vite, TypeScript, Pinia, shadcn-vue + Tailwind CSS v4) |
+| Frontend | Vue 3 (Vite, TypeScript, Pinia, shadcn-vue, Tailwind CSS) |
 | Backend | Go |
-| LLM | Claude API (Anthropic Go SDK); a mock LLM when there is no key |
+| LLM | Claude API, or a mock LLM when there is no key |
 | Database and queue | PostgreSQL |
 
-This README follows the headings of the case document: under each one it says how the requirement is met and where the detail lives. The rationale and alternatives for each decision are in [`DECISIONS.md`](DECISIONS.md).
-
-## Contents
-
-- [Setup](#setup)
-- [Business context](#business-context)
-- [User flow](#user-flow)
-- [Functional requirements](#functional-requirements)
-- [AI requirements](#ai-requirements)
-- [Resources](#resources)
-- [Technology and architecture](#technology-and-architecture)
-- [Deliverables](#deliverables)
-- [Bonus](#bonus)
-- [AI tooling](#ai-tooling)
-- [Where to look per evaluation criterion](#where-to-look-per-evaluation-criterion)
-- [Known limits](#known-limits)
+The headings below follow the case document. Reasons behind each decision (D1, D2, ...) are in [`DECISIONS.md`](DECISIONS.md).
 
 ## Setup
 
-You only need Docker (Compose v2.24 or later, for the optional `.env`) and make.
+You need Docker (Compose v2.24 or later) and make.
 
 ```sh
-cp .env.example .env   # optional; everything works without the file
-docker compose up      # database, migrations, seed, api, worker, mock provider, web UI
-make test              # all tests (Go + Vitest) in containers, no API key
+cp .env.example .env   # optional, everything works without it
+docker compose up      # database, seed, api, worker, mock provider, web UI
+make test              # all tests, in containers, no API key
 make help              # other commands
 ```
 
-When `docker compose up` has finished, open <http://127.0.0.1:8081> in a browser. If that port is taken by another program, put a free one in `.env`, for example `WEB_PORT=8082`; `API_PORT` works the same way for the API. `docker compose ps` shows which ports were bound.
+Then open <http://127.0.0.1:8081>. If a port is taken, set `WEB_PORT` (and `API_PORT`) in `.env`.
 
-If you put `ANTHROPIC_API_KEY` in `.env`, the system uses the real Claude (model `claude-sonnet-5-5`; both audience and content generation use this model, D60); if you leave it empty, the mock LLM runs. `LLM_PROVIDER=mock` selects the mock LLM even when a key is present, and `real` fails at startup when there is no key. Example: [`.env.example`](.env.example).
-
-If you will contribute code, the first thing to do after cloning is `make hooks` (requires lefthook and gitleaks; see the tool list in the "Komutlar" (commands) section of [`CLAUDE.md`](CLAUDE.md)).
+- **With a key:** put `ANTHROPIC_API_KEY` in `.env` and the real Claude (`claude-sonnet-5-5`) is used.
+- **Without a key:** the mock LLM is used. It ignores the brief and always returns the same example audience and text.
+- `LLM_PROVIDER=mock` forces the mock even when a key exists. `LLM_PROVIDER=real` fails at start-up without a key.
+- To contribute code, run `make hooks` first (needs lefthook and gitleaks).
 
 ## Business context
 
-Preparing a campaign means defining the audience, writing copy for each channel, and staying within character limits. In this tool the marketer only writes what they want; Claude proposes the audience and the copy, and a human makes the final decision at every step.
+Preparing a campaign means choosing an audience, writing text for each channel and keeping to the length limits. Here the marketer only describes the goal. Claude proposes, a human decides.
 
-Deliberately not done: no real person is messaged (recipients are seeded fake users, and sending goes to a mock provider we wrote ourselves) and there is no authentication (a local demo, bound to `127.0.0.1` only).
+Nobody real is messaged: recipients are fake seeded users and messages go to our own mock provider. There is no login (local demo, bound to `127.0.0.1`).
 
 ## User flow
 
-The example brief (the product UI is Turkish, so the brief stays in Turkish; it means "Send a 30% discount reminder to users in Istanbul who added items to their cart in the last 30 days but did not buy. Keep it friendly but short."):
+Example brief (the UI is in Turkish, so the brief is too): *"Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder. Samimi ama kısa olsun."*
 
-> "Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder. Samimi ama kısa olsun."
+1. **Audience.** Claude turns the brief into a segment rule. The screen shows how many people match and how many can be reached by SMS and by email.
+2. **Text.** Claude writes the SMS and email text, which streams onto the screen.
+3. **Approval.** The marketer previews, edits and approves. Editing after approval removes the approval.
+4. **Send.** "Gönder" puts the messages in the queue and the worker sends them to the mock provider.
+5. **Tracking.** The screen shows sent, waiting and failed counts live. Failed deliveries can be listed.
 
-1. **The audience is derived.** Claude turns the brief into a segment rule (fields such as city, last 30 days, cart). The UI shows how many people match and how many of them can be reached by SMS and by email. The human checks the audience and regenerates it if needed.
-2. **Messages are generated.** Claude writes the SMS and email copy, and the text streams onto the screen. While Claude is thinking, the screen shows a waiting indicator.
-3. **A human approves.** The marketer previews, edits and approves the copy. If the copy changes after approval, the approval is dropped and it must be approved again.
-4. **It is sent.** "Gönder" ("Send") writes the deliveries to the queue; the worker sends them to the mock provider under a per-channel rate limit.
-5. **It is tracked live.** The tracking screen shows the sent, pending and failed counts without a page refresh. When the campaign completes and there are failed deliveries, "Başarısızları gör" ("show failed") opens the list.
+The screens work on phone, tablet and desktop widths.
 
-The screens work at phone (375 px), tablet (768 px) and desktop (1280 px) widths. The mock LLM does not read the brief: whatever brief is written, it returns the same example rule and copy; real behavior needs an API key.
-
-```mermaid
-sequenceDiagram
-  actor M as Marketer
-  participant W as web (nginx)
-  participant A as api
-  participant L as LLMClient
-  participant D as PostgreSQL
-  participant K as worker
-  participant P as mockprovider
-
-  M->>W: writes brief
-  W->>A: POST /api/campaigns
-  W->>A: POST /api/campaigns/{id}/segment
-  A->>L: generate segment rule (tool use)
-  L-->>A: rule (JSON), api validates against schema
-  opt invalid
-    A->>L: single repair round with error fields (at most 2 attempts)
-    L-->>A: corrected rule
-  end
-  A->>D: parameterized count query, store rule (audience_ready)
-  A-->>W: 200 rule and audience counts
-  W->>A: POST /api/campaigns/{id}/content
-  A->>L: generate SMS + email (stream)
-  A-->>W: SSE delta events, then validated
-  A->>D: store content version (content_ready)
-  M->>W: previews, edits if needed (POST /api/campaigns/{id}/content-versions)
-  W->>A: POST /api/campaigns/{id}/approve (approved)
-  W->>A: POST /api/campaigns/{id}/send
-  A->>D: deliveries rows + sending in one transaction
-  A-->>W: 202 Accepted
-  K->>D: channel advisory lock, up to 50 jobs via FOR UPDATE SKIP LOCKED (60 s lease)
-  K->>P: POST /v1/{sms|email}/messages, Idempotency-Key, ≤100/s per channel
-  P-->>K: 202, 429 + Retry-After, or 5xx
-  K->>D: sent, retry schedule, or failed (completed with the last delivery)
-  W->>A: GET /api/campaigns/{id}/events
-  loop every 1 s
-    A->>D: read status counters
-    A-->>W: SSE snapshot, status, completed
-  end
-```
-
-A campaign moves through the following states. There is no campaign-level error state; individual message failures show up in the counts (D4):
+A campaign moves through these states. There is no campaign-level error state; failed messages show up in the counts (D4).
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 60, "rankSpacing": 110, "curve": "linear"}}}%%
@@ -123,42 +66,37 @@ flowchart TD
 
 ## Functional requirements
 
-### Audience
+**Audience**
+- **LLM output is never run as SQL (D8).** The rule uses a closed set of fields, operators and value types. The backend checks it against a schema and builds the query itself.
+- **Consent is checked by the system, not the model (D9).** SMS and email consent are separate. A person without consent for a channel is left out of that channel.
+- "Did not buy" means no purchase in the last 30 days (D20).
 
-- **LLM output is never SQL (D8).** The segment rule is a closed language: allowed fields, operators and value types. The backend validates the rule against the schema and translates it into a parameterized query with its own code; whatever the model writes, no unauthorized query reaches the database.
-- **Consent is enforced by the system, not the model (D9).** SMS and email consent are separate. A person without consent for a channel is filtered out of that channel's audience in the query; leaving this to the model's reasoning would give no guarantee.
-- "Did not buy" ("alışveriş yapmayan") means no purchase in the last 30 days (D20).
+**Content**
+- **Limits:** SMS up to 160 characters, email subject up to 80 (body 5000, brief 2000). They are checked after the variables are filled in, using the longest value in the audience (D10, D37).
+- **Variables:** `{{first_name}}`, `{{last_name}}`, `{{city}}`. An unknown variable is rejected. An empty first name becomes "Değerli müşterimiz" ("Dear customer").
+- Every edit is a new version. Two edits at once are caught with `X-Expected-Version` (D38, D40).
 
-### Content
+**Delivery**
+- **Queue in PostgreSQL (D1, D2).** Each message is a row in `deliveries`. The worker claims rows with `FOR UPDATE SKIP LOCKED`.
+- **At most 100 messages per second per channel (D5).** One dispatcher per channel (advisory lock) with a token bucket.
+- **No duplicates (D3).** `UNIQUE(campaign_id, channel, customer_id)` plus the same `Idempotency-Key` on every attempt.
+- **Retries (D6).** Up to 5 attempts. On 5xx, 408 and timeouts: exponential backoff with jitter (1 s to 60 s). Other 4xx are not retried. 429 follows `Retry-After` with its own budget (20 times or 10 minutes). A delivery that runs out of attempts becomes `failed`.
 
-- **Channel limits:** SMS at most 160 characters, email subject at most 80; in addition the email body is at most 5000 and the brief at most 2000 characters. Limits are checked against the text with variables filled in using the longest value in the audience (D10, D37).
-- **Personalization:** `{{first_name}}`, `{{last_name}}` and `{{city}}` are supported; an unknown variable is rejected. When the first name is empty, "Değerli müşterimiz" ("Dear customer") is used instead.
-- Every edit is a new version; concurrent edits are caught as a conflict through `X-Expected-Version` (D38, D40).
-
-### Delivery
-
-- **The async queue lives in PostgreSQL (D1, D2).** Every message to be sent is a row in the `deliveries` table; the worker claims jobs with `FOR UPDATE SKIP LOCKED`. At this scale a separate queue service would be unnecessary complexity.
-- **At most 100 messages per second per channel (D5).** Each channel has a single dispatcher (PostgreSQL advisory lock); the rate is limited with a token bucket.
-- **The same message never goes to the same person twice (D3).** `UNIQUE(campaign_id, channel, customer_id)` in the database, and the same `Idempotency-Key` on every attempt to the provider.
-- **Retry strategy (D6):** at most 5 attempts (including the first); on 5xx, 408 and timeouts, exponential backoff with jitter (from 1 s up to 60 s); other 4xx are not retried. 429 honors `Retry-After` and is counted against a separate budget (at most 20 times or 10 minutes). A delivery that runs out of attempts becomes `failed` and appears on the tracking screen.
-
-### Tracking
-
-- **Live delivery status:** the `/api/campaigns/{id}/events` SSE stream; the screen updates its counters without a page refresh (D54).
-- **Health and metrics:** on the API port (default <http://127.0.0.1:8080>), not the web port: `/healthz` (process is up), `/readyz` (database is reachable), `/metrics` (Prometheus; delivery counters come from the database, D22). The worker serves the same three on the internal network, not exposed to the host; the mock provider serves only `/healthz` ([`docs/contracts/metrics.md`](docs/contracts/metrics.md)).
-- API reference: [`docs/contracts/openapi.yaml`](docs/contracts/openapi.yaml). CI prevents the API from drifting from this contract: every request and response in the E2E tests is validated against it, and the router routes match the spec paths one to one (D30).
+**Tracking**
+- **Live status** over SSE (`/api/campaigns/{id}/events`), no page refresh (D54).
+- **Health and metrics** on the API port (default 8080): `/healthz`, `/readyz`, `/metrics` ([`docs/contracts/metrics.md`](docs/contracts/metrics.md)).
+- API reference: [`docs/contracts/openapi.yaml`](docs/contracts/openapi.yaml). CI checks that the API matches it (D30).
 
 ## AI requirements
 
-- **Validation (D7, D23).** Claude returns structured JSON through tool use (`strict: true`), not free text. The output is always re-validated against the full schema in the backend. If it is invalid, the errors are fed back to the model and it generates once more; if it is still invalid, the user sees a clear error and the campaign state does not change. The repair round was verified against the real API (D32).
-- **Testability (D11).** LLM access sits behind the `LLMClient` interface. Without a key the mock LLM is used; `make test` and `docker compose up` run without a key. The mock LLM's scenarios also exercise invalid output and the repair round.
-- The schema sent to the model and the schema the backend validates are separate files; length and count rules that strict mode does not support live only in the backend ([`docs/contracts/`](docs/contracts/README.md)).
+- **Validation (D7, D23).** Claude answers in structured JSON through tool use, never free text. The backend checks it again against the full schema. If it is invalid, the errors go back to the model for one more try. If it is still invalid, the user sees a clear error and nothing changes.
+- **Testing without a key (D11).** LLM access sits behind the `LLMClient` interface. `make test` and `docker compose up` run with the mock LLM. Its scenarios also cover invalid output and the repair round.
 
 ## Resources
 
-- **Claude API key:** read only from `ANTHROPIC_API_KEY` in the local `.env` file; the repo contains [`.env.example`](.env.example). `.env` never enters git; hooks and CI scan for leaks.
-- **Fake user data (D21, D24):** 5000 deterministic customers. Fields: first name, last name, email (`example.com`/`example.test`), fictional phone number, city (30% Istanbul), language (`tr`/`en`), loyalty tier, SMS and email consent (separate), and `cart_add`/`page_view`/`purchase` events. Details: [`docs/contracts/seed.md`](docs/contracts/seed.md). The seed is generated relative to "today" on first start and left untouched on later starts (`--if-empty`); as days pass, the "last 30 days" counts shrink. Regenerating relative to today deletes campaigns and deliveries: `docker compose run --rm seed seed --ref-time=now --reset --manifest=/tmp/manifest.json`.
-- **Mock SMS/email provider (D25, D61):** a separate service. It applies a per-channel rate limit and produces seeded random errors, 429 responses and 20-200 ms latency; the rates are set through `MOCK_PROVIDER_*` environment variables. The code defaults are 5% errors and 2% 429, but for the demo `compose.yml` sets `MOCK_PROVIDER_ERROR_RATE` to 0.4 and `MOCK_PROVIDER_RATE_LIMIT_RATE` to 0.1, so retries and 429 handling are visible in every campaign and about 1% of deliveries exhaust their 5 attempts and end `failed` (the failed list appears). `compose.test.yml` is unchanged, so tests are not affected. Tests use a separate, isolated instance (`mockprovider-solo`, D55).
+- **API key:** read only from `ANTHROPIC_API_KEY` in `.env`. `.env` is never committed, and hooks and CI scan for leaks.
+- **Fake users (D21, D24):** 5000 customers with name, email (`example.com`), fake phone, city (30% Istanbul), language, loyalty tier, separate SMS and email consent, and cart, page view and purchase events ([`docs/contracts/seed.md`](docs/contracts/seed.md)). The seed is made relative to the first start date, so "last 30 days" counts shrink as days pass. To remake it relative to today (this deletes campaigns and deliveries): `docker compose run --rm seed seed --ref-time=now --reset --manifest=/tmp/manifest.json`.
+- **Mock SMS/email provider (D25, D61):** a separate service with a rate limit, random errors, 429 responses and 20-200 ms delay. For the demo, `compose.yml` sets 40% errors and 10% 429, so retries are visible and about 1% of deliveries end as `failed`. Tests do not use these rates.
 
 ## Technology and architecture
 
@@ -188,89 +126,77 @@ flowchart LR
   seed -.->|"first"| worker
 ```
 
-- **api:** endpoints for campaign, audience, content, approval and send; SSE for content and live status (D12).
-- **worker:** processes the queue; one dispatcher per channel, rate limiting and retry.
-- **web:** the Vue UI; nginx forwards `/api` requests to the api. Visual system: [`DESIGN.md`](DESIGN.md).
-- **Generation lock (D41, D52):** two generations cannot run on the same campaign, and sending is blocked while a generation is running; the lock is a time-limited lease on the campaign row.
+- **api:** campaign, audience, content, approval and send endpoints; SSE for content and live status.
+- **worker:** works through the queue with rate limiting and retries.
+- **web:** the Vue UI. nginx forwards `/api` to the api. Look and feel: [`DESIGN.md`](DESIGN.md).
+- **Generation lock (D41, D52):** two generations cannot run on one campaign, and sending waits while one is running.
 
 ## Deliverables
 
 | Requested | Status |
 |---|---|
-| GitHub repository | ✅ `gulcint/smart-campaign-composer` (public; GitLab account verification could not be completed, D14) |
-| One-command setup with `docker compose up` (seed and mock provider included) | ✅ |
-| Tests that run with `make test` | ✅ Go (unit, integration, API-level E2E) and Vitest, in containers, no key |
-| `README.md`: setup and a short architecture summary | ✅ this file |
-| `DECISIONS.md`: important decisions and their reasons | ✅ [`DECISIONS.md`](DECISIONS.md) |
-| `ai-sessions/`: Claude session exports | ✅ P0-P6, sanitized ([`ai-sessions/INDEX.md`](ai-sessions/INDEX.md)) |
+| GitHub repository | ✅ `gulcint/smart-campaign-composer` (public) |
+| `docker compose up`, seed and mock provider included | ✅ |
+| `make test` | ✅ Go and Vitest tests in containers, no key |
+| `README.md` | ✅ this file |
+| `DECISIONS.md` | ✅ [`DECISIONS.md`](DECISIONS.md) |
+| `ai-sessions/` | ✅ P0-P6, sanitized ([`ai-sessions/INDEX.md`](ai-sessions/INDEX.md)) |
 
-Phases and their scope ([`docs/PLAN.md`](docs/PLAN.md)):
-
-| Phase | Status | Scope |
-|---|---|---|
-| P0 Setup | ✅ done | Repo, hooks, CI, plan |
-| P1 Contracts | ✅ done | Requirements, OpenAPI, schemas, UI and Go contracts |
-| P2 Seed + Infrastructure | ✅ done | Seed, migrations, compose, LLM factory and mock LLM, mock provider, `make test` |
-| P3 Audience | ✅ done | Segment rule, audience counts, brief and audience screens, API drift guard |
-| P4 Content + Approval | ✅ done | SMS/email generation (SSE), character limits, personalization, versioned editing, approval, preview |
-| P5 Send + Tracking | ✅ done | Send API, queue and worker, live status stream and tracking screen, generation lease in the database, responsive layout |
-| P6 Hardening + Delivery | ✅ done | Browser end-to-end tests, security scan, personal-data cleanup, final README and DECISIONS |
-| P7 Bonus | 🟡 in progress | Scheduled send (D62): contracts written; tests and implementation next. A/B variants and content in the user's language stay out of scope |
+Work was done in phases ([`docs/PLAN.md`](docs/PLAN.md)): P0 setup, P1 contracts, P2 seed and infrastructure, P3 audience, P4 content and approval, P5 send and tracking, P6 hardening and delivery are done. P7 (bonus, scheduled send) is in progress.
 
 ## Bonus
 
 | Bonus | Status |
 |---|---|
-| CI pipeline | 🟢 done: GitHub Actions; required `ci-ok` for `main`: lint, `make test`, gitleaks, govulncheck, OpenAPI drift check (build/test is skipped on docs-only PRs, D51) |
-| Scheduled send | 🟡 in progress (D62): a campaign is scheduled through `POST /send` with an optional `scheduled_at`, cancelled with `DELETE .../schedule`; contracts are written, implementation is next |
+| CI pipeline | 🟢 done: GitHub Actions; `main` needs a green `ci-ok` (lint, `make test`, gitleaks, govulncheck, API contract check) |
+| Scheduled send | 🟡 in progress (D62): scheduled with `POST /send` plus an optional `scheduled_at`, cancelled with `DELETE .../schedule`; contracts are written, code is next |
 | A/B variants | ⬜ not done |
-| Content in the user's language | ⬜ not done (the seed has a `language` field) |
+| Content in the user's language | ⬜ not done (the seed already has a `language` field) |
 
-As the case asks, the priority was a solid core flow.
+The priority was a solid core flow.
 
 ## AI tooling
 
-The project was built end to end with Claude Code, using agents with separated roles ([`docs/PLAN.md`](docs/PLAN.md) §3, D13):
+The project was built with Claude Code, using agents with separate roles ([`docs/PLAN.md`](docs/PLAN.md) §3, D13):
 
-- The **orchestrator** splits the work into phases and slices and merges the results.
-- The **test writer** writes tests only from [`docs/requirements.md`](docs/requirements.md) and cannot see the implementation (enforced with a separate worktree and a hook, D50).
-- The **implementer**, **reviewer** and **verifier** are separate agents; nobody approves their own work.
-- AI output is checked by hooks (commit format, secret scanning, role paths) and CI; only PRs with a green `ci-ok` enter `main` (D15, D33).
+- The **orchestrator** splits the work and merges results.
+- The **test writer** writes tests only from [`docs/requirements.md`](docs/requirements.md) and cannot see the implementation (separate worktree and a hook, D50).
+- The **implementer**, **reviewer** and **verifier** are separate; nobody approves their own work.
+- Hooks (commit format, secret scan, role paths) and CI check everything. Only PRs with a green `ci-ok` reach `main` (D15, D33).
 
-Session exports are added to [`ai-sessions/`](ai-sessions/INDEX.md) after being sanitized of API keys and personal data (`make sanitize-sessions`, `make check-sessions`).
+Session exports are in [`ai-sessions/`](ai-sessions/INDEX.md), cleaned of keys and personal data (`make sanitize-sessions`, `make check-sessions`).
 
 ## Where to look per evaluation criterion
 
 | Criterion | Where to look |
 |---|---|
-| LLM integration | `internal/llm/`, [`docs/contracts/schemas/llm/`](docs/contracts/schemas/llm/), DECISIONS D7-D12, D23, D32 |
+| LLM integration | `internal/llm/`, [`docs/contracts/schemas/llm/`](docs/contracts/schemas/llm/), D7-D12, D23, D32 |
 | Architecture and decisions | [`DECISIONS.md`](DECISIONS.md), [`docs/contracts/`](docs/contracts/README.md) |
-| Backend reliability | `internal/delivery/`, `internal/postgres/`, `cmd/worker/`; DECISIONS D1-D6, D52-D54 |
+| Backend reliability | `internal/delivery/`, `internal/postgres/`, `cmd/worker/`; D1-D6, D52-D54 |
 | Frontend | `web/src/`, [`DESIGN.md`](DESIGN.md), [`docs/contracts/ui.md`](docs/contracts/ui.md) |
 | Tests and code quality | `test/`, `internal/**/*_test.go`, `web/tests/`, `.github/workflows/`, [`docs/requirements.md`](docs/requirements.md) |
 
 ## Known limits
 
-- The generation lock is a lease of at most 120 s on the campaign row; its expiry depends on the clocks of the API processes, so clock skew between processes shifts the expiry by that amount (D52).
-- The channel lock is checked at the start of every batch; if the lock is lost, the old sender finishes at most one batch (50 requests by default), so in that short window a channel may start one batch of extra sending. The same message still never goes out twice (D53).
-- The live status stream closes after 5 consecutive failed reads (about 5 s); the screen goes `stale` and reconnects. For shorter outages the counters may be a few seconds out of date (D54).
-- The send rate observed in a manual trial is about 50/s per channel, below the limit of 100; there is no automated rate measurement.
-- The send-time length check (`CheckRendered`) checks the text of both channels together for one recipient: if the SMS text exceeds 160 with personalization, that person's email delivery also fails with `content_too_long` (or the reverse). A per-channel check requires a contract change.
-- SMS length is counted in characters (Unicode runes); a real SMS segment varies with GSM-7/UCS-2 and drops to 70 for a message with Turkish characters (D10).
-- The email body limit of 5000 is not re-checked at approval time, only at validation (D46).
-- The brief cannot be changed after the campaign is created; "Brief'i düzenle" ("Edit brief") starts a new campaign.
-- De-duplication is per customer: two customer records that share the same phone number or email address each receive a delivery (D3).
-- The audience query pulls the matching rows into Go; this is sufficient at seed scale (5000), not at millions of records. The queue was also chosen for this scale; the path forward is the `Queue` interface (D1).
-- Automated tests are derived only from `docs/requirements.md` (D50); many behaviors that are written only in the contracts are untested. There is no automated test of the real Claude client; behaviors such as city spelling and SMS length must be verified by hand.
-- Touch target sizes (44 px) are applied by screen width (<1024 px), not by `pointer: coarse`; a desktop with a narrow window also gets large targets.
-- The action bar of the content screen is not sticky on mobile (it stays at the end of the page); the decision panel of the approval screen is sticky only inside the summary card.
+- **Clocks:** the generation lock is a lease of up to 120 s; clock differences between API processes shift its expiry (D52).
+- **Lost channel lock:** the old sender may finish one more batch (50 messages) before it notices. The same message still never goes out twice (D53).
+- **Live stream:** after 5 failed reads (about 5 s) the screen shows `stale` and reconnects; counters can be a few seconds old (D54).
+- **Send speed:** about 50/s per channel in a manual trial, under the limit of 100. There is no automated speed test.
+- **Length check at send time:** it checks SMS and email together for one person. If the SMS gets too long after personalization, that person's email also fails with `content_too_long`, and the reverse. A per-channel check needs a contract change.
+- **SMS length** is counted in characters. A real SMS segment is 70 characters when the text has Turkish letters (D10).
+- **Email body limit** (5000) is checked at validation only, not again at approval (D46).
+- **Brief** cannot be changed after creation; "Brief'i düzenle" starts a new campaign.
+- **De-duplication is per customer:** two customers with the same phone or email each get a message (D3).
+- **Scale:** audience rows are loaded into Go and the queue lives in PostgreSQL. Fine for 5000 users, not for millions (D1).
+- **Tests:** they come only from `docs/requirements.md` (D50), so some behaviour written only in the contracts is untested. The real Claude client has no automated test; city spelling and SMS length were checked by hand.
+- **UI:** large touch targets depend on screen width, not on touch input. The content screen's action bar is not sticky on mobile.
 
 ## Where to read
 
-- [`DECISIONS.md`](DECISIONS.md): important decisions, their rationale, known limits
+- [`DECISIONS.md`](DECISIONS.md): decisions and reasons
 - [`docs/PLAN.md`](docs/PLAN.md): phases, git flow, roles
-- [`docs/requirements.md`](docs/requirements.md): requirements catalog
-- [`docs/contracts/`](docs/contracts/README.md): API, data and LLM tool contracts
+- [`docs/requirements.md`](docs/requirements.md): requirements
+- [`docs/contracts/`](docs/contracts/README.md): API, data and LLM contracts
 - [`DESIGN.md`](DESIGN.md): visual system and screens
-- [`ai-sessions/INDEX.md`](ai-sessions/INDEX.md): sanitized Claude session records
+- [`ai-sessions/INDEX.md`](ai-sessions/INDEX.md): session records
 - [`CLAUDE.md`](CLAUDE.md): project rules and agent instructions
