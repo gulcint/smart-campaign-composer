@@ -158,7 +158,7 @@ Buton üstü beyaz metin: referans gradient üstü `#FA5B23` **3.19 ✗**, alt `
 
 | Metin rolü | Renk | Not |
 |---|---|---|
-| Ekran başlığının vurgu kısmı (display, h1'de anahtar ifade) | `--text-accent-display` | Örn. "Kampanyanı **tek cümleyle** anlat" |
+| Ekran başlığının vurgu kısmı (display, h1'de anahtar ifade) | `--text-accent-display` | Örn. "Kampanyanı **kendi sözlerinle** anlat" |
 | h2–h4 başlıklar | `--text-accent-heading` | Kart başlıkları dahil |
 | Vurgulu kelime (`<strong>` rolündeki) | `--text-accent` | Gövde içinde, cümle başına en fazla bir |
 | Anahtar sayılar: kitle sayısı, karakter sayacı (normal), teslimat sayaçları | `--text-accent-numeral` | Durum renkli sayaçlar istisna: başarısız sayısı `--error` |
@@ -387,7 +387,7 @@ Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu 
 │  ● Brief ── ○ Kitle ── ○ İçerik ── ○ Onay ── ○ Takip                 │
 │                                                                      │
 │          Kampanyanı                                                  │
-│          tek cümleyle anlat            ← 2. satır --text-accent-display│
+│        kendi sözlerinle anlat          ← 2. satır --text-accent-display│
 │          Kitleyi ve mesajları Claude önerir, son kararı sen verirsin. │
 │  ┌──────────────────────────────────────────────────────────────┐    │
 │  │ Son 30 günde sepetine ürün ekleyip…                          │    │
