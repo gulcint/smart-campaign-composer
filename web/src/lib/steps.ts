@@ -8,6 +8,7 @@ const ACCESSIBLE: Record<CampaignState, readonly StepId[]> = {
   audience_ready: ['brief', 'audience', 'content'],
   content_ready: ['brief', 'audience', 'content', 'approval'],
   approved: ['brief', 'audience', 'content', 'approval'],
+  scheduled: STEPS,
   sending: STEPS,
   completed: STEPS,
 }
@@ -17,6 +18,7 @@ const REDIRECT: Record<CampaignState, StepId> = {
   audience_ready: 'audience',
   content_ready: 'content',
   approved: 'approval',
+  scheduled: 'tracking',
   sending: 'tracking',
   completed: 'tracking',
 }

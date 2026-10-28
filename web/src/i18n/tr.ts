@@ -29,6 +29,7 @@ export const tr = {
   'status.campaign.audience_ready': 'Kitle hazır',
   'status.campaign.content_ready': 'İçerik hazır',
   'status.campaign.approved': 'Onaylandı',
+  'status.campaign.scheduled': 'Planlandı',
   'status.campaign.sending': 'Gönderiliyor',
   'status.campaign.completed': 'Tamamlandı',
 
