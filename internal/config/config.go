@@ -40,6 +40,10 @@ type Config struct {
 	Retry                 delivery.RetryConfig // RETRY_MAX_ATTEMPTS(5), RETRY_BASE_DELAY(1s), RETRY_MAX_DELAY(60s),
 	// RETRY_MAX_RATE_LIMITED(20), RETRY_RATE_LIMIT_WINDOW(10m)
 	WorkerRandSeed int64 // WORKER_RAND_SEED, default 0 => seeded from crypto/rand
+
+	// P7a scheduled send (D62).
+	ScheduleMinLead   time.Duration // SCHEDULE_MIN_LEAD (api), default 1m; allowed 0s..24h
+	SchedulerInterval time.Duration // SCHEDULER_INTERVAL (worker), default 1s; allowed (0, 1m]
 }
 
 var (
@@ -84,6 +88,9 @@ func Load(getenv func(string) string) (Config, error) {
 			RateLimitWindow: l.duration("RETRY_RATE_LIMIT_WINDOW", retry.RateLimitWindow, false),
 		},
 		WorkerRandSeed: l.int64("WORKER_RAND_SEED", 0),
+
+		ScheduleMinLead:   l.boundedDuration("SCHEDULE_MIN_LEAD", time.Minute, true, 24*time.Hour),
+		SchedulerInterval: l.boundedDuration("SCHEDULER_INTERVAL", time.Second, false, time.Minute),
 	}
 	if err := errors.Join(l.errs...); err != nil {
 		return Config{}, err
@@ -154,6 +161,16 @@ func (l *loader) duration(name string, def time.Duration, allowZero bool) time.D
 	}
 	d, err := time.ParseDuration(strings.TrimSpace(v))
 	if err != nil || d < 0 || (d == 0 && !allowZero) {
+		l.invalid(name, nil)
+		return def
+	}
+	return d
+}
+
+// boundedDuration is duration with an inclusive upper bound.
+func (l *loader) boundedDuration(name string, def time.Duration, allowZero bool, maxValue time.Duration) time.Duration {
+	d := l.duration(name, def, allowZero)
+	if d > maxValue {
 		l.invalid(name, nil)
 		return def
 	}
@@ -254,5 +271,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("retry_max_rate_limited", c.Retry.MaxRateLimited),
 		slog.Duration("retry_rate_limit_window", c.Retry.RateLimitWindow),
 		slog.Int64("worker_rand_seed", c.WorkerRandSeed),
+		slog.Duration("schedule_min_lead", c.ScheduleMinLead),
+		slog.Duration("scheduler_interval", c.SchedulerInterval),
 	)
 }
