@@ -3,6 +3,7 @@
 // focus trap, Esc handling, focus return and aria-labelledby; rendered in place (no portal)
 // so the dialog stays inside the owning page's DOM. While submitting, confirm is inert and
 // cancel / Esc / backdrop do not close it.
+import { Send } from '@lucide/vue'
 import {
   AlertDialogContent,
   AlertDialogDescription,
@@ -103,7 +104,8 @@ function cancel() {
           :loading="submitting"
           @click="onConfirm"
         >
-          {{ t('confirm.confirm') }}
+          <Send v-if="kind === 'send'" aria-hidden="true" />
+          {{ kind === 'send' ? t('confirm.send.confirm') : t('confirm.confirm') }}
         </Button>
       </div>
     </AlertDialogContent>
