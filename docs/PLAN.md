@@ -591,7 +591,7 @@ P2–P6 ile aynı akış (§1.2, §3): sözleşme → test → kod; hiçbir rol 
 | Durum makinesi değişikliği | Yeni durum mevcut ekranların `state` anahtarlı dallarını kırabilir | `scheduled` için her sayfada açık dal; mevcut testler değiştirilmeden yeşil kalmalı (kapı) |
 | Uzun süre açık SSE | Planlı kampanyanın Takip sayfası günlerce açık kalabilir | Bugünkü 1 sn yoklama + 15 sn keepalive yeter; sekme kapanınca akış kapanır |
 
-**Sahibe açık sorular:**
+**Sahibe açık sorular (P7'nin ilk işi, 2026-10-28'de yanıtlanmadı):** P7 hangi session'da başlarsa başlasın, sözleşme PR'ından önce bu beş soru sahibe sorulur; yanıtlar ve gerekçeleri `DECISIONS.md` D62'ye yazılır, sonra §9.2–9.3 yanıtlara göre güncellenir. Parantez içindeki öneri, sahip aksini söylemezse uygulanacak varsayılandır.
 1. Ayrı `PUT/DELETE …/schedule` uçları mı (öneri), yoksa `POST /send`'e isteğe bağlı `scheduled_at` mı?
 2. `scheduled`'da düzenleme 409 mu (öneri), yoksa düzenleme planı sessizce düşürüp `content_ready`'e mi döner?
 3. Worker kapalıyken kaçan plan: geç de olsa gönderilsin mi (öneri), yoksa belirli bir gecikmeden (ör. 1 sa) sonra gönderilmeyip işaretlensin mi?
