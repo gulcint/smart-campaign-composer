@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Step 2 (ui.md §1.1, §3.7, §3.8; DESIGN.md §8.2).
-import { ArrowUpRight, ListFilter, PencilLine } from '@lucide/vue'
+import { ArrowUpRight, PencilLine } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -9,8 +9,8 @@ import Button from '@/components/Button.vue'
 import ChatBubble from '@/components/ChatBubble.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import SegmentRuleSkeleton from '@/components/SegmentRuleSkeleton.vue'
 import SegmentRuleView from '@/components/SegmentRuleView.vue'
-import Skeleton from '@/components/Skeleton.vue'
 import { t } from '@/i18n'
 import { isLockedForEditing } from '@/lib/steps'
 import { campaignIdOf } from '@/router'
@@ -112,23 +112,8 @@ async function onRetry() {
           <h2 class="text-h4 text-accent-heading">{{ t('audience.ruleTitle') }}</h2>
           <SegmentRuleView :rule="segment.rule" />
         </div>
-        <!-- No rule yet: a shimmer chips row with SegmentRuleView's geometry (30 px chips,
-             32/44 px JSON toggle) so the section reads as loading, not empty. -->
-        <div v-else-if="!cardError" data-testid="segment-rule-loading" class="flex flex-col gap-2">
-          <h2 class="text-h4 text-accent-heading">{{ t('audience.ruleTitle') }}</h2>
-          <div class="flex flex-wrap items-center gap-2" aria-hidden="true">
-            <ListFilter class="size-4 text-ink-500" />
-            <div class="flex flex-wrap gap-2">
-              <Skeleton
-                v-for="w in ['w-32', 'w-56', 'w-48']"
-                :key="w"
-                variant="shimmer"
-                :class="['h-[30px]', w]"
-              />
-            </div>
-            <Skeleton variant="shimmer" class="ml-auto h-8 w-28 max-lg:h-11" />
-          </div>
-        </div>
+        <!-- No rule yet: shimmer chips row so the section reads as loading, not empty. -->
+        <SegmentRuleSkeleton v-else-if="!cardError" data-testid="segment-rule-loading" />
         <div v-if="segment || !cardError" class="h-px bg-border-subtle" aria-hidden="true" />
         <AudienceSummaryCard
           :audience="segment?.audience ?? null"

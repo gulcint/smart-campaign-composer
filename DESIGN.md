@@ -398,7 +398,7 @@ Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu 
 │  ⓘ Gerçek kimseye mesaj gitmez; alıcılar sahte seed verisidir.       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
-Durumlar: boş, yazıyor, gönderiliyor (balon + 3 nokta), 422/413 field hatası, 502 `ErrorCard`.
+Durumlar: boş, yazıyor, gönderiliyor (kullanıcı balonunun hemen altında Kitle adımının yükleniyor kartı: shimmer kural chip'leri, shimmer sayı bloğu + görünür durum satırı "Claude kitleyi çıkarıyor…" / "Kitle hesaplanıyor…", shimmer SMS/Email satırları, izin notu; ~5 s'lik segment beklemesi burada geçer ve Kitle sayfası aynı şekillerle açılır; tek gösterge, eski 3 noktalı balon kaldırıldı; gönder düğmesi kilitli), 422/413 field hatası, 502 `ErrorCard`.
 
 ### 8.2 Kitle
 

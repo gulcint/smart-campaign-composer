@@ -62,7 +62,6 @@ export const tr = {
   'brief.submit': 'Kitleyi çıkar',
   'brief.shortcut': 'Göndermek için Ctrl/⌘ + Enter',
   'brief.counterLabel': '{n} / {max} karakter',
-  'brief.pending': 'Kitle çıkarılıyor…',
   'brief.retrySegment': 'Kitleyi çıkar',
   'brief.draftNote': 'Bu kampanyanın kitlesi henüz çıkarılmadı.',
 

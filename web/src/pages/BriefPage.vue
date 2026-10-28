@@ -5,6 +5,7 @@ import { Info, Sparkles } from '@lucide/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import AudienceLoadingPreview from '@/components/AudienceLoadingPreview.vue'
 import BrandMark from '@/components/BrandMark.vue'
 import BriefComposer from '@/components/BriefComposer.vue'
 import Button from '@/components/Button.vue'
@@ -15,10 +16,12 @@ import Skeleton from '@/components/Skeleton.vue'
 import { t } from '@/i18n'
 import { campaignIdOf } from '@/router'
 import { useCampaignStore } from '@/stores/campaign'
+import { useConfigStore } from '@/stores/config'
 
 const route = useRoute()
 const router = useRouter()
 const store = useCampaignStore()
+const config = useConfigStore()
 
 const campaignId = computed(() => (route ? campaignIdOf(route) : null))
 const isNew = computed(() => !campaignId.value)
@@ -95,7 +98,8 @@ function newCampaign() {
 
       <template v-if="submitting && submittedText">
         <ChatBubble role="user" :text="submittedText" />
-        <ChatBubble role="assistant" :text="t('brief.pending')" pending />
+        <!-- One loading indicator: the Audience step's own skeleton, shown where the wait is. -->
+        <AudienceLoadingPreview :provider="config.provider" />
       </template>
 
       <BriefComposer
@@ -138,12 +142,7 @@ function newCampaign() {
         </div>
         <template v-else>
           <ChatBubble role="user" :text="campaign.brief" />
-          <ChatBubble
-            v-if="store.segmentGenerating"
-            role="assistant"
-            :text="t('brief.pending')"
-            pending
-          />
+          <AudienceLoadingPreview v-if="store.segmentGenerating" :provider="config.provider" />
           <ErrorCard
             v-else-if="segmentError"
             :error="segmentError"
