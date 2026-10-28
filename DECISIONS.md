@@ -277,6 +277,12 @@ PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
 - **Karar:** Her kampanya iki kanalı da içerir. Kişi izin verdiği her kanaldan mesaj alır: iki izin varsa ikisi, biri varsa o, hiçbiri yoksa hiçbiri (D9).
 - **Bedel:** Pazarlamacı "yalnız SMS" kampanyası kuramaz. Kanal seçimi içerik üretimi, limitler, onay ve gönderim sözleşmelerinin hepsine dokunur; case çekirdek akışın sağlamlığını öne koyduğu için yapılmadı.
 
+### D60 — Model Sonnet 5.5 (sahip kararı, 2026-10-28)
+- **Bağlam:** Varsayılan model `claude-opus-5-5` idi. Opus 5.5'in her zaman açık uyarlanabilir düşünmesi içerik akışında ilk parçadan önce ≈4–5 sn sessizlik yaratıyordu ("Claude düşünüyor" göstergesi bunun için eklendi).
+- **Karar:** Kitle ve içerik üretimi `claude-sonnet-5-5` kullanır. Varsayılan hem `internal/config` hem `internal/llm` içinde sabittir; `.env.example` ve compose modeli belirtmez, dolayısıyla her kurulum aynı modeli kullanır. `ANTHROPIC_MODEL` yalnız bilinçli bir geçersiz kılma olarak kalır.
+- **Neden:** Strict araçlar ve onarım turu zaten `claude-sonnet-5-5` ile gerçek API'de doğrulanmıştı (D23, D32); `tool_choice: auto` ve parametre kısıtları iki modelde aynıdır (D7), istemci kodu değişmez.
+- **Bedel:** "Deterministik" modelin sabit olması demektir; çıktı metni yine her çağrıda değişebilir (`temperature` gönderilmez, D7). Kalite farkı yalnız elle denenir; gerçek istemcinin otomatik testi yoktur.
+
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |

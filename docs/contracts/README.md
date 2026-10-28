@@ -173,7 +173,7 @@ Her satırda ayrıca 500 `internal_error` olabilir (toast). `fields[]` yalnız `
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | api | boş | go-interfaces §config |
 | `LLM_PROVIDER` | api | `auto` (`auto`\|`real`\|`mock`) | go-interfaces §config, §llm |
-| `ANTHROPIC_MODEL`, `LLM_TIMEOUT`, `LLM_MAX_TOKENS` | api | `claude-opus-5-5`, `60s`, `4096` | llm-tools §1 |
+| `ANTHROPIC_MODEL`, `LLM_TIMEOUT`, `LLM_MAX_TOKENS` | api | `claude-sonnet-5-5`, `60s`, `4096` | llm-tools §1 |
 | `MOCK_LLM_SCENARIO`, `MOCK_LLM_CHUNK_DELAY` | api | `ok`, `0s` | llm-tools §3 |
 | `SCC_FORBID_REAL_LLM` | api (test) | boş; `compose.test.yml`'de `1` | go-interfaces §llm |
 | `SEGMENT_REFERENCE_TIME` | api | boş (= saat) | segment-dsl §4 |

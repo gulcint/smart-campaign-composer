@@ -23,7 +23,7 @@ type Config struct {
 
 	AnthropicAPIKey   secret.Secret // ANTHROPIC_API_KEY, optional
 	LLMMode           llm.Mode      // LLM_PROVIDER: auto|real|mock, default auto
-	AnthropicModel    string        // ANTHROPIC_MODEL, default "claude-opus-5-5"
+	AnthropicModel    string        // ANTHROPIC_MODEL, default "claude-sonnet-5-5"
 	LLMTimeout        time.Duration // LLM_TIMEOUT, default 60s
 	LLMMaxTokens      int           // LLM_MAX_TOKENS, default 4096
 	MockLLMScenario   llm.Scenario  // MOCK_LLM_SCENARIO, default "ok"
@@ -61,7 +61,7 @@ func Load(getenv func(string) string) (Config, error) {
 
 		AnthropicAPIKey:   secret.Secret(getenv("ANTHROPIC_API_KEY")),
 		LLMMode:           l.mode("LLM_PROVIDER"),
-		AnthropicModel:    l.str("ANTHROPIC_MODEL", "claude-opus-5-5"),
+		AnthropicModel:    l.str("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
 		LLMTimeout:        l.duration("LLM_TIMEOUT", 60*time.Second, false),
 		LLMMaxTokens:      l.integer("LLM_MAX_TOKENS", 4096, 1),
 		MockLLMScenario:   l.scenario("MOCK_LLM_SCENARIO"),
