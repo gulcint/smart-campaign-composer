@@ -268,6 +268,7 @@ export const tr = {
   'toast.region': 'Bildirimler',
   'toast.contentSaved': 'İçerik kaydedildi ve doğrulandı.',
   'toast.approved': 'İçerik onaylandı.',
+  'toast.sendStarted': 'Gönderim başladı: {total} mesaj kuyruğa alındı.',
 
   // --- Empty states / pages ---
   'empty.campaign_not_found.title': 'Kampanya bulunamadı',
