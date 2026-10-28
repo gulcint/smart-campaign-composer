@@ -1,6 +1,10 @@
 # Smart Campaign Composer
 
-A marketer writes what they want in plain language. Claude suggests the audience and the SMS and email text. A human checks and approves. Approved messages go out through a queue, and you can watch the delivery live.
+A marketer writes a campaign request in plain language; Claude proposes the audience and the SMS and email text, a human approves, and the messages go through a PostgreSQL queue to a mock provider while you watch the delivery live.
+
+**Status:** the case scope is complete and runs without an API key (a mock LLM takes over). No real message is ever sent: recipients are fake seeded users. Not finished: A/B variants, content in the user's language, and scheduled send, which is in progress ([Bonus](#bonus), [Known limits](#known-limits)).
+
+[Run it](#run-it) · [How it works](#user-flow) · [Architecture](#technology-and-architecture) · [Known limits](#known-limits) · [DECISIONS.md](DECISIONS.md) · [AI sessions](ai-sessions/INDEX.md)
 
 | | |
 |---|---|
@@ -9,25 +13,27 @@ A marketer writes what they want in plain language. Claude suggests the audience
 | LLM | Claude API, or a mock LLM when there is no key |
 | Database and queue | PostgreSQL |
 
-The headings below follow the case document. Reasons behind each decision (D1, D2, ...) are in [`DECISIONS.md`](DECISIONS.md).
+The headings below follow the case document. The reasons behind each decision (D1, D2, ...) are in [`DECISIONS.md`](DECISIONS.md).
 
-## Setup
+## Run it
 
-You need Docker (Compose v2.24 or later) and make.
+You need Docker (Compose v2.24 or later) and make. Go is only needed if you run `make test-unit` or the git hooks.
 
 ```sh
-cp .env.example .env   # optional, everything works without it
 docker compose up      # database, seed, api, worker, mock provider, web UI
 make test              # all tests, in containers, no API key
-make help              # other commands
 ```
 
-Then open <http://127.0.0.1:8081>. If a port is taken, set `WEB_PORT` (and `API_PORT`) in `.env`.
+**What you should see:** after `docker compose up` settles, <http://127.0.0.1:8081> shows the brief screen, and <http://127.0.0.1:8080/readyz> returns `{"status":"ready",...}`. `make test` ends with every Go and Vitest suite passing.
 
+**Try one campaign:** paste the example brief from [User flow](#user-flow), then click through audience, text, approval and "Gönder". The tracking screen should end on "Kampanya tamamlandı" with a few failed deliveries (the mock provider fails on purpose, see [Resources](#resources)).
+
+Details:
+- If a port is taken, set `WEB_PORT` (and `API_PORT`) in `.env`. `cp .env.example .env` is optional.
 - **With a key:** put `ANTHROPIC_API_KEY` in `.env` and the real Claude (`claude-sonnet-5-5`) is used.
 - **Without a key:** the mock LLM is used. It ignores the brief and always returns the same example audience and text.
 - `LLM_PROVIDER=mock` forces the mock even when a key exists. `LLM_PROVIDER=real` fails at start-up without a key.
-- To contribute code, run `make hooks` first (needs lefthook and gitleaks).
+- To contribute code, run `make hooks` first (needs lefthook and gitleaks). `make help` lists the other commands.
 
 ## Business context
 
@@ -44,6 +50,8 @@ Example brief (the UI is in Turkish, so the brief is too): *"Son 30 günde sepet
 3. **Approval.** The marketer previews, edits and approves. Editing after approval removes the approval.
 4. **Send.** "Gönder" puts the messages in the queue and the worker sends them to the mock provider.
 5. **Tracking.** The screen shows sent, waiting and failed counts live. Failed deliveries can be listed.
+
+![Tracking screen after a finished campaign: 708 messages, 689 sent, 19 failed, with a progress bar and one card each for SMS and email.](docs/img/tracking-completed.png)
 
 The screens work on phone, tablet and desktop widths.
 
@@ -131,6 +139,21 @@ flowchart LR
 - **web:** the Vue UI. nginx forwards `/api` to the api. Look and feel: [`DESIGN.md`](DESIGN.md).
 - **Generation lock (D41, D52):** two generations cannot run on one campaign, and sending waits while one is running.
 
+## Known limits
+
+- **Clocks:** the generation lock is a lease of up to 120 s; clock differences between API processes shift its expiry (D52).
+- **Lost channel lock:** the old sender may finish one more batch (50 messages) before it notices. The same message still never goes out twice (D53).
+- **Live stream:** after 5 failed reads (about 5 s) the screen shows `stale` and reconnects; counters can be a few seconds old (D54).
+- **Send speed:** about 50/s per channel in a manual trial, under the limit of 100. There is no automated speed test.
+- **Length check at send time:** it checks SMS and email together for one person. If the SMS gets too long after personalization, that person's email also fails with `content_too_long`, and the reverse. A per-channel check needs a contract change.
+- **SMS length** is counted in characters. A real SMS segment is 70 characters when the text has Turkish letters (D10).
+- **Email body limit** (5000) is checked at validation only, not again at approval (D46).
+- **Brief** cannot be changed after creation; "Brief'i düzenle" starts a new campaign.
+- **De-duplication is per customer:** two customers with the same phone or email each get a message (D3).
+- **Scale:** audience rows are loaded into Go and the queue lives in PostgreSQL. Fine for 5000 users, not for millions (D1).
+- **Tests:** they come only from `docs/requirements.md` (D50), so some behaviour written only in the contracts is untested. The real Claude client has no automated test; city spelling and SMS length were checked by hand.
+- **UI:** large touch targets depend on screen width, not on touch input. The content screen's action bar is not sticky on mobile.
+
 ## Deliverables
 
 | Requested | Status |
@@ -175,21 +198,6 @@ Session exports are in [`ai-sessions/`](ai-sessions/INDEX.md), cleaned of keys a
 | Backend reliability | `internal/delivery/`, `internal/postgres/`, `cmd/worker/`; D1-D6, D52-D54 |
 | Frontend | `web/src/`, [`DESIGN.md`](DESIGN.md), [`docs/contracts/ui.md`](docs/contracts/ui.md) |
 | Tests and code quality | `test/`, `internal/**/*_test.go`, `web/tests/`, `.github/workflows/`, [`docs/requirements.md`](docs/requirements.md) |
-
-## Known limits
-
-- **Clocks:** the generation lock is a lease of up to 120 s; clock differences between API processes shift its expiry (D52).
-- **Lost channel lock:** the old sender may finish one more batch (50 messages) before it notices. The same message still never goes out twice (D53).
-- **Live stream:** after 5 failed reads (about 5 s) the screen shows `stale` and reconnects; counters can be a few seconds old (D54).
-- **Send speed:** about 50/s per channel in a manual trial, under the limit of 100. There is no automated speed test.
-- **Length check at send time:** it checks SMS and email together for one person. If the SMS gets too long after personalization, that person's email also fails with `content_too_long`, and the reverse. A per-channel check needs a contract change.
-- **SMS length** is counted in characters. A real SMS segment is 70 characters when the text has Turkish letters (D10).
-- **Email body limit** (5000) is checked at validation only, not again at approval (D46).
-- **Brief** cannot be changed after creation; "Brief'i düzenle" starts a new campaign.
-- **De-duplication is per customer:** two customers with the same phone or email each get a message (D3).
-- **Scale:** audience rows are loaded into Go and the queue lives in PostgreSQL. Fine for 5000 users, not for millions (D1).
-- **Tests:** they come only from `docs/requirements.md` (D50), so some behaviour written only in the contracts is untested. The real Claude client has no automated test; city spelling and SMS length were checked by hand.
-- **UI:** large touch targets depend on screen width, not on touch input. The content screen's action bar is not sticky on mobile.
 
 ## Where to read
 
