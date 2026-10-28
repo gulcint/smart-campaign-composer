@@ -1,71 +1,71 @@
 # Smart Campaign Composer
 
-Pazarlamacı ne istediğini doğal dille yazar. Claude hedef kitleyi ve SMS ile email metinlerini önerir, son kararı insan verir. Onaylanan mesajlar bir kuyruktan geçerek gönderilir ve gönderim canlı izlenir.
+The marketer writes what they want in plain language. Claude proposes the target audience and the SMS and email copy, and a human makes the final decision. Approved messages go out through a queue, and delivery is tracked live.
 
 | | |
 |---|---|
 | Frontend | Vue 3 (Vite, TypeScript, Pinia, shadcn-vue + Tailwind CSS v4) |
 | Backend | Go |
-| LLM | Claude API (Anthropic Go SDK), anahtar yoksa sahte LLM |
-| Veritabanı ve kuyruk | PostgreSQL |
+| LLM | Claude API (Anthropic Go SDK); a mock LLM when there is no key |
+| Database and queue | PostgreSQL |
 
-Bu README, case dokümanının başlıklarını izler: her başlıkta istenenin nasıl karşılandığı ve ayrıntının nerede olduğu yazar. Kararların gerekçesi ve alternatifleri [`DECISIONS.md`](DECISIONS.md)'dedir.
+This README follows the headings of the case document: under each one it says how the requirement is met and where the detail lives. The rationale and alternatives for each decision are in [`DECISIONS.md`](DECISIONS.md).
 
-## İçindekiler
+## Contents
 
-- [Kurulum](#kurulum)
-- [İş bağlamı](#iş-bağlamı)
-- [Kullanıcı akışı](#kullanıcı-akışı)
-- [Fonksiyonel gereksinimler](#fonksiyonel-gereksinimler)
-- [AI gereksinimleri](#ai-gereksinimleri)
-- [Kaynaklar](#kaynaklar)
-- [Teknoloji ve mimari](#teknoloji-ve-mimari)
-- [Teslim edilecekler](#teslim-edilecekler)
+- [Setup](#setup)
+- [Business context](#business-context)
+- [User flow](#user-flow)
+- [Functional requirements](#functional-requirements)
+- [AI requirements](#ai-requirements)
+- [Resources](#resources)
+- [Technology and architecture](#technology-and-architecture)
+- [Deliverables](#deliverables)
 - [Bonus](#bonus)
-- [AI araçları kullanımı](#ai-araçları-kullanımı)
-- [Değerlendirme başlıklarına göre nereye bakılır](#değerlendirme-başlıklarına-göre-nereye-bakılır)
-- [Bilinen sınırlar](#bilinen-sınırlar)
+- [AI tooling](#ai-tooling)
+- [Where to look per evaluation criterion](#where-to-look-per-evaluation-criterion)
+- [Known limits](#known-limits)
 
-## Kurulum
+## Setup
 
-Gereken yalnızca Docker (Compose v2.24 veya üstü; isteğe bağlı `.env` için) ve make.
+You only need Docker (Compose v2.24 or later, for the optional `.env`) and make.
 
 ```sh
-cp .env.example .env   # isteğe bağlı; dosya yoksa da çalışır
-docker compose up      # veritabanı, migration, seed, api, worker, mock provider, web arayüzü
-make test              # tüm testler (Go + Vitest) konteynerde, API key'siz
-make help              # diğer komutlar
+cp .env.example .env   # optional; everything works without the file
+docker compose up      # database, migrations, seed, api, worker, mock provider, web UI
+make test              # all tests (Go + Vitest) in containers, no API key
+make help              # other commands
 ```
 
-`docker compose up` bitince tarayıcıda <http://127.0.0.1:8081> adresini açın. Bu port başka bir programda doluysa `.env` dosyasına `WEB_PORT=8082` gibi boş bir port yazın; API için `API_PORT` aynı şekilde çalışır. Hangi portun açıldığını `docker compose ps` gösterir.
+When `docker compose up` has finished, open <http://127.0.0.1:8081> in a browser. If that port is taken by another program, put a free one in `.env`, for example `WEB_PORT=8082`; `API_PORT` works the same way for the API. `docker compose ps` shows which ports were bound.
 
-`.env` dosyasına `ANTHROPIC_API_KEY` yazarsanız sistem gerçek Claude'u kullanır (model `claude-sonnet-5-5`; hem kitle hem içerik üretimi bu modeli kullanır, D60); boş bırakırsanız sahte LLM çalışır. `LLM_PROVIDER=mock` anahtar olsa da sahte LLM'i seçer, `real` ise anahtar yoksa açılışta hata verir. Örnek: [`.env.example`](.env.example).
+If you put `ANTHROPIC_API_KEY` in `.env`, the system uses the real Claude (model `claude-sonnet-5-5`; both audience and content generation use this model, D60); if you leave it empty, the mock LLM runs. `LLM_PROVIDER=mock` selects the mock LLM even when a key is present, and `real` fails at startup when there is no key. Example: [`.env.example`](.env.example).
 
-Koda katkı verecekseniz klonladıktan sonra ilk iş `make hooks` (lefthook ve gitleaks gerekir; araç listesi [`CLAUDE.md`](CLAUDE.md) "Komutlar").
+If you will contribute code, the first thing to do after cloning is `make hooks` (requires lefthook and gitleaks; see the tool list in the "Komutlar" (commands) section of [`CLAUDE.md`](CLAUDE.md)).
 
-## İş bağlamı
+## Business context
 
-Bir kampanya hazırlamak için kitleyi tanımlamak, her kanal için metin yazmak ve karakter limitlerine uymak gerekir. Bu araçta pazarlamacı yalnızca ne istediğini yazar; kitleyi ve metinleri Claude önerir, her adımda son kararı insan verir.
+Preparing a campaign means defining the audience, writing copy for each channel, and staying within character limits. In this tool the marketer only writes what they want; Claude proposes the audience and the copy, and a human makes the final decision at every step.
 
-Bilerek yapılmayanlar: gerçek kimseye mesaj gitmez (alıcılar seed edilmiş sahte kullanıcılardır, gönderim kendi yazdığımız mock provider'adır) ve kimlik doğrulaması yoktur (yerel demo, yalnız `127.0.0.1`'e açılır).
+Deliberately not done: no real person is messaged (recipients are seeded fake users, and sending goes to a mock provider we wrote ourselves) and there is no authentication (a local demo, bound to `127.0.0.1` only).
 
-## Kullanıcı akışı
+## User flow
 
-Örnek brief:
+The example brief (the product UI is Turkish, so the brief stays in Turkish; it means "Send a 30% discount reminder to users in Istanbul who added items to their cart in the last 30 days but did not buy. Keep it friendly but short."):
 
 > "Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder. Samimi ama kısa olsun."
 
-1. **Kitle çıkarılır.** Claude brief'i bir segment kuralına çevirir (şehir, son 30 gün, sepet gibi alanlar). Arayüz kaç kişinin eşleştiğini, kaçına SMS ve email ile ulaşılabildiğini gösterir. İnsan kitleyi kontrol eder, gerekirse yeniden üretir.
-2. **Mesajlar üretilir.** Claude SMS ve email metnini yazar; metin ekrana akarak gelir. Claude düşünürken ekranda bekleme göstergesi görünür.
-3. **İnsan onaylar.** Pazarlamacı metni önizler, düzenler ve onaylar. Onaydan sonra metin değişirse onay düşer, yeniden onaylanır.
-4. **Gönderilir.** "Gönder" ile teslimatlar kuyruğa yazılır; worker bunları kanal başına hız sınırıyla mock provider'a gönderir.
-5. **Canlı izlenir.** Takip ekranı gönderilen, bekleyen ve başarısız sayılarını sayfa yenilenmeden gösterir. Kampanya tamamlanınca başarısız teslimat varsa "Başarısızları gör" listeyi açar.
+1. **The audience is derived.** Claude turns the brief into a segment rule (fields such as city, last 30 days, cart). The UI shows how many people match and how many of them can be reached by SMS and by email. The human checks the audience and regenerates it if needed.
+2. **Messages are generated.** Claude writes the SMS and email copy, and the text streams onto the screen. While Claude is thinking, the screen shows a waiting indicator.
+3. **A human approves.** The marketer previews, edits and approves the copy. If the copy changes after approval, the approval is dropped and it must be approved again.
+4. **It is sent.** "Gönder" ("Send") writes the deliveries to the queue; the worker sends them to the mock provider under a per-channel rate limit.
+5. **It is tracked live.** The tracking screen shows the sent, pending and failed counts without a page refresh. When the campaign completes and there are failed deliveries, "Başarısızları gör" ("show failed") opens the list.
 
-Ekranlar telefon (375 px), tablet (768 px) ve masaüstü (1280 px) genişliklerinde kullanılabilir. Sahte LLM brief'i okumaz: hangi brief yazılırsa yazılsın aynı örnek kuralı ve metni döndürür; gerçek davranış için API key gerekir.
+The screens work at phone (375 px), tablet (768 px) and desktop (1280 px) widths. The mock LLM does not read the brief: whatever brief is written, it returns the same example rule and copy; real behavior needs an API key.
 
 ```mermaid
 sequenceDiagram
-  actor M as Pazarlamacı
+  actor M as Marketer
   participant W as web (nginx)
   participant A as api
   participant L as LLMClient
@@ -73,38 +73,38 @@ sequenceDiagram
   participant K as worker
   participant P as mockprovider
 
-  M->>W: brief yazar
+  M->>W: writes brief
   W->>A: POST /api/campaigns
   W->>A: POST /api/campaigns/{id}/segment
-  A->>L: segment kuralı üret (tool use)
-  L-->>A: kural (JSON), api şemaya göre doğrular
-  opt geçersiz
-    A->>L: hata alanlarıyla tek onarım turu (en çok 2 deneme)
-    L-->>A: düzeltilmiş kural
+  A->>L: generate segment rule (tool use)
+  L-->>A: rule (JSON), api validates against schema
+  opt invalid
+    A->>L: single repair round with error fields (at most 2 attempts)
+    L-->>A: corrected rule
   end
-  A->>D: parametreli sayım sorgusu, kural kaydı (audience_ready)
-  A-->>W: 200 kural ve kitle sayıları
+  A->>D: parameterized count query, store rule (audience_ready)
+  A-->>W: 200 rule and audience counts
   W->>A: POST /api/campaigns/{id}/content
-  A->>L: SMS + email üret (akış)
-  A-->>W: SSE delta olayları, sonra validated
-  A->>D: içerik sürümü kaydı (content_ready)
-  M->>W: önizler, gerekirse düzenler (POST .../content-versions)
+  A->>L: generate SMS + email (stream)
+  A-->>W: SSE delta events, then validated
+  A->>D: store content version (content_ready)
+  M->>W: previews, edits if needed (POST .../content-versions)
   W->>A: POST /api/campaigns/{id}/approve (approved)
   W->>A: POST /api/campaigns/{id}/send
-  A->>D: tek işlemde deliveries satırları + sending
+  A->>D: deliveries rows + sending in one transaction
   A-->>W: 202 Accepted
-  K->>D: kanal advisory lock, FOR UPDATE SKIP LOCKED ile en çok 50 iş (kira 60 sn)
-  K->>P: POST /v1/{sms|email}/messages, Idempotency-Key, kanal başına ≤100/sn
-  P-->>K: 202, 429 + Retry-After veya 5xx
-  K->>D: sent, retry planı veya failed (son teslimatla completed)
+  K->>D: channel advisory lock, up to 50 jobs via FOR UPDATE SKIP LOCKED (60 s lease)
+  K->>P: POST /v1/{sms|email}/messages, Idempotency-Key, ≤100/s per channel
+  P-->>K: 202, 429 + Retry-After, or 5xx
+  K->>D: sent, retry schedule, or failed (completed with the last delivery)
   W->>A: GET /api/campaigns/{id}/events
-  loop her 1 sn
-    A->>D: durum sayaçlarını oku
+  loop every 1 s
+    A->>D: read status counters
     A-->>W: SSE snapshot, status, completed
   end
 ```
 
-Kampanya şu durumlardan geçer. Kampanya düzeyinde hata durumu yoktur; tek tek mesaj hataları sayılarda görünür (D4):
+A campaign moves through the following states. There is no campaign-level error state; individual message failures show up in the counts (D4):
 
 ```mermaid
 stateDiagram-v2
@@ -113,164 +113,164 @@ stateDiagram-v2
   audience_ready --> audience_ready: POST .../segment
   content_ready --> audience_ready: POST .../segment
   approved --> audience_ready: POST .../segment
-  audience_ready --> content_ready: POST .../content veya .../content-versions
-  content_ready --> content_ready: POST .../content veya .../content-versions
-  approved --> content_ready: POST .../content veya .../content-versions
+  audience_ready --> content_ready: POST .../content or .../content-versions
+  content_ready --> content_ready: POST .../content or .../content-versions
+  approved --> content_ready: POST .../content or .../content-versions
   content_ready --> approved: POST .../approve
   approved --> sending: POST .../send
-  sending --> completed: son teslimat sonuçlanınca
+  sending --> completed: when the last delivery reaches a final state
   completed --> [*]
 ```
 
-## Fonksiyonel gereksinimler
+## Functional requirements
 
-### Kitle
+### Audience
 
-- **LLM çıktısı asla SQL olmaz (D8).** Segment kuralı kapalı bir dildir: izinli alanlar, operatörler ve değer tipleri. Backend kuralı şemaya göre doğrular ve kendi koduyla parametreli sorguya çevirir; model ne yazarsa yazsın veritabanına yetkisiz sorgu gitmez.
-- **İzni sistem uygular, model değil (D9).** SMS ve email izinleri ayrıdır. İzni olmayan kişi o kanalın kitlesinden sorguda elenir; bunu modelin akıl yürütmesine bırakmak güvence vermez.
-- "Alışveriş yapmayan" son 30 günde satın alma yok demektir (D20).
+- **LLM output is never SQL (D8).** The segment rule is a closed language: allowed fields, operators and value types. The backend validates the rule against the schema and translates it into a parameterized query with its own code; whatever the model writes, no unauthorized query reaches the database.
+- **Consent is enforced by the system, not the model (D9).** SMS and email consent are separate. A person without consent for a channel is filtered out of that channel's audience in the query; leaving this to the model's reasoning would give no guarantee.
+- "Did not buy" ("alışveriş yapmayan") means no purchase in the last 30 days (D20).
 
-### İçerik
+### Content
 
-- **Kanal limitleri:** SMS en çok 160, email konusu en çok 80 karakter; ayrıca email gövdesi en çok 5000, brief en çok 2000 karakter. Limitler, değişkenler kitledeki en uzun değerle doldurulmuş hâline göre denetlenir (D10, D37).
-- **Kişiselleştirme:** `{{first_name}}`, `{{last_name}}` ve `{{city}}` desteklenir; bilinmeyen değişken reddedilir. Boş ad yerine "Değerli müşterimiz" yazılır.
-- Her düzenleme yeni bir sürümdür; eşzamanlı düzenlemeler `X-Expected-Version` ile çakışma olarak yakalanır (D38, D40).
+- **Channel limits:** SMS at most 160 characters, email subject at most 80; in addition the email body is at most 5000 and the brief at most 2000 characters. Limits are checked against the text with variables filled in using the longest value in the audience (D10, D37).
+- **Personalization:** `{{first_name}}`, `{{last_name}}` and `{{city}}` are supported; an unknown variable is rejected. When the first name is empty, "Değerli müşterimiz" ("Dear customer") is used instead.
+- Every edit is a new version; concurrent edits are caught as a conflict through `X-Expected-Version` (D38, D40).
 
-### Gönderim
+### Delivery
 
-- **Asenkron kuyruk PostgreSQL'dedir (D1, D2).** Gönderilecek her mesaj `deliveries` tablosunda bir satırdır; worker işleri `FOR UPDATE SKIP LOCKED` ile alır. Bu ölçekte ayrı bir kuyruk servisi gereksiz karmaşıklık olurdu.
-- **Kanal başına saniyede en çok 100 mesaj (D5).** Her kanalın tek göndericisi vardır (PostgreSQL advisory lock); hız token bucket ile sınırlanır.
-- **Aynı kişiye aynı mesaj iki kez gitmez (D3).** Veritabanında `UNIQUE(campaign_id, channel, customer_id)`, sağlayıcıya her denemede aynı `Idempotency-Key`.
-- **Retry stratejisi (D6):** en çok 5 deneme (ilk dahil); 5xx, 408 ve zaman aşımında jitter'lı üstel bekleme (1 sn'den 60 sn'ye); diğer 4xx tekrar denenmez. 429 `Retry-After`'e uyar ve ayrı bir bütçeden sayılır (en çok 20 kez veya 10 dk). Denemesi biten teslimat `failed` olur ve takip ekranında görünür.
+- **The async queue lives in PostgreSQL (D1, D2).** Every message to be sent is a row in the `deliveries` table; the worker claims jobs with `FOR UPDATE SKIP LOCKED`. At this scale a separate queue service would be unnecessary complexity.
+- **At most 100 messages per second per channel (D5).** Each channel has a single dispatcher (PostgreSQL advisory lock); the rate is limited with a token bucket.
+- **The same message never goes to the same person twice (D3).** `UNIQUE(campaign_id, channel, customer_id)` in the database, and the same `Idempotency-Key` on every attempt to the provider.
+- **Retry strategy (D6):** at most 5 attempts (including the first); on 5xx, 408 and timeouts, exponential backoff with jitter (from 1 s up to 60 s); other 4xx are not retried. 429 honors `Retry-After` and is counted against a separate budget (at most 20 times or 10 minutes). A delivery that runs out of attempts becomes `failed` and appears on the tracking screen.
 
-### Takip
+### Tracking
 
-- **Canlı gönderim durumu:** `/api/campaigns/{id}/events` SSE akışı; ekran sayaçları sayfa yenilenmeden günceller (D54).
-- **Health ve metrics:** API portunda (varsayılan <http://127.0.0.1:8080>), web portunda değil: `/healthz` (süreç ayakta), `/readyz` (veritabanı erişilebilir), `/metrics` (Prometheus; teslimat sayaçları veritabanından, D22). Worker aynı üçünü iç ağda sunar, host'a açılmaz; mock provider yalnız `/healthz` sunar ([`docs/contracts/metrics.md`](docs/contracts/metrics.md)).
-- API başvurusu: [`docs/contracts/openapi.yaml`](docs/contracts/openapi.yaml). CI, API'nin bu sözleşmeden sapmasını engeller: E2E testlerinin her isteği ve cevabı ona göre doğrulanır, router rotaları spec yollarıyla birebir eşleşir (D30).
+- **Live delivery status:** the `/api/campaigns/{id}/events` SSE stream; the screen updates its counters without a page refresh (D54).
+- **Health and metrics:** on the API port (default <http://127.0.0.1:8080>), not the web port: `/healthz` (process is up), `/readyz` (database is reachable), `/metrics` (Prometheus; delivery counters come from the database, D22). The worker serves the same three on the internal network, not exposed to the host; the mock provider serves only `/healthz` ([`docs/contracts/metrics.md`](docs/contracts/metrics.md)).
+- API reference: [`docs/contracts/openapi.yaml`](docs/contracts/openapi.yaml). CI prevents the API from drifting from this contract: every request and response in the E2E tests is validated against it, and the router routes match the spec paths one to one (D30).
 
-## AI gereksinimleri
+## AI requirements
 
-- **Doğrulama (D7, D23).** Claude serbest metin değil, araç kullanımıyla (tool use, `strict: true`) yapılandırılmış JSON döndürür. Çıktı her zaman backend'de tam şemaya göre yeniden doğrulanır. Geçersizse hatalar modele geri verilip bir kez daha üretilir; yine geçersizse kullanıcıya anlaşılır bir hata gösterilir ve kampanya durumu değişmez. Onarım turu gerçek API ile doğrulandı (D32).
-- **Test edilebilirlik (D11).** LLM erişimi `LLMClient` arayüzünün arkasındadır. Anahtar yoksa sahte LLM devreye girer; `make test` ve `docker compose up` key'siz çalışır. Sahte LLM'in senaryoları geçersiz çıktı ve onarım turunu da sınar.
-- Modele giden şema ile backend'in doğruladığı şema ayrı dosyalardır; strict modun desteklemediği uzunluk ve adet kuralları yalnız backend'dedir ([`docs/contracts/`](docs/contracts/README.md)).
+- **Validation (D7, D23).** Claude returns structured JSON through tool use (`strict: true`), not free text. The output is always re-validated against the full schema in the backend. If it is invalid, the errors are fed back to the model and it generates once more; if it is still invalid, the user sees a clear error and the campaign state does not change. The repair round was verified against the real API (D32).
+- **Testability (D11).** LLM access sits behind the `LLMClient` interface. Without a key the mock LLM is used; `make test` and `docker compose up` run without a key. The mock LLM's scenarios also exercise invalid output and the repair round.
+- The schema sent to the model and the schema the backend validates are separate files; length and count rules that strict mode does not support live only in the backend ([`docs/contracts/`](docs/contracts/README.md)).
 
-## Kaynaklar
+## Resources
 
-- **Claude API key:** yalnızca yerel `.env` dosyasındaki `ANTHROPIC_API_KEY`'den okunur; repoda [`.env.example`](.env.example) vardır. `.env` git'e girmez; hook'lar ve CI sızıntıyı tarar.
-- **Sahte kullanıcı verisi (D21, D24):** 5000 deterministik müşteri. Alanlar: ad, soyad, email (`example.com`/`example.test`), kurgusal telefon, şehir (%30 İstanbul), dil (`tr`/`en`), sadakat seviyesi, SMS ve email izinleri (ayrı) ve `cart_add`/`page_view`/`purchase` olayları. Ayrıntı: [`docs/contracts/seed.md`](docs/contracts/seed.md). Seed ilk açılışta "bugüne" göre üretilir ve sonraki açılışlarda dokunulmaz (`--if-empty`); günler geçtikçe "son 30 gün" sayıları azalır. Bugüne göre yeniden üretmek kampanya ve teslimatları siler: `docker compose run --rm seed seed --ref-time=now --reset --manifest=/tmp/manifest.json`.
-- **Mock SMS/email provider (D25):** ayrı bir servis. Kanal başına hız sınırı uygular, tohumlu rastgele hata (varsayılan %5), 429 (%2) ve 20–200 ms gecikme üretir; oranlar `MOCK_PROVIDER_*` ortam değişkenleriyle değişir. Testler için ayrı, yalıtılmış bir örneği vardır (`mockprovider-solo`, D55).
+- **Claude API key:** read only from `ANTHROPIC_API_KEY` in the local `.env` file; the repo contains [`.env.example`](.env.example). `.env` never enters git; hooks and CI scan for leaks.
+- **Fake user data (D21, D24):** 5000 deterministic customers. Fields: first name, last name, email (`example.com`/`example.test`), fictional phone number, city (30% Istanbul), language (`tr`/`en`), loyalty tier, SMS and email consent (separate), and `cart_add`/`page_view`/`purchase` events. Details: [`docs/contracts/seed.md`](docs/contracts/seed.md). The seed is generated relative to "today" on first start and left untouched on later starts (`--if-empty`); as days pass, the "last 30 days" counts shrink. Regenerating relative to today deletes campaigns and deliveries: `docker compose run --rm seed seed --ref-time=now --reset --manifest=/tmp/manifest.json`.
+- **Mock SMS/email provider (D25, D61):** a separate service. It applies a per-channel rate limit and produces seeded random errors, 429 responses and 20-200 ms latency; the rates are set through `MOCK_PROVIDER_*` environment variables. The code defaults are 5% errors and 2% 429, but for the demo `compose.yml` sets `MOCK_PROVIDER_ERROR_RATE` to 0.4 and `MOCK_PROVIDER_RATE_LIMIT_RATE` to 0.1, so retries and 429 handling are visible in every campaign and about 1% of deliveries exhaust their 5 attempts and end `failed` (the failed list appears). `compose.test.yml` is unchanged, so tests are not affected. Tests use a separate, isolated instance (`mockprovider-solo`, D55).
 
-## Teknoloji ve mimari
+## Technology and architecture
 
 ```mermaid
 flowchart LR
-  browser["tarayıcı"]
+  browser["browser"]
   web["web (Vue + nginx)<br/>127.0.0.1:8081"]
   api["api<br/>127.0.0.1:8080"]
-  llm["LLMClient<br/>Claude API veya sahte LLM"]
-  db[("PostgreSQL 16<br/>kuyruk dahil")]
+  llm["LLMClient<br/>Claude API or mock LLM"]
+  db[("PostgreSQL 16<br/>including the queue")]
   migrate["migrate"]
-  seed["seed<br/>5000 sahte müşteri"]
-  worker["worker<br/>kanal başına tek dispatcher"]
+  seed["seed<br/>5000 fake customers"]
+  worker["worker<br/>one dispatcher per channel"]
   mock["mockprovider<br/>:8090"]
 
   browser -- "http" --> web
   web -- "/api/ proxy_pass" --> api
-  api -- "içerik akışı ve canlı durum (SSE)" --> web
+  api -- "content stream and live status (SSE)" --> web
   api --> llm
   api --> db
   migrate --> db
   seed --> db
-  worker -- "SKIP LOCKED ile iş al, sonucu yaz" --> db
-  worker -- "≤100/sn, retry" --> mock
-  migrate -.->|"önce"| seed
-  seed -.->|"önce"| api
-  seed -.->|"önce"| worker
+  worker -- "claim jobs with SKIP LOCKED, write results" --> db
+  worker -- "≤100/s, retry" --> mock
+  migrate -.->|"first"| seed
+  seed -.->|"first"| api
+  seed -.->|"first"| worker
 ```
 
-- **api:** kampanya, kitle, içerik, onay ve gönderim uçları; içerik ve canlı durum için SSE (D12).
-- **worker:** kuyruğu işler; her kanal için tek dispatcher, hız sınırı ve retry.
-- **web:** Vue arayüzü; nginx `/api` isteklerini api'ye aktarır. Görsel sistem: [`DESIGN.md`](DESIGN.md).
-- **Üretim kilidi (D41, D52):** aynı kampanyada iki üretim veya üretim sürerken gönderim olmaz; kilit kampanya satırında süreli bir kiradır.
+- **api:** endpoints for campaign, audience, content, approval and send; SSE for content and live status (D12).
+- **worker:** processes the queue; one dispatcher per channel, rate limiting and retry.
+- **web:** the Vue UI; nginx forwards `/api` requests to the api. Visual system: [`DESIGN.md`](DESIGN.md).
+- **Generation lock (D41, D52):** two generations cannot run on the same campaign, and sending is blocked while a generation is running; the lock is a time-limited lease on the campaign row.
 
-## Teslim edilecekler
+## Deliverables
 
-| İstenen | Durum |
+| Requested | Status |
 |---|---|
-| GitHub repository | ✅ `gulcint/smart-campaign-composer` (public; GitLab hesap doğrulaması yapılamadı, D14) |
-| `docker compose up` ile tek komutla kurulum (seed ve mock provider dahil) | ✅ |
-| `make test` ile çalışan testler | ✅ Go (unit, entegrasyon, API düzeyinde E2E) ve Vitest, konteynerde, key'siz |
-| `README.md`: kurulum ve kısa mimari özeti | ✅ bu dosya |
-| `DECISIONS.md`: önemli kararlar ve nedenleri | ✅ [`DECISIONS.md`](DECISIONS.md) |
-| `ai-sessions/`: Claude session export'ları | ✅ P0–P4, temizlenmiş; P5 ve P6 eklenecek ([`ai-sessions/INDEX.md`](ai-sessions/INDEX.md)) |
+| GitHub repository | ✅ `gulcint/smart-campaign-composer` (public; GitLab account verification could not be completed, D14) |
+| One-command setup with `docker compose up` (seed and mock provider included) | ✅ |
+| Tests that run with `make test` | ✅ Go (unit, integration, API-level E2E) and Vitest, in containers, no key |
+| `README.md`: setup and a short architecture summary | ✅ this file |
+| `DECISIONS.md`: important decisions and their reasons | ✅ [`DECISIONS.md`](DECISIONS.md) |
+| `ai-sessions/`: Claude session exports | ✅ P0-P4, sanitized; P5 and P6 to be added ([`ai-sessions/INDEX.md`](ai-sessions/INDEX.md)) |
 
-Fazlar ve kapsamları ([`docs/PLAN.md`](docs/PLAN.md)):
+Phases and their scope ([`docs/PLAN.md`](docs/PLAN.md)):
 
-| Faz | Durum | Kapsam |
+| Phase | Status | Scope |
 |---|---|---|
-| P0 Setup | ✅ bitti | Repo, hook'lar, CI, plan |
-| P1 Contracts | ✅ bitti | Gereksinimler, OpenAPI, şemalar, arayüz ve Go sözleşmeleri |
-| P2 Seed + Infrastructure | ✅ bitti | Seed, migration'lar, compose, LLM fabrikası ve sahte LLM, mock provider, `make test` |
-| P3 Audience | ✅ bitti | Segment kuralı, kişi sayıları, brief ve kitle ekranları, API sapma koruması |
-| P4 Content + Approval | ✅ bitti | SMS/email üretimi (SSE), karakter limitleri, kişiselleştirme, sürümlü düzenleme, onay, önizleme |
-| P5 Send + Tracking | ✅ bitti | Gönderim API'si, kuyruk ve worker, canlı durum akışı ve takip ekranı, veritabanında üretim kirası, responsive düzen |
-| P6 Hardening + Delivery | ⬜ başlamadı | Tarayıcıdan uçtan uca test, güvenlik taraması, kişisel bilgi temizliği, son README ve DECISIONS |
+| P0 Setup | ✅ done | Repo, hooks, CI, plan |
+| P1 Contracts | ✅ done | Requirements, OpenAPI, schemas, UI and Go contracts |
+| P2 Seed + Infrastructure | ✅ done | Seed, migrations, compose, LLM factory and mock LLM, mock provider, `make test` |
+| P3 Audience | ✅ done | Segment rule, audience counts, brief and audience screens, API drift guard |
+| P4 Content + Approval | ✅ done | SMS/email generation (SSE), character limits, personalization, versioned editing, approval, preview |
+| P5 Send + Tracking | ✅ done | Send API, queue and worker, live status stream and tracking screen, generation lease in the database, responsive layout |
+| P6 Hardening + Delivery | ⬜ not started | Browser end-to-end tests, security scan, personal-data cleanup, final README and DECISIONS |
 
 ## Bonus
 
-| Bonus | Durum |
+| Bonus | Status |
 |---|---|
-| CI pipeline | 🟢 tamamlandı: GitHub Actions; `main` için zorunlu `ci-ok`: lint, `make test`, gitleaks, govulncheck, OpenAPI sapma kontrolü (yalnız doküman değişen PR'da build/test atlanır, D51) |
-| Zamanlanmış gönderim | ⬜ yapılmadı |
-| A/B varyantları | ⬜ yapılmadı |
-| Kullanıcının diline göre içerik | ⬜ yapılmadı (seed'de `language` alanı var) |
+| CI pipeline | 🟢 done: GitHub Actions; required `ci-ok` for `main`: lint, `make test`, gitleaks, govulncheck, OpenAPI drift check (build/test is skipped on docs-only PRs, D51) |
+| Scheduled send | ⬜ not done |
+| A/B variants | ⬜ not done |
+| Content in the user's language | ⬜ not done (the seed has a `language` field) |
 
-Öncelik, case'in istediği gibi çekirdek akışın sağlam olmasıydı.
+As the case asks, the priority was a solid core flow.
 
-## AI araçları kullanımı
+## AI tooling
 
-Proje baştan sona Claude Code ile, rolleri ayrılmış ajanlarla yapıldı ([`docs/PLAN.md`](docs/PLAN.md) §3, D13):
+The project was built end to end with Claude Code, using agents with separated roles ([`docs/PLAN.md`](docs/PLAN.md) §3, D13):
 
-- **Orkestratör** işi faz ve dilimlere böler, sonuçları birleştirir.
-- **Test yazarı** testleri yalnızca [`docs/requirements.md`](docs/requirements.md)'den yazar, implementasyonu göremez (ayrı worktree ve hook ile zorlanır, D50).
-- **Kodu yazan**, **reviewer** ve **doğrulayıcı** ayrı ajanlardır; kimse kendi işini onaylamaz.
-- AI çıktısı hook'lar (commit biçimi, sır taraması, rol yolları) ve CI ile denetlenir; `main`'e yalnız `ci-ok` yeşil PR girer (D15, D33).
+- The **orchestrator** splits the work into phases and slices and merges the results.
+- The **test writer** writes tests only from [`docs/requirements.md`](docs/requirements.md) and cannot see the implementation (enforced with a separate worktree and a hook, D50).
+- The **implementer**, **reviewer** and **verifier** are separate agents; nobody approves their own work.
+- AI output is checked by hooks (commit format, secret scanning, role paths) and CI; only PRs with a green `ci-ok` enter `main` (D15, D33).
 
-Session export'ları API key ve kişisel bilgilerden temizlenerek [`ai-sessions/`](ai-sessions/INDEX.md)'e eklenir (`make sanitize-sessions`, `make check-sessions`).
+Session exports are added to [`ai-sessions/`](ai-sessions/INDEX.md) after being sanitized of API keys and personal data (`make sanitize-sessions`, `make check-sessions`).
 
-## Değerlendirme başlıklarına göre nereye bakılır
+## Where to look per evaluation criterion
 
-| Başlık | Nereye bakılır |
+| Criterion | Where to look |
 |---|---|
-| LLM entegrasyonu | `internal/llm/`, [`docs/contracts/schemas/llm/`](docs/contracts/schemas/llm/), DECISIONS D7–D12, D23, D32 |
-| Mimari ve kararlar | [`DECISIONS.md`](DECISIONS.md), [`docs/contracts/`](docs/contracts/README.md) |
-| Backend güvenilirliği | `internal/delivery/`, `internal/postgres/`, `cmd/worker/`; DECISIONS D1–D6, D52–D54 |
+| LLM integration | `internal/llm/`, [`docs/contracts/schemas/llm/`](docs/contracts/schemas/llm/), DECISIONS D7-D12, D23, D32 |
+| Architecture and decisions | [`DECISIONS.md`](DECISIONS.md), [`docs/contracts/`](docs/contracts/README.md) |
+| Backend reliability | `internal/delivery/`, `internal/postgres/`, `cmd/worker/`; DECISIONS D1-D6, D52-D54 |
 | Frontend | `web/src/`, [`DESIGN.md`](DESIGN.md), [`docs/contracts/ui.md`](docs/contracts/ui.md) |
-| Test ve kod kalitesi | `test/`, `internal/**/*_test.go`, `web/tests/`, `.github/workflows/`, [`docs/requirements.md`](docs/requirements.md) |
+| Tests and code quality | `test/`, `internal/**/*_test.go`, `web/tests/`, `.github/workflows/`, [`docs/requirements.md`](docs/requirements.md) |
 
-## Bilinen sınırlar
+## Known limits
 
-- Üretim kilidi kampanya satırında en çok 120 sn'lik bir kiradır; bitişi API süreçlerinin saatine dayanır, süreçler arası saat kayması bitişi o kadar kaydırır (D52).
-- Kanal kilidi her partinin başında denetlenir; kilit kaybolursa eski gönderici en çok bir partiyi (varsayılan 50 istek) bitirir, o kısa sürede kanalda bir partilik fazla gönderim başlangıcı olabilir. Aynı mesaj yine iki kez gitmez (D53).
-- Canlı durum akışı art arda 5 başarısız okumada (≈5 sn) kapanır; ekran `stale` olur ve yeniden bağlanır. Daha kısa kesintilerde sayaçlar birkaç saniye eski kalabilir (D54).
-- Elle yapılan denemede gözlenen gönderim hızı kanal başına yaklaşık 50/sn'dir, 100 sınırının altında; otomatik bir hız ölçümü yoktur.
-- Gönderim anı uzunluk denetimi (`CheckRendered`) bir alıcı için iki kanalın metnini birlikte denetler: SMS metni kişiselleştirmeyle 160'ı aşarsa o kişinin email teslimatı da `content_too_long` ile başarısız olur (veya tersi). Kanal bazlı denetim sözleşme değişikliği gerektirir.
-- SMS uzunluğu karakter (Unicode rune) olarak sayılır; gerçek SMS segmenti GSM-7/UCS-2'ye göre değişir, Türkçe karakterli mesajda 70'e düşer (D10).
-- Email gövdesinin 5000 sınırı onay anında yeniden denetlenmez, yalnız doğrulamada denetlenir (D46).
-- Brief kampanya oluşturulduktan sonra değiştirilemez; "Brief'i düzenle" yeni kampanya başlatır.
-- Tekilleştirme müşteri bazındadır: aynı telefonu veya e-postayı paylaşan iki müşteri kaydı iki teslimat alır (D3).
-- Kitle sorgusu eşleşen satırları Go'ya çeker; seed ölçeğinde (5000) yeterli, milyonlarca kayıtta değil. Kuyruk da bu ölçek için seçildi; yol `Queue` arayüzü (D1).
-- Otomatik testler yalnızca `docs/requirements.md`'den türetilir (D50); yalnız sözleşmede yazan birçok davranış testsizdir. Gerçek Claude istemcisinin otomatik testi yoktur; şehir yazımı ve SMS uzunluğu gibi davranışlar elle doğrulanmalıdır.
-- Dokunmatik boyutlar (44 px) ekran genişliğine göre (<1024 px) uygulanır, `pointer: coarse`'a göre değil; dar pencereli masaüstü de büyük hedef görür.
-- İçerik ekranının eylem şeridi mobilde yapışkan değildir (sayfanın sonunda kalır); Onay ekranının karar paneli yalnız özet kartın içinde yapışkandır.
+- The generation lock is a lease of at most 120 s on the campaign row; its expiry depends on the clocks of the API processes, so clock skew between processes shifts the expiry by that amount (D52).
+- The channel lock is checked at the start of every batch; if the lock is lost, the old sender finishes at most one batch (50 requests by default), so in that short window a channel may start one batch of extra sending. The same message still never goes out twice (D53).
+- The live status stream closes after 5 consecutive failed reads (about 5 s); the screen goes `stale` and reconnects. For shorter outages the counters may be a few seconds out of date (D54).
+- The send rate observed in a manual trial is about 50/s per channel, below the limit of 100; there is no automated rate measurement.
+- The send-time length check (`CheckRendered`) checks the text of both channels together for one recipient: if the SMS text exceeds 160 with personalization, that person's email delivery also fails with `content_too_long` (or the reverse). A per-channel check requires a contract change.
+- SMS length is counted in characters (Unicode runes); a real SMS segment varies with GSM-7/UCS-2 and drops to 70 for a message with Turkish characters (D10).
+- The email body limit of 5000 is not re-checked at approval time, only at validation (D46).
+- The brief cannot be changed after the campaign is created; "Brief'i düzenle" ("Edit brief") starts a new campaign.
+- De-duplication is per customer: two customer records that share the same phone number or email address each receive a delivery (D3).
+- The audience query pulls the matching rows into Go; this is sufficient at seed scale (5000), not at millions of records. The queue was also chosen for this scale; the path forward is the `Queue` interface (D1).
+- Automated tests are derived only from `docs/requirements.md` (D50); many behaviors that are written only in the contracts are untested. There is no automated test of the real Claude client; behaviors such as city spelling and SMS length must be verified by hand.
+- Touch target sizes (44 px) are applied by screen width (<1024 px), not by `pointer: coarse`; a desktop with a narrow window also gets large targets.
+- The action bar of the content screen is not sticky on mobile (it stays at the end of the page); the decision panel of the approval screen is sticky only inside the summary card.
 
-## Nereden okunur
+## Where to read
 
-- [`DECISIONS.md`](DECISIONS.md): önemli kararlar, gerekçeleri, bilinen sınırlar
-- [`docs/PLAN.md`](docs/PLAN.md): fazlar, git akışı, roller
-- [`docs/requirements.md`](docs/requirements.md): gereksinim kataloğu
-- [`docs/contracts/`](docs/contracts/README.md): API, veri ve LLM araç sözleşmeleri
-- [`DESIGN.md`](DESIGN.md): görsel sistem ve ekranlar
-- [`ai-sessions/INDEX.md`](ai-sessions/INDEX.md): temizlenmiş Claude session kayıtları
-- [`CLAUDE.md`](CLAUDE.md): proje kuralları ve ajan talimatları
+- [`DECISIONS.md`](DECISIONS.md): important decisions, their rationale, known limits
+- [`docs/PLAN.md`](docs/PLAN.md): phases, git flow, roles
+- [`docs/requirements.md`](docs/requirements.md): requirements catalog
+- [`docs/contracts/`](docs/contracts/README.md): API, data and LLM tool contracts
+- [`DESIGN.md`](DESIGN.md): visual system and screens
+- [`ai-sessions/INDEX.md`](ai-sessions/INDEX.md): sanitized Claude session records
+- [`CLAUDE.md`](CLAUDE.md): project rules and agent instructions
