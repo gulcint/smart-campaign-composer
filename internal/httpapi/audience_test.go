@@ -435,6 +435,7 @@ func draftCampaignJSON() map[string]any {
 		"segment":                nil,
 		"latest_content_version": nil,
 		"approval":               nil,
+		"scheduled_at":           nil, // REQ-SCH-01: always present, null in draft
 		"sending_started_at":     nil,
 		"completed_at":           nil,
 		"created_at":             refTimeText,
