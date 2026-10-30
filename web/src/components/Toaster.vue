@@ -17,15 +17,22 @@ const TONE: Record<ToastVariant, string> = {
   warning: 'text-warning',
   error: 'text-error',
 }
+// A tinted card per variant, so a confirmation reads at a glance and not as a grey note.
+const CARD: Record<ToastVariant, string> = {
+  success: 'border-success/40 bg-success-bg',
+  info: 'border-info/40 bg-info-bg',
+  warning: 'border-warning/40 bg-warning-bg',
+  error: 'border-error/40 bg-error-bg',
+}
 </script>
 
 <template>
   <section
     :aria-label="t('toast.region')"
-    class="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-center gap-2 p-4 sm:items-end"
+    class="pointer-events-none fixed inset-x-0 top-20 z-50 flex flex-col items-center gap-2 px-4 sm:items-end sm:px-6"
   >
     <TransitionGroup
-      enter-from-class="translate-y-2 opacity-0"
+      enter-from-class="-translate-y-2 opacity-0"
       leave-to-class="opacity-0"
       enter-active-class="transition duration-[var(--dur-base)] ease-standard"
       leave-active-class="transition duration-[var(--dur-fast)]"
@@ -37,14 +44,21 @@ const TONE: Record<ToastVariant, string> = {
         :data-variant="toast.variant"
         :data-message-id="toast.messageId"
         :role="toast.variant === 'error' ? 'alert' : 'status'"
-        class="pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-card border border-border-default bg-surface-raised p-4 shadow-raised"
+        :class="
+          cn(
+            'pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-card border p-4 shadow-raised',
+            CARD[toast.variant],
+          )
+        "
       >
         <component
           :is="ICON[toast.variant]"
-          :class="cn('mt-0.5 size-5 shrink-0', TONE[toast.variant])"
+          :class="cn('size-6 shrink-0', TONE[toast.variant])"
           aria-hidden="true"
         />
-        <p class="flex-1 text-body-sm text-ink-700">{{ t(toast.messageId, toast.params) }}</p>
+        <p class="flex-1 text-body font-semibold text-ink-900">
+          {{ t(toast.messageId, toast.params) }}
+        </p>
         <button
           v-if="toast.variant === 'error'"
           type="button"
