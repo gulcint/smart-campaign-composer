@@ -254,7 +254,7 @@ grep -E "ci-ok|fail"" completed (exit code 0)
   zaten temizdi. P5 export'u #117'den önce, #115 ile geldi.
 
   main'deki durum:
-  - /Users/<gerçek ad> yolu, gerçek ad-soyad (<user>, Gülçin Er/Taş),
+  - /Users/<gerçek ad> yolu, gerçek ad-soyad (<user>, <name>),
     <user> ve gerçek e-posta adresi hiçbirinde kalmadı. check-ai-sessions.sh 
     --all ve make secrets temiz.
   - Önceki sorgumda P0, P1, P2, P3 ve P5 dosyalarında "1–5 eşleşme" çıkmıştı.
@@ -331,16 +331,16 @@ grep -E "ci-ok|fail"" completed (exit code 0)
 ⏺ Denedim, 6 session dosyasının hepsinde sonuç temiz.
 
   - Kontrol betiği (check-ai-sessions.sh --all): tam ad-soyad (<user>,
-    <user>, Gülçin Er ve ASCII/karma yazımları) ve <user> hesap adı için
+    <user>, <name> ve ASCII/karma yazımları) ve <user> hesap adı için
     hiçbir eşleşme bulmadı.
   - Sanitizer'ı 6 dosyanın hepsinde çalıştırdım. git status boş kaldı. Yani
     hiçbir dosyada değişiklik yapacak bir şey bulmadı.
   - Ham grep (büyük/küçük harf duyarsız, Türkçe karakter ve boşluk varyantlı)
-    ad-soyad, <user> ve ce.gulcin… için sıfır sonuç verdi.
+    ad-soyad, <user> ve <personal-email-prefix> için sıfır sonuç verdi.
 
   Bu P5 dahil main'deki bütün export'ları kapsıyor. Bir şeyin kaçıp kaçmadığını
   görmek için sanitizer'ın yakalayamayacağı varyantlar da olabilir, örneğin
-  sadece ilk ad ("Gülçin") tek başına geçiyorsa. İstersen onu da ayrıca ararım.
+  sadece ilk ad ("<name>") tek başına geçiyorsa. İstersen onu da ayrıca ararım.
 
 ✻ Brewed for 13s · done Çarşamba 21:40
 
@@ -888,7 +888,7 @@ _p6_orchestrator_hardening.md
 
   Ran 2 shell commands (ctrl+o to expand)
 
-⏺ Kalan tek eşleşme, adresin yarım öneki (ce.gulcin…). Tam e-posta değil ama onu
+⏺ Kalan tek eşleşme, adresin yarım öneki (<personal-email-prefix>). Tam e-posta değil ama onu
   da maskeliyorum.
 
   Created PR #121, ran 1 shell command (ctrl+o to expand)
@@ -905,7 +905,7 @@ _p6_orchestrator_hardening.md
 
   Export'ta yaptıklarım:
   - Sanitizer'ı ad-soyad ifadeleriyle çalıştırdım. 14 eşleşme maskelendi.
-  - Kalan tek eşleşme, adresin yarım öneki olan ce.gulcin… yazımıydı. Onu da
+  - Kalan tek eşleşme, adresin yarım öneki olan <personal-email-prefix> yazımıydı. Onu da
     [REDACTED_EMAIL] yaptım.
   - check-sessions, ad-soyad kontrolü ve make secrets temiz. API key ya da .env
     içeriği export'ta yok.
@@ -1123,9 +1123,8 @@ _p6_orchestrator_hardening.md
      Anthropic Go SDK). Ajan bunu anahtar kelime eşleşmesiyle çıkardı, kesin
      liste değil. PLAN §8 "tüm VARSAYIM'lar" dediği için bunu ben blokaj
      sayardım, kısa girdilerle kapatılabilir (D62 ve sonrası).
-  5. Commit geçmişi: 70 commit'in 52'sinde kişisel gmail adresi, adlar "Gülçin
-     Er/Taş". Bu D58 ile bilerek yeniden yazılmıyor. Son 12 commit hep noreply.
-  6. P6 export'unda çıplak ilk ad (…p6_orchestrator_hardening.md:343: "Gülçin").
+  5. Commit geçmişi: 70 commit'in 52'sinde kişisel gmail adresi, adlar "<name>". Bu D58 ile bilerek yeniden yazılmıyor. Son 12 commit hep noreply.
+  6. P6 export'unda çıplak ilk ad (…p6_orchestrator_hardening.md:343: "<name>").
      Düşük risk. İstersen maskelerim.
   7. "Temiz klondan kurulum" kutusu kanıtsız: ajan docker compose up ve make 
      test'i çalıştırmadı, yalnızca dosyaları okudu. CI'daki make-test bunun
