@@ -134,6 +134,12 @@ func (fakeService) Approve(context.Context, string, string) (campaign.Campaign, 
 func (fakeService) Send(context.Context, string, string) (campaign.SendResult, error) {
 	return campaign.SendResult{}, errNotUsed
 }
+func (fakeService) Schedule(context.Context, string, string, time.Time) (campaign.SendResult, error) {
+	return campaign.SendResult{}, errNotUsed
+}
+func (fakeService) CancelSchedule(context.Context, string) (campaign.CancelScheduleResult, error) {
+	return campaign.CancelScheduleResult{}, errNotUsed
+}
 func (fakeService) Status(context.Context, string) (campaign.CampaignStatus, error) {
 	return campaign.CampaignStatus{}, errNotUsed
 }
