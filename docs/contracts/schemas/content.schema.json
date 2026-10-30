@@ -2,15 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/gulcint/smart-campaign-composer/docs/contracts/schemas/content.schema.json",
   "title": "CampaignContent",
-  "description": "Input of the emit_campaign_content tool AND request body of POST /api/campaigns/{campaign_id}/content-versions (human edit). Both go through the same backend validator (content.Validate). Length limits (sms.body <= 160, email.subject <= 80, email.body <= 5000 Unicode code points of the template text) and template-variable rules are NOT expressed as maxLength/pattern here on purpose: the backend reports them with specific field error codes (sms_too_long, subject_too_long, email_body_too_long, unknown_variable, malformed_variable). `minLength: 1` documents that empty is invalid, but content.Parse checks structure and types only: an empty or whitespace-only value is reported by content.Validate as field code `required` (never schema_violation), a missing key or unknown key as schema_violation. See llm-tools.md and go-interfaces.md#content.",
+  "description": "Input of the emit_campaign_content tool AND request body of POST /api/campaigns/{campaign_id}/content-versions (human edit). Both go through the same backend validator (content.Validate). Length limits (sms.body <= 160, email.subject <= 80, email.body <= 5000 Unicode code points of the template text) and template-variable rules are NOT expressed as maxLength/pattern here on purpose: the backend reports them with specific field error codes (sms_too_long, subject_too_long, email_body_too_long, unknown_variable, malformed_variable). `minLength: 1` documents that empty is invalid, but content.Parse checks structure and types only: an empty or whitespace-only value is reported by content.Validate as field code `required` (never schema_violation), a missing key or unknown key as schema_violation. See llm-tools.md and go-interfaces.md#content. P8 (D63): the optional `en` block is the English version for English-speaking customers; sms/email stay the Turkish main copy. When `en` is present it must be complete (sms.body, email.subject, email.body) and every unknown or missing key inside it is a schema_violation at its path (en, en.sms, en.email.subject, en.html). The same limits and variable rules apply to every language version; field paths are prefixed with `en.` (en.sms.body, en.email.subject, en.email.body).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["sms", "email"],
+  "required": [
+    "sms",
+    "email"
+  ],
   "properties": {
     "sms": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["body"],
+      "required": [
+        "body"
+      ],
       "properties": {
         "body": {
           "type": "string",
@@ -22,7 +27,10 @@
     "email": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["subject", "body"],
+      "required": [
+        "subject",
+        "body"
+      ],
       "properties": {
         "subject": {
           "type": "string",
@@ -33,6 +41,51 @@
           "type": "string",
           "minLength": 1,
           "description": "Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters."
+        }
+      }
+    },
+    "en": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sms",
+        "email"
+      ],
+      "description": "English version (optional). Same structure and limits as the Turkish main copy.",
+      "properties": {
+        "sms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "body"
+          ],
+          "properties": {
+            "body": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}."
+            }
+          }
+        },
+        "email": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "body"
+          ],
+          "properties": {
+            "subject": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Plain-text email subject template. At most 80 Unicode characters after personalization."
+            },
+            "body": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters."
+            }
+          }
         }
       }
     }
