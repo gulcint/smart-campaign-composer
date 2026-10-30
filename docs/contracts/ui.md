@@ -376,7 +376,7 @@ P7a metin önerileri (Türkçe; `web/src/i18n/tr.ts`'e arayüz dilimi yazar, bu 
 | `approval.scheduledNote` | Planlandı: {time}. Değiştirmek için planı iptal et. |
 | `approval.toTracking` | Takibe git |
 | `toast.scheduled` | Gönderim {time} için planlandı. |
-| `toast.scheduleCanceled` | Plan iptal edildi; kampanya yeniden onaylı. |
+| `toast.scheduleCanceled` | Plan iptal edildi; kampanya onaylı durumda. |
 | `field_error.schedule_too_soon` | Gönderim zamanı çok yakın ya da geçmişte. |
 | `field_error.schedule_too_far` | Gönderim zamanı en fazla 30 gün sonrası olabilir. |
 
