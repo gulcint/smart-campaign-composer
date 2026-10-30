@@ -6,7 +6,7 @@
 // Plan mode (§3.18, REQ-SCH-04): for kind="send" with `allowSchedule` the dialog offers "now"
 // or "later"; "later" takes a TSİ wall-clock time, checked against the API's own window
 // (the API stays the authority, this only saves a round trip) and emitted as `schedule(utc)`.
-import { CalendarClock, Send } from '@lucide/vue'
+import { CalendarClock, CircleAlert, Send } from '@lucide/vue'
 import {
   AlertDialogContent,
   AlertDialogDescription,
@@ -207,14 +207,16 @@ function cancel() {
           {{ t(`confirm.sendMode.${m}`) }}
         </RadioGroupItem>
       </RadioGroupRoot>
-      <div v-if="later" class="flex flex-col gap-2">
+      <div v-if="later" class="flex flex-col gap-1.5">
         <div class="flex flex-wrap items-baseline justify-between gap-2">
-          <label :for="fieldId" class="text-body-sm font-medium text-ink-900">
+          <label :for="fieldId" class="text-h4 text-accent-heading">
             {{ t('confirm.scheduledAt.label') }}
           </label>
-          <span data-testid="confirm-dialog-tz" class="font-mono text-caption text-ink-600">{{
-            t('schedule.tz')
-          }}</span>
+          <span
+            data-testid="confirm-dialog-tz"
+            class="rounded-sm bg-surface-sunken px-2 py-0.5 font-mono text-caption text-ink-600"
+            >{{ t('schedule.tz') }}</span
+          >
         </div>
         <input
           :id="fieldId"
@@ -231,7 +233,7 @@ function cancel() {
           "
           :class="
             cn(
-              'block h-11 w-full rounded-input border bg-surface-card px-4 text-body text-ink-900 outline-none',
+              'datetime-field block h-11 w-full rounded-input border bg-surface-card px-4 text-body text-ink-900 outline-none',
               'focus-visible:border-primary focus-visible:shadow-focus',
               scheduleErrorCode ? 'border-[1.5px] border-error' : 'border-border-default',
             )
@@ -247,9 +249,10 @@ function cancel() {
           data-testid="confirm-dialog-schedule-error"
           :data-code="scheduleErrorCode"
           role="alert"
-          class="text-body-sm text-error"
+          class="flex items-start gap-1.5 text-body-sm text-error"
         >
-          {{ t(`field_error.${scheduleErrorCode}`) }}
+          <CircleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <span>{{ t(`field_error.${scheduleErrorCode}`) }}</span>
         </p>
         <p
           :id="noteId"
