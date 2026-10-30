@@ -437,6 +437,7 @@ func draftCampaignJSON() map[string]any {
 		"approval":               nil,
 		"sending_started_at":     nil,
 		"completed_at":           nil,
+		"scheduled_at":           nil, // REQ-SCH-01 C4: always present, null for draft
 		"created_at":             refTimeText,
 		"updated_at":             refTimeText,
 	}
