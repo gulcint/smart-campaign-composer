@@ -16,13 +16,13 @@ const props = defineProps<{
   /** Summary phase of each language (invalid if any of its fields is invalid). */
   phases: Record<Language, ContentPhase>
   errors: Record<Language, boolean>
-  /** Id prefix shared with the page's tabpanel (`<idBase>-panel`, labelled by `<idBase>-tab-<l>`). */
-  idBase: string
+  /** Id prefix shared with the page's tabpanel, if it has one (`<idBase>-panel`, labelled by `<idBase>-tab-<l>`). */
+  idBase?: string
 }>()
 const emit = defineEmits<{ 'update:modelValue': [language: Language] }>()
 
 const LANGUAGES: readonly Language[] = ['tr', 'en']
-const tabId = (l: Language) => `${props.idBase}-tab-${l}`
+const tabId = (l: Language) => (props.idBase ? `${props.idBase}-tab-${l}` : undefined)
 const tabEls = ref<Partial<Record<Language, HTMLElement>>>({})
 
 function select(l: Language, focus = false) {
@@ -58,7 +58,7 @@ function onKeydown(e: KeyboardEvent, from: Language) {
       :ref="(el) => (tabEls[l] = (el as HTMLElement | null) ?? undefined)"
       type="button"
       role="tab"
-      :aria-controls="`${idBase}-panel`"
+      :aria-controls="idBase ? `${idBase}-panel` : undefined"
       :data-testid="`language-tab-${l}`"
       :data-status="phases[l]"
       :data-has-error="errors[l] ? 'true' : 'false'"
