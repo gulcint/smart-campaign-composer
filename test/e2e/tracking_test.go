@@ -621,8 +621,9 @@ func TestE2E_TrackingUnknownCampaignIs404(t *testing.T) {
 	}
 }
 
-// trkStatusKeys is the key set of CampaignStatus named in REQ-TRK-01.
-var trkStatusKeys = []string{"by_channel", "campaign_id", "completed_at", "counts", "sending_started_at", "state", "updated_at"}
+// trkStatusKeys is the key set of CampaignStatus named in REQ-TRK-01, plus scheduled_at, which the
+// status body always carries (REQ-SCH-01 C4).
+var trkStatusKeys = []string{"by_channel", "campaign_id", "completed_at", "counts", "scheduled_at", "sending_started_at", "state", "updated_at"}
 
 // REQ-TRK-01
 // GET status of a campaign without deliveries (draft, audience_ready, approved): 200 CampaignStatus
@@ -655,6 +656,10 @@ func TestE2E_StatusBeforeSend(t *testing.T) {
 			}
 			if st.State != tc.state || !trkAllZero(st) || st.SendingStartedAt != nil || st.CompletedAt != nil {
 				t.Fatalf("GET status = %s, want state %s, every counter 0, null times", body, tc.state)
+			}
+			// REQ-SCH-01 C4: draft…approved carry scheduled_at = null.
+			if raw["scheduled_at"] != nil {
+				t.Fatalf("GET status scheduled_at = %v, want null for %s", raw["scheduled_at"], tc.state)
 			}
 		})
 	}

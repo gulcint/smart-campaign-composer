@@ -478,7 +478,8 @@ func sortedKeys(m map[string]any) []string {
 	return out
 }
 
-var campaignKeys = []string{"approval", "brief", "completed_at", "created_at", "id", "latest_content_version", "segment", "sending_started_at", "state", "updated_at"}
+// campaignKeys: the Campaign document; scheduled_at is always present (REQ-SCH-01 C4).
+var campaignKeys = []string{"approval", "brief", "completed_at", "created_at", "id", "latest_content_version", "scheduled_at", "segment", "sending_started_at", "state", "updated_at"}
 
 // assertDraft checks a Campaign in state draft with no segment, content or approval.
 func assertDraft(t *testing.T, c map[string]any, id, brief string) {
@@ -489,7 +490,7 @@ func assertDraft(t *testing.T, c map[string]any, id, brief string) {
 	if c["id"] != id || c["brief"] != brief || c["state"] != "draft" {
 		t.Fatalf("campaign id/brief/state = %v/%q/%v, want %s/%q/draft", c["id"], c["brief"], c["state"], id, brief)
 	}
-	for _, k := range []string{"segment", "latest_content_version", "approval", "sending_started_at", "completed_at"} {
+	for _, k := range []string{"segment", "latest_content_version", "approval", "sending_started_at", "completed_at", "scheduled_at"} {
 		if c[k] != nil {
 			t.Fatalf("draft campaign %s = %v, want null", k, c[k])
 		}

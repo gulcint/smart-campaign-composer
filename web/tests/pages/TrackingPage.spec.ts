@@ -1,11 +1,17 @@
 // REQ-TRK-01 (UI): TrackingPage live counters, connection state and stream client (docs/requirements.md
 // REQ-TRK-01: mount surface `@/pages/TrackingPage.vue`, route `tracking`, `EventSourceFactoryKey` and
 // `ApiClientKey` injection, reconnect rules, `completed` closing the stream, 404 without a stream).
+//
+// REQ-SCH-04 C7, C8, C9 (UI): the waiting plan (schedule-panel, countdown), cancel and "send now"
+// from the tracking page, and the started-from-plan note.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import TrackingPage from '@/pages/TrackingPage.vue'
+import type { Campaign } from '@/api/types'
+import { t } from '@/i18n/index'
+import { formatCountdown, formatTsi } from '@/lib/schedule'
 import { mountPage } from '../helpers/pages'
-import { CAMPAIGN_ID, apiError, campaign, fakeApi, sel, version } from '../helpers/p4'
+import { CAMPAIGN_ID, T0, V1, V3, apiError, campaign, fakeApi, sel, version } from '../helpers/p4'
 import {
   CHANNELS,
   KEYS,
@@ -351,5 +357,268 @@ describe('TrackingPage stream lifecycle (REQ-TRK-01)', () => {
     wrapper = undefined
     await vi.advanceTimersByTimeAsync(60_000)
     expect(es.created).toHaveLength(1)
+  })
+})
+
+// ---- REQ-SCH-04 C7, C8, C9: a planned send on the tracking page ----
+
+// Now = 2026-01-15T12:00:00Z, fixed (Date faked) before mounting; the plan is 90 s ahead.
+const NOW = '2026-01-15T12:00:00Z'
+const AT_90S = '2026-01-15T12:01:30Z'
+const ZERO = [0, 0, 0, 0] as [number, number, number, number]
+
+function plannedCampaign(state: string, at: string | null): Campaign {
+  return campaign(state, version(V1, 1), {
+    approval: { id: V3, content_version_id: V1, approved_at: T0 },
+    scheduled_at: at,
+    sending_started_at: state === 'sending' || state === 'completed' ? (at ?? T0) : null,
+  } as Partial<Campaign>)
+}
+
+function planStatus(state: string, at: string | null, sms = ZERO, email = ZERO) {
+  return status(CAMPAIGN_ID, state, sms, email, {
+    scheduled_at: at,
+    sending_started_at: state === 'scheduled' || state === 'approved' ? null : (at ?? T0),
+  })
+}
+
+interface PlanSetup {
+  camp: { value: Campaign }
+  cancel?: () => unknown
+  send?: () => unknown
+}
+
+async function mountPlanned(s: PlanSetup) {
+  const es = fakeEventSourceFactory()
+  const a = fakeApi({
+    [`GET ${C}`]: () => s.camp.value,
+    [`GET ${C}/deliveries`]: () => deliveriesPage(),
+    [`DELETE ${C}/schedule`]: () =>
+      s.cancel ? s.cancel() : { campaign_id: CAMPAIGN_ID, state: 'approved', scheduled_at: null },
+    [`POST ${C}/send`]: () =>
+      s.send
+        ? s.send()
+        : {
+            campaign_id: CAMPAIGN_ID,
+            state: 'sending',
+            content_version_id: V1,
+            scheduled_at: null,
+            deliveries: { total: 718, sms: 350, email: 368 },
+          },
+  })
+  const r = await mountPage(TrackingPage, 'tracking', {
+    api: a.client,
+    eventSource: es.factory,
+    withToaster: true,
+  })
+  wrapper = r.wrapper
+  return { es, a, router: r.router }
+}
+
+function toastWith(messageId: string): HTMLElement | undefined {
+  return [...document.querySelectorAll(sel('toast'))].find(
+    (e) => e.getAttribute('data-message-id') === messageId,
+  ) as HTMLElement | undefined
+}
+
+const panelState = () => q('schedule-panel')?.getAttribute('data-state')
+const countdown = () => q('schedule-countdown')
+
+describe('TrackingPage waiting plan (REQ-SCH-04 C7)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+    })
+    vi.setSystemTime(new Date(NOW))
+  })
+
+  it('a scheduled campaign shows schedule-panel instead of the counters, and keeps the stream open', async () => {
+    const { es } = await mountPlanned({ camp: { value: plannedCampaign('scheduled', AT_90S) } })
+    es.last().simulateOpen()
+    es.last().simulateEvent('snapshot', planStatus('scheduled', AT_90S))
+    await flushPromises()
+
+    expect(panelState()).toBe('waiting')
+    expect(countersState()).toBe('scheduled')
+    expect(
+      q('delivery-counters')?.querySelectorAll('[data-testid^="delivery-count-"]'),
+    ).toHaveLength(0)
+    expect(q('activity-feed')).toBeNull()
+    expect(q('schedule-time')?.getAttribute('data-value')).toBe(AT_90S)
+    expect(q('schedule-time')?.textContent?.trim()).toBe(formatTsi(AT_90S))
+    expect(countdown()?.getAttribute('data-value')).toBe('90')
+    expect(countdown()?.textContent?.trim()).toBe(
+      t('schedule.countdown', { hms: formatCountdown(90).hms }),
+    )
+    expect(es.created).toHaveLength(1)
+    expect(es.last().closeCalls).toBe(0)
+  })
+
+  it('the countdown updates every 1000 ms and reaches starting at zero', async () => {
+    const { es } = await mountPlanned({ camp: { value: plannedCampaign('scheduled', AT_90S) } })
+    es.last().simulateOpen()
+    es.last().simulateEvent('snapshot', planStatus('scheduled', AT_90S))
+    await flushPromises()
+    expect(countdown()?.getAttribute('data-value')).toBe('90')
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(countdown()?.getAttribute('data-value')).toBe('89')
+    expect(countdown()?.textContent?.trim()).toBe(
+      t('schedule.countdown', { hms: formatCountdown(89).hms }),
+    )
+
+    await vi.advanceTimersByTimeAsync(89_000)
+    expect(countdown()?.getAttribute('data-value')).toBe('0')
+    expect(countdown()?.textContent?.trim()).toBe(t('schedule.starting'))
+    expect(panelState()).toBe('starting')
+  })
+
+  it('a plan a day or more ahead shows the countdown with days', async () => {
+    const at = '2026-01-17T13:01:01Z' // 2 d 01:01:01 ahead
+    const { es } = await mountPlanned({ camp: { value: plannedCampaign('scheduled', at) } })
+    es.last().simulateOpen()
+    es.last().simulateEvent('snapshot', planStatus('scheduled', at))
+    await flushPromises()
+    const remaining = 2 * 86400 + 3661
+    expect(countdown()?.getAttribute('data-value')).toBe(String(remaining))
+    const { days, hms } = formatCountdown(remaining)
+    expect(countdown()?.textContent?.trim()).toBe(t('schedule.countdownDays', { d: days, hms }))
+  })
+
+  it('a status event with state sending removes the panel and the counters go live', async () => {
+    const { es } = await mountPlanned({ camp: { value: plannedCampaign('scheduled', AT_90S) } })
+    es.last().simulateOpen()
+    es.last().simulateEvent('snapshot', planStatus('scheduled', AT_90S))
+    await flushPromises()
+    es.last().simulateEvent(
+      'status',
+      planStatus('sending', AT_90S, [340, 10, 0, 0], [360, 8, 0, 0]),
+    )
+    await flushPromises()
+    expect(q('schedule-panel')).toBeNull()
+    expect(countersState()).toBe('live')
+    expect(q('activity-feed')).toBeNull()
+  })
+
+  it('a stream event with state approved (plan canceled elsewhere) goes to the approval route', async () => {
+    const setup: PlanSetup = { camp: { value: plannedCampaign('scheduled', AT_90S) } }
+    const { es, router } = await mountPlanned(setup)
+    es.last().simulateOpen()
+    es.last().simulateEvent('snapshot', planStatus('scheduled', AT_90S))
+    await flushPromises()
+    setup.camp.value = plannedCampaign('approved', null)
+    es.last().simulateEvent('status', planStatus('approved', null))
+    await flushPromises()
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('approval'))
+  })
+})
+
+describe('TrackingPage plan actions (REQ-SCH-04 C8)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+    })
+    vi.setSystemTime(new Date(NOW))
+  })
+
+  async function waiting(setup: PlanSetup) {
+    const m = await mountPlanned(setup)
+    m.es.last().simulateOpen()
+    m.es.last().simulateEvent('snapshot', planStatus('scheduled', AT_90S))
+    await flushPromises()
+    expect(panelState()).toBe('waiting')
+    return m
+  }
+
+  it('schedule-cancel 200: DELETE, toast.scheduleCanceled, then the approval route', async () => {
+    const setup: PlanSetup = { camp: { value: plannedCampaign('scheduled', AT_90S) } }
+    setup.cancel = () => {
+      setup.camp.value = plannedCampaign('approved', null)
+      return { campaign_id: CAMPAIGN_ID, state: 'approved', scheduled_at: null }
+    }
+    const { a, router } = await waiting(setup)
+    q('schedule-cancel')?.click()
+    await flushPromises()
+    expect(a.count('DELETE', `${C}/schedule`)).toBe(1)
+    await vi.waitFor(() => expect(toastWith('toast.scheduleCanceled')).toBeDefined())
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('approval'))
+  })
+
+  it('schedule-cancel 409 invalid_state: error toast first, then a reload; a started send stays on tracking with counters', async () => {
+    const setup: PlanSetup = { camp: { value: plannedCampaign('scheduled', AT_90S) } }
+    setup.cancel = () => {
+      // The worker started the plan just before the cancel arrived.
+      setup.camp.value = plannedCampaign('sending', AT_90S)
+      throw apiError(409, 'invalid_state')
+    }
+    const { a, router } = await waiting(setup)
+    const gets = a.count('GET', C)
+    q('schedule-cancel')?.click()
+    await flushPromises()
+    expect(a.count('DELETE', `${C}/schedule`)).toBe(1)
+    await vi.waitFor(() => expect(toastWith('error.invalid_state')).toBeDefined())
+    await vi.waitFor(() => expect(a.count('GET', C)).toBeGreaterThan(gets))
+    // The reload comes after the refused DELETE.
+    const order = a.calls.map((c) => `${c.method} ${c.path}`)
+    expect(order.lastIndexOf(`GET ${C}`)).toBeGreaterThan(order.indexOf(`DELETE ${C}/schedule`))
+    await vi.waitFor(() => expect(q('schedule-panel')).toBeNull())
+    expect(router.currentRoute.value.name).toBe('tracking')
+    expect(countersState()).not.toBe('scheduled')
+  })
+
+  it('schedule-send-now opens the send dialog in now mode without plan elements and POSTs only content_version_id', async () => {
+    const { a, router } = await waiting({ camp: { value: plannedCampaign('scheduled', AT_90S) } })
+    q('schedule-send-now')?.click()
+    await flushPromises()
+    await vi.waitFor(() => expect(q('confirm-dialog')?.getAttribute('data-kind')).toBe('send'))
+    expect(q('confirm-dialog')?.getAttribute('data-mode')).toBe('now')
+    for (const id of [
+      'confirm-dialog-send-now',
+      'confirm-dialog-send-later',
+      'confirm-dialog-scheduled-at',
+    ]) {
+      expect(q(id), id).toBeNull()
+    }
+    q('confirm-dialog-confirm')?.click()
+    await flushPromises()
+    expect(a.count('POST', `${C}/send`)).toBe(1)
+    expect(a.last('POST', `${C}/send`)?.opts?.body).toEqual({ content_version_id: V1 })
+    expect(router.currentRoute.value.name).toBe('tracking')
+    await vi.waitFor(() => expect(q('schedule-panel')).toBeNull())
+  })
+})
+
+describe('TrackingPage started-from-plan note (REQ-SCH-04 C9)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+    })
+    vi.setSystemTime(new Date('2026-01-15T12:05:00Z'))
+  })
+
+  it.each([
+    {
+      name: 'sending from a plan shows it',
+      state: 'sending',
+      at: '2026-01-15T12:01:30Z' as string | null,
+    },
+    {
+      name: 'completed from a plan shows it',
+      state: 'completed',
+      at: '2026-01-15T12:01:30Z' as string | null,
+    },
+    { name: 'an instant send has none', state: 'sending', at: null as string | null },
+  ])('$name', async ({ state, at }) => {
+    const { es } = await mountPlanned({ camp: { value: plannedCampaign(state, at) } })
+    es.last().simulateOpen()
+    es.last().simulateEvent('snapshot', planStatus(state, at, [0, 0, 350, 0], [0, 0, 368, 0]))
+    await flushPromises()
+    const note = q('schedule-started-note')
+    if (at === null) {
+      expect(note).toBeNull()
+      return
+    }
+    expect(note?.getAttribute('data-value')).toBe(at)
+    expect(note?.textContent?.trim()).toBe(t('schedule.startedNote', { time: formatTsi(at) }))
   })
 })
