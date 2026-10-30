@@ -299,6 +299,19 @@ PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
 - **Alternatifler:** Ayrı `PUT/DELETE …/schedule` uçları (planlı ve anlık gönderimin anlamı net kalırdı, ama sahip tek ucu seçti); düzenlemenin planı sessizce düşürmesi (planlı sanılan kampanyanın hiç gitmemesi riski); gecikme üst sınırı (zamana bağlı bir mesajı geç göndermeyi önler, ama yeni durum ve işaretleme ekler).
 - **Bedel:** `POST /send` iki anlam taşır (anlık ve planlı) ve planlı yanıtta teslimat sayıları 0 döner. Çok geç gönderilen bir plan zamana bağlı bir mesajı yanlış zamanda gönderebilir (kabul edildi, README "Known limits"te belirtilecek).
 
+### D63 — Dile göre içerik (P8): tek sürüm, isteğe bağlı İngilizce blok, yalnız kitlede İngilizce varsa üret (sahip kararı, 2026-10-30)
+- **Bağlam:** Case bonus olarak yalnız "Kullanıcının diline göre içerik" der; hangi diller, yedek davranış, üretim maliyeti ve onay modeli konusunda yönlendirme yoktur. `customers.language` (`tr` %90, `en` %10) ve segment DSL'deki `language` alanı P2–P3'ten beri hazırdı.
+- **Karar:**
+  1. **Dil kümesi** yalnız `tr` ve `en` (seed ve DB kısıtıyla aynı). Türkçe `sms`/`email` blokları ana metin olarak aynen kalır; İngilizce sürüm isteğe bağlı `en` bloğudur (`content.schema.json` yalnız ekleme; mevcut fixture ve testler değişmez).
+  2. **Tek içerik sürümü iki dili birlikte taşır.** Onay, sürüm numarası, üretim kilidi, düzeltme turu (≤ 2 deneme) ve optimistik eşzamanlılık bugünkü haliyle çalışır; dil başına ayrı sürüm veya onay yoktur. Her dil sürümü aynı doğrulayıcıdan ve aynı 160/80/5000 sınırlarından geçer (yollar `en.` önekli).
+  3. **İngilizce yalnız kitlede İngilizce alıcı varsa üretilir** (`audience.languages.sms.en + email.en > 0`); yoksa model yalnız Türkçe üretir. Strict araç şemasında isteğe bağlı alan olmadığı için iki şema vardır (`content.tool.json`, `content-en.tool.json`); seçimi `llm.ContentRequest.IncludeEnglish` yapar.
+  4. **Gönderimde alıcının dili** (`customers.language`, claim anında okunur) metni seçer; sürümde `en` yoksa İngilizce alıcı Türkçe ana metni alır (gönderim reddedilmez). Yedek ad dile göredir (`Dear customer`). E-posta HTML'i `lang` özniteliğini dile göre yazar; Türkçe çıktı baytı baytına aynıdır.
+  5. **Ölçüm dilden bağımsız tek `longest_*` kümesiyle yapılır** (kitle = kuralla eşleşen herkes); yeni migration yalnız saklama içindir (`0009_content_en`: `content_versions.en_*`, `worst_case_en_*`, `campaigns.audience_languages`). Teslimat satırına dil kolonu eklenmez (PII ilkesi).
+  6. **Sahte LLM'e yeni senaryo adı eklenmez** (kapalı liste 14): `IncludeEnglish` iken `CNT_OK` yerine `CNT_OK_EN` döner; İngilizce sürüme özgü hatalar test içi sahte `llm.Client` ile üretilir.
+- **Neden:** Tek sürüm, onay ve sürümleme modelini korur ve değişikliği ekleme olarak tutar. Koşullu üretim, Türkçe-yalnız kitlede ek token ve bekleme maliyetini sıfırlar. Tek `longest_*` kümesi migration ve tutarsızlık riskini önler.
+- **Alternatifler:** Dil başına ayrı sürüm/onay (modeli ikiye böler, hangisi onaylı karışır); ayrı çeviri çağrısı (iki ardışık çağrı, ikinci çağrının ilkine bağımlılığı); her zaman iki dil üretmek (kullanılmayan metin için ~2× token).
+- **Bedel:** Kitlede İngilizce varken çıktı ve akış süresi ~2× olur (`LLM_MAX_TOKENS` sınırı yaklaşabilir; `truncated_output` yolu var). Tek strict şema yerine iki şema bakımı gerekir. Çeviri kalitesini sistem ölçemez; insan onayı ve sekmede görünür metin tek güvencedir. Tek `longest_*` İngilizce metinde gereksiz muhafazakâr olabilir. Planlı gönderimde dil gönderim anında okunur (D62 ile aynı ilke).
+
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |

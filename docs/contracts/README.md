@@ -262,6 +262,10 @@ Test türleri ve konumları `.claude/skills/writing-tests/SKILL.md` §4'tedir. G
 | REQ-SCH-02 | go-interfaces `campaign.NewScheduler`, `SchedulerConfig`, `SchedulerDeps`, `Scheduler.RunOnce`/`Run`, `startSendingLocked` notu, log kayıtları; db-schema §3.9 başlatma satırı, `campaigns_scheduled_due_idx`; `config.SchedulerInterval` |
 | REQ-SCH-03 | openapi `cancelSchedule` (`CancelScheduleResult`, `CancelScheduleConflict`), `sendCampaign` (yeniden planlama, "şimdi gönder"), `generateSegment`/`generateContent`/`editContent`/`approveContent` (`scheduled` → 409); go-interfaces `Service.CancelSchedule`, `Transition`; db-schema §3.4 tetikleyici (`scheduled → content_ready` 23514), §3.4.1 |
 | REQ-SCH-04 | **ui.md §3.18** (`ConfirmDialog` plan kipi), **§3.25** (`SchedulePanel`), **§3.26** (`@/lib/schedule.ts`), §3.17 `scheduled`, §3.20 `data-state="scheduled"`, §3.24, §1 tablo, §4 i18n |
+| REQ-LNG-01 | schemas/content.schema.json (`en`), go-interfaces `content.Content.EN`/`English`/`WorstCase.EN`/`Validate`/`MeasureWorstCase`/`CheckWorstCase`/`FirstNameFallbackEN`, openapi `Content`/`ContentDraft`/`WorstCase`/`editContent`, db-schema §3.5 `en_*` + `0009_content_en` |
+| REQ-LNG-02 | go-interfaces `segment.Audience.Languages`/`WantsEnglish`, `llm.ContentRequest.IncludeEnglish`, `llm.ContentToolSchema`, `ContentChunk.Path`; schemas/llm/content-en.tool.json; llm-tools §1.3, §3.3 `CNT_OK_EN`, §3.4, §3.5; sse-events §1.1 `language`; openapi `Audience.languages`, `ContentDeltaEvent.language`; db-schema §3.4 `audience_languages` |
+| REQ-LNG-03 | go-interfaces `content.Recipient.Language`, `RenderContent` (`Rendered.Language`/`Fallback`), `RenderEmailHTMLLang`, `delivery.Job.Recipient`, `PreviewQuery.Language`, `Preview.Language`/`Fallback`; openapi `previewContent` (`language` sorgusu, `Preview.language`/`fallback`) |
+| REQ-LNG-04 | **ui.md §3.7** (`audience-languages`), **§3.14** (`language`), **§3.15** (`preview-language`), **§3.23** (dil sekmeleri), **§3.27** `LanguageTabs`, §5.2 (`enFields`, `hasEnglish`), §6; DESIGN.md `LanguageTabs` |
 
 ## 9. Kararlar (sahip / lider, P1 incelemesi)
 

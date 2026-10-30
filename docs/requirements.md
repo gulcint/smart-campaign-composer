@@ -28,7 +28,8 @@ Test yazarının ve mimarın tek gereksinim kaynağı. **Test vakaları ve testt
 | Email gövdesi sınırı | 5000 karakter (Unicode rune), şablon doldurulduktan sonra; yalnız doğrulama anında denetlenir, onay anında yeniden denetlenmez | VARSAYIM (dokümanda yok) |
 | Hız sınırı | 100 mesaj/saniye, **kanal başına**, sistem genelinde, retry'lar dahil; her yarı-açık 1 sn'lik pencerede ≤ 100 (istek başlangıçları arasında en az 10 ms) | [DOK]; "sistem geneli, retry dahil" [DOK çıkarımı]; pencere tanımı VARSAYIM |
 | İzinli şablon değişkenleri | `first_name`, `last_name`, `city` | VARSAYIM |
-| `first_name` boşsa yedek metin | `Değerli müşterimiz` | VARSAYIM |
+| `first_name` boşsa yedek metin | `Değerli müşterimiz` (Türkçe); İngilizce metinde `Dear customer` (13 karakter, P8) | VARSAYIM |
+| Desteklenen içerik dilleri | `tr` (ana metin) ve `en` (isteğe bağlı İngilizce sürüm); `customers.language` kümesiyle aynı (P8) | VARSAYIM (D63) |
 | Brief azami uzunluğu | 2000 karakter | VARSAYIM |
 | İstek gövdesi azami boyutu | 64 KiB | VARSAYIM |
 | LLM düzeltme denemesi | 1 (hatalı çıktı için hata geri bildirimiyle yeniden üret) | VARSAYIM |
@@ -536,9 +537,50 @@ Ortak: yanıtlarda zamanlar RFC 3339 UTC, `Z` sonekli. "Şimdi" API sürecinde v
 - Plandan başlamış kampanyada (`state` `sending`/`completed` ve `scheduled_at` dolu) `schedule-started-note` görünür (`data-value` = `scheduled_at`, metin `t('schedule.startedNote', { time: formatTsi(scheduled_at) })`); `scheduled_at` `null` ise yoktur.
 - `messages` şu id'leri boş olmayan metinle içerir: `status.campaign.scheduled`; `confirm.schedule.{title,body,confirm,audienceNote}`; `confirm.sendMode.{label,now,later}`; `confirm.scheduledAt.{label,hint}`; `schedule.{tz,title,timeLabel,countdown,countdownDays,starting,cancel,sendNow,startedNote}`; `approval.scheduledNote`, `approval.toTracking`; `toast.scheduled`, `toast.scheduleCanceled`; `field_error.schedule_too_soon`, `field_error.schedule_too_far`.
 
+## Dile göre içerik (LNG)
+
+> Bonus (isteğe bağlı): "Kullanıcının diline göre içerik". Case başka ayrıntı vermez; aşağıdakilerin hepsi VARSAYIM'dır (D63).
+
+Ortak: içerik dilleri `tr` ve `en`'dir (`customers.language` kümesi). `sms`/`email` blokları Türkçe **ana metin**dir ve aynen kalır; İngilizce sürüm isteğe bağlı `en` bloğudur. `en` yoksa içerik bugünkü gibi geçerlidir. Her dil sürümüne SMS ≤ 160, konu ≤ 80, gövde ≤ 5000, aynı izinli değişkenler ve aynı en kötü durum ölçümü (REQ-CNT-05) uygulanır.
+
+### REQ-LNG-01 — İçerik iki dil sürümü taşır ve her biri doğrulanır · Faz P8 · [DOK] bonus + VARSAYIM tasarım
+- Biçim (`content.schema.json`, yalnız ekleme): `{"sms":{"body"},"email":{"subject","body"},"en":{"sms":{"body"},"email":{"subject","body"}}}`; `en` isteğe bağlıdır. `en` var ama eksik/fazla anahtar veya yanlış tip (`en: null`, `en: {}`, `en.sms` eksik, `en` içinde `html`) → `schema_violation`, yol o anahtarın yolu (`en`, `en.sms`, `en.email.subject`, `en.html`). `content.Parse` yapıyı, `content.Validate` değerleri denetler (REQ-CNT-01'deki ayrım).
+- Alan yolları: `en.sms.body`, `en.email.subject`, `en.email.body`. Kodlar mevcutlarla aynı: boş/yalnız boşluk → `required`; `sms_too_long` (161 karakterlik İngilizce SMS), `subject_too_long` (81), `email_body_too_long` (5001), `unknown_variable`, `malformed_variable`. Aynı alanda en çok bir hata ve öncelik sırası REQ-CNT-01'deki gibidir; hata sırası: `sms.body`, `email.subject`, `email.body`, `en.sms.body`, `en.email.subject`, `en.email.body`.
+- Ölçü en kötü durumdur (REQ-CNT-05): her dil sürümü kampanyanın segmentindeki aynı `longest_values` ile doldurulur (dilden bağımsız tek küme; `first_name` en uzunu yedek metin dahil). `Validate`'in `Actual` değeri doldurulmuş uzunluktur.
+- `ContentVersion.worst_case` Türkçe için bugünkü `{sms_runes, subject_runes}` alanlarını aynen taşır; `en` varsa ek olarak `worst_case.en = {sms_runes, subject_runes}`, yoksa `en` anahtarı yoktur. Şablon söz dizimi geçersizse `worst_case` bugünkü gibi `null`'dır.
+- İnsan düzenlemesi (`POST …/content-versions`) `en`'i aynı doğrulayıcıdan geçirir. Gövdede `en` yoksa yeni sürümde İngilizce sürüm yoktur (önceki sürümün `en`'i korunmaz); gövde her zaman bütün içeriktir.
+- Onay anı yeniden denetimi (REQ-CNT-05) `en` sürümünü de kapsar: `sms_too_long_worst_case` / `subject_too_long_worst_case`, yollar `en.sms.body` / `en.email.subject`, `limit` 160 / 80. Onay sürümü bütün olarak onaylar; dil bazlı kısmi onay yoktur. `en`'i değişen düzenleme onayı bugünkü gibi düşürür (`content_changed`).
+- Yedek ad: `first_name` boşsa Türkçe metinde `Değerli müşterimiz`, İngilizce metinde `Dear customer`.
+- Go yüzeyi: `content.Content.EN *content.English` (`json:"en,omitempty"`; `content.English{SMS content.SMS, Email content.Email}`), `content.LangTR = "tr"`, `content.LangEN = "en"`, `content.FirstNameFallbackEN = "Dear customer"`; `content.WorstCase.EN *content.WorstCaseLang` (`WorstCaseLang{SMSRunes, SubjectRunes int}`); `content.Validate`, `MeasureWorstCase`, `CheckWorstCase` İngilizce sürümü kapsar; `content.Recipient.Language` (`""` veya `tr` = Türkçe, `en` = İngilizce); ayrıntı `go-interfaces.md#internalcontent`.
+- Veritabanı (entegrasyon): `content_versions.en_sms_body`, `en_email_subject`, `en_email_body` (üçü birlikte NULL ya da üçü birlikte NOT NULL; ihlal SQLSTATE `23514`, kısıt `content_versions_en_all_or_none_check`), `worst_case_en_sms_runes`, `worst_case_en_subject_runes`; `campaigns.audience_languages` (jsonb, NULL olabilir). Ayrıntı `db-schema.md` §3.4–3.5, migration `0009_content_en`.
+
+### REQ-LNG-02 — Claude, kitle gerektirdiğinde iki dilde üretir · Faz P8 · VARSAYIM
+- **Ne zaman:** kampanyanın güncel segmentinde `audience.languages.sms.en + audience.languages.email.en > 0` ise içerik üretimi İngilizce sürümü de ister (`llm.ContentRequest.IncludeEnglish = true`); değilse (veya `audience.languages` yoksa: P8 öncesi kampanya) yalnız Türkçe üretilir, bugünkü davranışla birebir aynıdır. Karar üretimin başında verilir; düzeltme denemesinde değişmez.
+- Segment yanıtı: `audience.languages = {"sms":{"tr","en"},"email":{"tr","en"}}`; her kanal için `tr + en` = o kanalın kitlesi (`audience.sms` / `audience.email`, izin ve iletişim bilgisi süzgeci sonrası); dil `customers.language` değeridir. `audience.languages` `POST …/segment`, `POST /api/segments/count` ve `Campaign.segment.audience` içinde aynı biçimdedir.
+- İki dilli üretimde araç çıktısı `en` bloğunu içerir (strict şema `content-en.tool.json`, `en` zorunlu); yalnız Türkçe üretimde bugünkü şema (`content.tool.json`). `llm.ContentToolSchema(includeEnglish bool)` iki şemayı döner; her iki şema strict kurallarına uyar (llm-tools.md §1.1 birim testi).
+- Sahte LLM: `IncludeEnglish = true` iken `CNT_OK` yerine `CNT_OK_EN` döner (llm-tools.md §3.3: `CNT_OK` + `en` bloğu); `IncludeEnglish = false` iken bugünkü çıktılar değişmez. Senaryo adı kümesi (14) değişmez.
+- Akış: `delta` olayları `language: "en"` alanıyla İngilizce alanları da taşır; Türkçe alanlar önce, İngilizce alanlar sonra akar; `language` Türkçe olaylarda yoktur (`sse-events.md` §1.1). `invalid` hata yolları dil önekli gelir (`en.sms.body`).
+- Düzeltme: İngilizce sürümdeki hata (ör. 161 karakterlik `en.sms.body`) da tek düzeltme denemesini tetikler; deneme 2 iki dil sürümünü birlikte yeniden üretir (en çok 2 deneme, `llm_attempts` bugünkü gibi). Bu davranış sahte `llm.Client` ile test edilir (yeni senaryo adı yoktur).
+- Üretim kilidi, 409 `generation_in_progress`, `llm_unavailable` yolu ve `content_version_id` kuralları değişmez.
+
+### REQ-LNG-03 — Gönderimde her alıcıya kendi dilindeki metin gider · Faz P8 · VARSAYIM
+- Alıcı dili gönderim anında `customers.language`'dan okunur (kanal izni ve iletişim bilgisi gibi, claim sırasında). `language = 'en'` ve onaylı sürümde `en` varsa SMS metni, e-posta konusu ve gövdesi İngilizce sürümden doldurulur; `tr` alıcı için, ve `en` alıcı için sürümde `en` yoksa Türkçe ana metin kullanılır (yedek davranış; teslimat başarılıdır, reddedilmez).
+- E-posta HTML'i: İngilizce metin için `<html lang="en">`, Türkçe için `<html lang="tr">` (Türkçe çıktı baytı baytına bugünküdür). `content.RenderEmailHTMLLang(lang, subject, bodyText)`; `content.RenderEmailHTML(subject, bodyText)` `lang="tr"` ile aynıdır.
+- `content.RenderContent(c, r)`: `r.Language == "en"` ve `c.EN != nil` → İngilizce sürüm ve `Rendered.Language = "en"`; aksi halde Türkçe, `Rendered.Language = "tr"`; `r.Language == "en"` ama `c.EN == nil` iken `Rendered.Fallback = true`. Yedek ad dile göre seçilir.
+- Gönderim anı denetimi (REQ-CNT-05) **seçilen** metne uygulanır; aşan teslimat `content_too_long` ile `failed` olur (bugünkü gibi). Kuyruk, tekillik (`UNIQUE (campaign_id, channel, customer_id)`), kanal başına ≤ 100/sn, retry ve idempotency anahtarı değişmez; teslimat satırında dil kolonu yoktur.
+- Planlı gönderimde (REQ-SCH-02) aynı seçim çalışır.
+- Önizleme: `GET …/preview` sorgusuna isteğe bağlı `language` (`tr`|`en`); yoksa örnek alıcının kendi dili. Yanıt `language` (gösterilen dil), `fallback` (alıcı/istek İngilizce ama sürümde `en` yok → Türkçe gösterildi) ve `customer.language` taşır. `language=tr` her zaman Türkçedir. Geçersiz değer → 422 `invalid_value`, yol `query.language`. `language` verilmeyen istek bugünkü davranıştan yalnız örnek alıcı İngilizce ise ayrışır.
+
+### REQ-LNG-04 — Arayüz: dil dağılımı, dil sekmeleri, önizleme · Faz P8 · VARSAYIM
+- Bileşenler ve `data-testid`'ler `docs/contracts/ui.md` §3.27 ve ilgili §3.7, §3.14–3.16, §3.23'te tanımlıdır; metinler `t(id, params)` ile üretilir.
+- Kitle kartı: `audience-languages` (`audience.languages` varsa; yoksa DOM'da yok), `audience-lang-sms-tr|sms-en|email-tr|email-en` (`data-value` = sayı).
+- İçerik ekranı: `language-tabs` (`role="tablist"`), `language-tab-tr`, `language-tab-en`; yalnız sürümde veya akışta İngilizce varsa görünür; ok tuşlarıyla gezinme; İngilizce alanı hata içeren sekme `data-has-error="true"`; alan hataları dil önekli yollarla ilgili sekmeye düşer.
+- Önizleme: `preview-language` grubu (`preview-language-tr`, `preview-language-en`; seçili `aria-pressed="true"`; seçim `GET …/preview?language=` sorgusunu yeniler); `sms-preview` / `email-preview` köklerinde `data-language`; `preview.fallback` iken `preview-fallback-note` görünür (metin `t('preview.fallbackNote')`), değilse DOM'da yoktur. İçerik `v-html` ile basılmaz.
+
+
 ## Kapsam dışı ve bonus
 
-Dokümanın bonusları: **zamanlanmış gönderim** P7a'da REQ-SCH-01..04 ile gereksinimdir; **CI pipeline'ı** bonus olarak P0'da kuruldu ve `README.md`'de belirtilir (REQ'i yoktur). **A/B varyantları** ve **kullanıcının diline göre içerik** kapsam dışıdır (sahip kararı, P7): bu katalogda gereksinim değildir, test edilmez; sahip eklerse ayrı REQ alanı alır. Kimlik doğrulama yoktur (yerel demo; VARSAYIM).
+Dokümanın bonusları: **zamanlanmış gönderim** P7a'da REQ-SCH-01..04 ile gereksinimdir; **CI pipeline'ı** bonus olarak P0'da kuruldu ve `README.md`'de belirtilir (REQ'i yoktur). **Kullanıcının diline göre içerik** P8'de REQ-LNG-01..04 ile gereksinimdir (D63). **A/B varyantları** kapsam dışıdır (sahip kararı, P7): bu katalogda gereksinim değildir, test edilmez; sahip eklerse ayrı REQ alanı alır. Kimlik doğrulama yoktur (yerel demo; VARSAYIM).
 
 ## Sözleşmede tanımlanması gereken adlar (mimar için kontrol listesi)
 
@@ -603,3 +645,7 @@ Her test fonksiyonu `// REQ-XXX-NN` yorumu taşır. Faz kapılarında testsiz RE
 | REQ-SCH-02 | integration, e2e | | |
 | REQ-SCH-03 | integration, e2e | | |
 | REQ-SCH-04 | web-unit | | |
+| REQ-LNG-01 | unit, integration, e2e | | |
+| REQ-LNG-02 | unit, e2e | | |
+| REQ-LNG-03 | unit, integration, delivery, e2e | | |
+| REQ-LNG-04 | web-unit | | |
