@@ -81,6 +81,7 @@ export const tr = {
   'audience.loading': 'Kitle hesaplanıyor…',
   'audience.loading.claude': 'Claude kitleyi çıkarıyor…',
   'audience.editBrief': 'Brief’i düzenle',
+  'audience.languages': 'Dile göre dağılım',
   'audience.generateContent': 'İçeriği üret',
   'audience.ruleTitle': 'Segment kuralı',
   'audience.noRule': 'Henüz bir segment kuralı yok.',
@@ -156,6 +157,9 @@ export const tr = {
   'tabs.sms': 'SMS',
   'tabs.email': 'Email',
   'tabs.hasErrors': 'Hata var',
+  'tabs.languages': 'İçerik dilleri',
+  'language.tr': 'Türkçe',
+  'language.en': 'İngilizce',
 
   // --- Content editor (P4) ---
   'editor.smsBody': 'SMS metni',
@@ -239,6 +243,8 @@ export const tr = {
   'preview.empty': 'Önizleme için doğrulanmış içerik gerekiyor.',
   'preview.error': 'Önizleme alınamadı.',
   'preview.subject': 'Konu',
+  'preview.fallbackNote':
+    'Alıcı İngilizce konuşuyor ama içerikte İngilizce sürüm yok; Türkçe metin gösteriliyor.',
 
   // --- Tracking (P5, required ids) ---
   'feed.empty': 'Henüz olay yok',

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "emit_campaign_content input, bilingual (strict variant sent to the model when the audience has English-speaking customers)",
+  "description": "Strict-compatible variant of ../content.schema.json with the `en` block required (P8, D63). Same structure as content.tool.json plus `en`; no minLength. Length limits (after personalization) and template-variable rules are enforced only by the backend validator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sms",
+    "email",
+    "en"
+  ],
+  "properties": {
+    "sms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body"
+      ],
+      "properties": {
+        "body": {
+          "type": "string",
+          "description": "Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}."
+        }
+      }
+    },
+    "email": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "body"
+      ],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "description": "Plain-text email subject template. At most 80 Unicode characters after personalization."
+        },
+        "body": {
+          "type": "string",
+          "description": "Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters."
+        }
+      }
+    },
+    "en": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sms",
+        "email"
+      ],
+      "description": "English version of the same message for English-speaking customers: same intent and tone, same limits, same variables. Not a word-for-word translation.",
+      "properties": {
+        "sms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "body"
+          ],
+          "properties": {
+            "body": {
+              "type": "string",
+              "description": "Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}."
+            }
+          }
+        },
+        "email": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "body"
+          ],
+          "properties": {
+            "subject": {
+              "type": "string",
+              "description": "Plain-text email subject template. At most 80 Unicode characters after personalization."
+            },
+            "body": {
+              "type": "string",
+              "description": "Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters."
+            }
+          }
+        }
+      }
+    }
+  }
+}

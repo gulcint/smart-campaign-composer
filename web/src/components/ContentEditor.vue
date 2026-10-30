@@ -27,6 +27,8 @@ const props = withDefaults(
   defineProps<{
     modelValue: Content
     channel: ChannelKey
+    /** P8: which language's fields are shown and edited; `en` needs `modelValue.en`. */
+    language?: 'tr' | 'en'
     mode: 'readonly' | 'editable' | 'locked'
     dirty: boolean
     saving?: boolean
@@ -34,7 +36,7 @@ const props = withDefaults(
     worstCase?: WorstCase | null
     conflict?: EditConflict | null
   }>(),
-  { saving: false, fieldErrors: () => [], worstCase: null, conflict: null },
+  { language: 'tr', saving: false, fieldErrors: () => [], worstCase: null, conflict: null },
 )
 const emit = defineEmits<{
   'update:modelValue': [content: Content]
@@ -95,18 +97,35 @@ const chipsDisabled = computed(() => props.mode !== 'editable' || props.saving)
 const canSave = computed(
   () => props.mode === 'editable' && props.dirty && !props.saving && props.conflict === null,
 )
-const errorsOf = computed(() => routeFieldErrors(props.fieldErrors))
+const errorsOf = computed(() => routeFieldErrors(props.fieldErrors, props.language))
+
+type Version = NonNullable<Content['en']>
+
+/** The shown language's copy (`en` falls back to an empty shape only if `en` is missing). */
+function versionOf(c: Content): Version {
+  if (props.language === 'en') {
+    return c.en ?? { sms: { body: '' }, email: { subject: '', body: '' } }
+  }
+  return c
+}
 
 function valueOf(c: Content, f: FieldKey): string {
-  if (f === 'sms-body') return c.sms.body
-  return f === 'email-subject' ? c.email.subject : c.email.body
+  const v = versionOf(c)
+  if (f === 'sms-body') return v.sms.body
+  return f === 'email-subject' ? v.email.subject : v.email.body
 }
 
 function withValue(c: Content, f: FieldKey, v: string): Content {
-  if (f === 'sms-body') return { ...c, sms: { ...c.sms, body: v } }
-  if (f === 'email-subject') return { ...c, email: { ...c.email, subject: v } }
-  return { ...c, email: { ...c.email, body: v } }
+  const cur = versionOf(c)
+  let next: Version
+  if (f === 'sms-body') next = { ...cur, sms: { ...cur.sms, body: v } }
+  else if (f === 'email-subject') next = { ...cur, email: { ...cur.email, subject: v } }
+  else next = { ...cur, email: { ...cur.email, body: v } }
+  return props.language === 'en' ? { ...c, en: next } : { ...c, ...next }
 }
+
+/** API path of a field in the shown language (`en.` prefix for English). */
+const pathOf = (d: FieldDef) => (props.language === 'en' ? `en.${d.path}` : d.path)
 
 function overLimit(d: FieldDef): boolean {
   return d.limit !== null && runeCount(valueOf(props.modelValue, d.key)) > d.limit
@@ -119,7 +138,7 @@ function invalid(d: FieldDef): boolean {
 /** One id per field (ui.md §3.14 e): the field's own error wins over path "" errors. */
 function primaryCode(d: FieldDef): string | undefined {
   const errs = errorsOf.value[d.key]
-  return (errs.find((e) => e.path === d.path) ?? errs[0])?.code
+  return (errs.find((e) => e.path === pathOf(d)) ?? errs[0])?.code
 }
 
 function describedBy(d: FieldDef): string | undefined {

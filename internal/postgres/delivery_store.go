@@ -106,8 +106,9 @@ func (s deliveryStore) Claim(ctx context.Context, ch delivery.Channel, now time.
 		SELECT c.id::text, c.campaign_id::text, c.customer_id::text,
 			CASE WHEN $1 = 'sms' THEN cu.phone ELSE cu.email END,
 			CASE WHEN $1 = 'sms' THEN cu.sms_opt_in ELSE cu.email_opt_in END,
-			cu.first_name, cu.last_name, cu.city,
+			cu.first_name, cu.last_name, cu.city, cu.language,
 			cv.sms_body, cv.email_subject, cv.email_body,
+			cv.en_sms_body, cv.en_email_subject, cv.en_email_body,
 			c.attempts, c.failed_attempts, c.rate_limited_count, c.first_attempt_at
 		FROM claimed c
 		JOIN customers cu ON cu.id = c.customer_id
@@ -121,16 +122,18 @@ func (s deliveryStore) Claim(ctx context.Context, ch delivery.Channel, now time.
 	var jobs []delivery.Job
 	for rows.Next() {
 		j := delivery.Job{Channel: ch}
-		var to *string
+		var to, enSMS, enSubject, enBody *string
 		if err := rows.Scan(&j.ID, &j.CampaignID, &j.CustomerID, &to, &j.Consent,
-			&j.Recipient.FirstName, &j.Recipient.LastName, &j.Recipient.City,
+			&j.Recipient.FirstName, &j.Recipient.LastName, &j.Recipient.City, &j.Recipient.Language,
 			&j.Content.SMS.Body, &j.Content.Email.Subject, &j.Content.Email.Body,
+			&enSMS, &enSubject, &enBody,
 			&j.Attempts, &j.FailedAttempts, &j.RateLimited, &j.FirstAttemptAt); err != nil {
 			return nil, fmt.Errorf("postgres: claim deliveries: %w", err)
 		}
 		if to != nil {
 			j.To = *to
 		}
+		j.Content.EN = englishOf(enSMS, enSubject, enBody) // P8: the language version is picked at render time
 		j.FirstAttemptAt = j.FirstAttemptAt.UTC()
 		jobs = append(jobs, j)
 	}

@@ -2,7 +2,7 @@
 // Step 3 (ui.md §1.1, §3.23; DECISIONS D40, D45; DESIGN.md §8.3): content generation stream,
 // editing with optimistic concurrency (X-Expected-Version) and the preview.
 import { ArrowUpRight, CircleCheck, Info, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { api } from '@/api/endpoints'
@@ -26,17 +26,23 @@ import ContentEditor, { type EditConflict } from '@/components/ContentEditor.vue
 import EmailPreview from '@/components/EmailPreview.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ErrorCard from '@/components/ErrorCard.vue'
+import LanguageTabs from '@/components/LanguageTabs.vue'
 import SmsPreview from '@/components/SmsPreview.vue'
 import StepHeader from '@/components/StepHeader.vue'
 import StreamingText from '@/components/StreamingText.vue'
 import VariableChip from '@/components/VariableChip.vue'
 import { useNotify } from '@/composables/useNotify'
-import { FIELD_KEYS, useContentGeneration } from '@/composables/useContentGeneration'
+import {
+  FIELD_KEYS,
+  routeFieldErrors,
+  useContentGeneration,
+} from '@/composables/useContentGeneration'
 import type { MessageId } from '@/i18n'
 import { t } from '@/i18n'
 import { walkedSamples } from '@/lib/preview'
 import { isLockedForEditing } from '@/lib/steps'
 import { invalidVariables } from '@/lib/variables'
+import { languageFromQuery } from '@/lib/language'
 import { campaignIdOf } from '@/router'
 import { injectApiClient, reportError } from '@/stores/api'
 import { useCampaignStore } from '@/stores/campaign'
@@ -79,19 +85,31 @@ const versionStatus = computed<VersionStatus>(
   () => sessionStatus.value ?? (base.value ? 'validated' : 'none'),
 )
 
+type LangContent = NonNullable<Content['en']>
+
+/** Field-by-field strict equality of two versions' texts (P8: the English block too). */
+function sameContent(a: Content, b: Content) {
+  const same = (x: LangContent, y: LangContent) =>
+    x.sms.body === y.sms.body &&
+    x.email.subject === y.email.subject &&
+    x.email.body === y.email.body
+  if (!same(a, b)) return false
+  if (!a.en || !b.en) return !a.en && !b.en
+  return same(a.en, b.en)
+}
+
 const dirty = computed(() => {
   if (editingDraft.value) return true
   const a = draft.value
   const b = base.value
   if (!a || !b) return false
-  return (
-    a.sms.body !== b.sms.body ||
-    a.email.subject !== b.email.subject ||
-    a.email.body !== b.email.body
-  )
+  return !sameContent(a, b)
 })
 
 const channel = ref<ChannelKey>('sms')
+type Language = 'tr' | 'en'
+const language = ref<Language>(languageFromQuery(route.query.lang))
+const langId = useId()
 
 const showStream = computed(
   () =>
@@ -104,15 +122,53 @@ const showEditor = computed(
   () => draft.value !== null && (versionStatus.value === 'validated' || editingDraft.value),
 )
 
-const phases = computed<Record<FieldKey, ContentPhase>>(() => {
+/** P8 (ui.md §3.23): English tabs/panels exist if the shown stream or the base version has `en`. */
+const englishAvailable = computed(() =>
+  showStream.value ? gen.hasEnglish.value : draft.value?.en != null,
+)
+const activeLanguage = computed<Language>(() => (englishAvailable.value ? language.value : 'tr'))
+
+function onLanguage(l: Language) {
+  language.value = l
+  void router.replace({ query: { ...route.query, lang: l } })
+}
+
+const phasesOf = (l: Language): Record<FieldKey, ContentPhase> => {
   if (showStream.value || editingDraft.value) {
+    const src = l === 'en' ? gen.enFields : gen.fields
     return {
-      'sms-body': gen.fields['sms-body'].phase,
-      'email-subject': gen.fields['email-subject'].phase,
-      'email-body': gen.fields['email-body'].phase,
+      'sms-body': src['sms-body'].phase,
+      'email-subject': src['email-subject'].phase,
+      'email-body': src['email-body'].phase,
     }
   }
-  return { 'sms-body': 'validated', 'email-subject': 'validated', 'email-body': 'validated' }
+  // Saved-version view: a 422 on a field marks it (and so its channel tab) invalid.
+  const routed = routeFieldErrors(fieldErrors.value, l)
+  const of = (k: FieldKey): ContentPhase => (routed[k].length ? 'invalid' : 'validated')
+  return {
+    'sms-body': of('sms-body'),
+    'email-subject': of('email-subject'),
+    'email-body': of('email-body'),
+  }
+}
+const phases = computed(() => phasesOf(activeLanguage.value))
+
+/** Language summary phase (ui.md §3.27): invalid if any field is, else the first field's phase. */
+const languagePhases = computed<Record<Language, ContentPhase>>(() => {
+  const of = (l: Language): ContentPhase => {
+    const p = phasesOf(l)
+    return FIELD_KEYS.some((k) => p[k] === 'invalid') ? 'invalid' : p['sms-body']
+  }
+  return { tr: of('tr'), en: of('en') }
+})
+const languageErrors = computed<Record<Language, boolean>>(() => {
+  const has = (l: Language) => {
+    const src = l === 'en' ? gen.enFields : gen.fields
+    if (showStream.value) return FIELD_KEYS.some((k) => src[k].errors.length > 0)
+    const routed = routeFieldErrors(fieldErrors.value, l)
+    return FIELD_KEYS.some((k) => routed[k].length > 0)
+  }
+  return { tr: has('tr'), en: has('en') }
 })
 
 const stateAllowsGeneration = computed(() => {
@@ -167,9 +223,10 @@ const generationError = computed<ApiError | null>(() =>
 const invalidChips = computed(() => {
   const d = draft.value
   if (!d) return []
+  const v = activeLanguage.value === 'en' && d.en ? d.en : d
   return channel.value === 'sms'
-    ? invalidVariables(d.sms.body)
-    : invalidVariables(d.email.subject, d.email.body)
+    ? invalidVariables(v.sms.body)
+    : invalidVariables(v.email.subject, v.email.body)
 })
 
 // ---- preview (ui.md §1.1) ----
@@ -179,14 +236,18 @@ const preview = ref<Preview | null>(null)
 const previewLoading = ref(false)
 const previewError = ref<ApiError | null>(null)
 let previewSeq = 0
+/** P8: `language` query of the last preview request; tabs visible => the selected tab's language. */
+let requestedLanguage: Language | undefined
+const previewLanguageParam = () => (englishAvailable.value ? activeLanguage.value : undefined)
 
 async function loadPreview(index: number) {
   const id = campaignId.value
   if (!id) return
   const seq = ++previewSeq
+  requestedLanguage = previewLanguageParam()
   previewLoading.value = true
   try {
-    const p = await api.previewContent(client, id, index)
+    const p = await api.previewContent(client, id, index, requestedLanguage)
     if (seq !== previewSeq) return
     preview.value = p
     previewError.value = null
@@ -199,6 +260,13 @@ async function loadPreview(index: number) {
     if (seq === previewSeq) previewLoading.value = false
   }
 }
+
+// The preview follows the selected language tab (REQ-LNG-04); sample_index is kept.
+watch([englishAvailable, activeLanguage], () => {
+  if (preview.value && previewLanguageParam() !== requestedLanguage) {
+    void loadPreview(preview.value.sample_index)
+  }
+})
 
 function onNextSample() {
   if (previewError.value?.code === 'customer_not_found') {
@@ -265,6 +333,23 @@ function onConfirmRegenerate() {
   startGeneration()
 }
 
+/** The generated texts as a Content (the English block only when the run had one). */
+function generatedContent(): Content {
+  const f = gen.fields
+  const c: Content = {
+    sms: { body: f['sms-body'].text },
+    email: { subject: f['email-subject'].text, body: f['email-body'].text },
+  }
+  if (gen.hasEnglish.value) {
+    const e = gen.enFields
+    c.en = {
+      sms: { body: e['sms-body'].text },
+      email: { subject: e['email-subject'].text, body: e['email-body'].text },
+    }
+  }
+  return c
+}
+
 watch(gen.versionStatus, (s, prev) => {
   if (s === prev) return
   if (s === 'none') {
@@ -274,10 +359,7 @@ watch(gen.versionStatus, (s, prev) => {
   }
   sessionStatus.value = s
   if (s === 'validated') {
-    const c: Content = {
-      sms: { body: gen.fields['sms-body'].text },
-      email: { subject: gen.fields['email-subject'].text, body: gen.fields['email-body'].text },
-    }
+    const c = generatedContent()
     base.value = c
     draft.value = c
     worstCase.value = gen.worstCase.value
@@ -297,13 +379,13 @@ watch(gen.error, (err) => {
 
 function onEditDraft() {
   if (versionStatus.value !== 'invalid' || locked.value) return
-  const c: Content = {
-    sms: { body: gen.fields['sms-body'].text },
-    email: { subject: gen.fields['email-subject'].text, body: gen.fields['email-body'].text },
-  }
+  const c = generatedContent()
   // Errors with path "" sit in every field; keep each error object once.
   const seen = new Set<FieldError>()
-  for (const k of FIELD_KEYS) for (const e of gen.fields[k].errors) seen.add(e)
+  for (const k of FIELD_KEYS) {
+    for (const e of gen.fields[k].errors) seen.add(e)
+    for (const e of gen.enFields[k].errors) seen.add(e)
+  }
   base.value = c
   draft.value = c
   fieldErrors.value = [...seen]
@@ -312,14 +394,6 @@ function onEditDraft() {
 }
 
 // ---- saving (ui.md §3.23, D40) ----
-function sameContent(a: Content, b: Content) {
-  return (
-    a.sms.body === b.sms.body &&
-    a.email.subject === b.email.subject &&
-    a.email.body === b.email.body
-  )
-}
-
 function savedAs(v: ContentVersion) {
   adopt(v)
   fieldErrors.value = []
@@ -422,10 +496,17 @@ function onDraftUpdate(c: Content) {
 function goToApproval() {
   const id = campaignId.value
   if (!id || !canApprove.value) return
-  void router.push({ name: 'approval', params: { campaignId: id } })
+  void router.push({
+    name: 'approval',
+    params: { campaignId: id },
+    ...(englishAvailable.value ? { query: { lang: activeLanguage.value } } : {}),
+  })
 }
 
 const CHANNELS: readonly ChannelKey[] = ['sms', 'email']
+const streamLanguages = computed<readonly Language[]>(() =>
+  englishAvailable.value ? ['tr', 'en'] : ['tr'],
+)
 const streamFields: Record<ChannelKey, readonly FieldKey[]> = {
   sms: ['sms-body'],
   email: ['email-subject', 'email-body'],
@@ -493,74 +574,111 @@ onMounted(() => {
       </section>
 
       <template v-else>
-        <ChannelTabs v-model="channel" :phases="phases">
-          <template v-for="c in CHANNELS" #[c]>
-            <div v-if="showStream" :key="`stream-${c}`" class="flex flex-col gap-4">
-              <StreamingText
-                v-for="f in streamFields[c]"
-                :key="f"
-                :field="f"
-                :text="gen.fields[f].text"
-                :phase="gen.fields[f].phase"
-                :errors="gen.fields[f].errors"
-                :provider="config.provider"
-                @regenerate="onRegenerate"
-              />
-            </div>
-            <div
-              v-else-if="showEditor && draft && channel === c"
-              :key="`editor-${c}`"
-              class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
-            >
-              <div
-                class="rounded-card border border-border-default bg-surface-card p-4 shadow-card md:p-6"
-              >
-                <ContentEditor
-                  :model-value="draft"
-                  :channel="c"
-                  :mode="editorMode"
-                  :dirty="dirty"
-                  :saving="saving"
-                  :field-errors="fieldErrors"
-                  :worst-case="dirty ? null : worstCase"
-                  :conflict="conflict"
-                  @update:model-value="onDraftUpdate"
-                  @save="onSave"
-                  @reload-latest="onReloadLatest"
-                  @keep-mine="onKeepMine"
-                />
+        <LanguageTabs
+          v-if="englishAvailable"
+          :model-value="activeLanguage"
+          :phases="languagePhases"
+          :errors="languageErrors"
+          :id-base="langId"
+          @update:model-value="onLanguage"
+        />
+        <div
+          :id="englishAvailable ? `${langId}-panel` : undefined"
+          :role="englishAvailable ? 'tabpanel' : undefined"
+          :aria-labelledby="englishAvailable ? `${langId}-tab-${activeLanguage}` : undefined"
+        >
+          <ChannelTabs v-model="channel" :phases="phases">
+            <template v-for="c in CHANNELS" #[c]>
+              <div v-if="showStream" :key="`stream-${c}`" class="flex flex-col gap-4">
+                <div
+                  v-for="l in streamLanguages"
+                  :key="l"
+                  :data-language="l"
+                  :hidden="l !== activeLanguage"
+                  class="flex flex-col gap-4"
+                >
+                  <StreamingText
+                    v-for="f in streamFields[c]"
+                    :key="f"
+                    :field="f"
+                    :text="(l === 'en' ? gen.enFields : gen.fields)[f].text"
+                    :phase="(l === 'en' ? gen.enFields : gen.fields)[f].phase"
+                    :errors="(l === 'en' ? gen.enFields : gen.fields)[f].errors"
+                    :provider="config.provider"
+                    @regenerate="onRegenerate"
+                  />
+                </div>
               </div>
-              <aside
-                class="flex flex-col gap-3 rounded-card border border-dashed border-border-default bg-surface-sunken/60 p-4 md:p-6"
-                :aria-label="t('content.previewTitle')"
+              <div
+                v-else-if="showEditor && draft && channel === c"
+                :key="`editor-${c}`"
+                class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
               >
-                <div class="flex flex-col gap-0.5">
-                  <h2 class="text-h4 text-accent-heading">{{ t('content.previewTitle') }}</h2>
-                  <p class="text-caption text-ink-500">{{ t('content.previewHint') }}</p>
+                <div
+                  class="rounded-card border border-border-default bg-surface-card p-4 shadow-card md:p-6"
+                >
+                  <ContentEditor
+                    :model-value="draft"
+                    :channel="c"
+                    :language="activeLanguage"
+                    :mode="editorMode"
+                    :dirty="dirty"
+                    :saving="saving"
+                    :field-errors="fieldErrors"
+                    :worst-case="dirty ? null : worstCase"
+                    :conflict="conflict"
+                    @update:model-value="onDraftUpdate"
+                    @save="onSave"
+                    @reload-latest="onReloadLatest"
+                    @keep-mine="onKeepMine"
+                  />
                 </div>
-                <SmsPreview
-                  v-if="c === 'sms'"
-                  :preview="preview"
-                  :loading="previewLoading"
-                  :error="previewError"
-                  @next-sample="onNextSample"
-                />
-                <EmailPreview
-                  v-else
-                  :preview="preview"
-                  :loading="previewLoading"
-                  :error="previewError"
-                />
-                <div v-if="invalidChips.length" class="flex flex-col gap-1.5">
-                  <p class="text-caption text-ink-500">{{ t('editor.invalidVariables') }}</p>
-                  <div class="flex flex-wrap gap-2">
-                    <VariableChip v-for="v in invalidChips" :key="v" :name="v" variant="invalid" />
+                <aside
+                  class="flex flex-col gap-3 rounded-card border border-dashed border-border-default bg-surface-sunken/60 p-4 md:p-6"
+                  :aria-label="t('content.previewTitle')"
+                >
+                  <div class="flex flex-col gap-0.5">
+                    <h2 class="text-h4 text-accent-heading">{{ t('content.previewTitle') }}</h2>
+                    <p class="text-caption text-ink-500">{{ t('content.previewHint') }}</p>
                   </div>
-                </div>
-              </aside>
-            </div>
-          </template>
-        </ChannelTabs>
+                  <p
+                    v-if="preview?.fallback"
+                    data-testid="preview-fallback-note"
+                    role="note"
+                    class="flex items-start gap-2 rounded-sm bg-info-bg px-3 py-2 text-body-sm text-ink-700"
+                  >
+                    <Info class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                    {{ t('preview.fallbackNote') }}
+                  </p>
+                  <SmsPreview
+                    v-if="c === 'sms'"
+                    :preview="preview"
+                    :loading="previewLoading"
+                    :error="previewError"
+                    @next-sample="onNextSample"
+                  />
+                  <EmailPreview
+                    v-else
+                    :preview="preview"
+                    :loading="previewLoading"
+                    :error="previewError"
+                  />
+                  <div v-if="invalidChips.length" class="flex flex-col gap-1.5">
+                    <p class="text-caption text-ink-500">{{ t('editor.invalidVariables') }}</p>
+                    <div class="flex flex-wrap gap-2">
+                      <VariableChip
+                        v-for="v in invalidChips"
+                        :key="v"
+                        :name="v"
+                        variant="invalid"
+                      />
+                    </div>
+                  </div>
+                </aside>
+              </div>
+            </template>
+          </ChannelTabs>
+        </div>
 
         <p
           v-if="versionStatus === 'invalid' && !editingDraft"

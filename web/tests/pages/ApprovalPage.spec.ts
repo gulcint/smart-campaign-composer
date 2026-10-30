@@ -19,6 +19,7 @@ import {
   preview,
   sel,
   version,
+  type RecordedRequest,
 } from '../helpers/p4'
 
 const C = `/campaigns/${CAMPAIGN_ID}`
@@ -35,6 +36,8 @@ interface Setup {
   approve?: () => unknown
   send?: () => unknown
   cancelSchedule?: () => unknown
+  previewImpl?: (req: RecordedRequest) => unknown
+  query?: Record<string, string>
 }
 
 async function mountApproval(s: Setup) {
@@ -44,7 +47,7 @@ async function mountApproval(s: Setup) {
       s.cancelSchedule
         ? s.cancelSchedule()
         : { campaign_id: CAMPAIGN_ID, state: 'approved', scheduled_at: null },
-    [`GET ${C}/preview`]: () => preview(),
+    [`GET ${C}/preview`]: (r) => (s.previewImpl ? s.previewImpl(r) : preview()),
     [`POST ${C}/approve`]: () =>
       s.approve ? s.approve() : campaign('approved', s.camp.value.latest_content_version),
     [`POST ${C}/send`]: () =>
@@ -57,7 +60,11 @@ async function mountApproval(s: Setup) {
             deliveries: { total: 718, sms: 350, email: 368 },
           },
   })
-  const r = await mountPage(ApprovalPage, 'approval', { api: a.client, withToaster: true })
+  const r = await mountPage(ApprovalPage, 'approval', {
+    api: a.client,
+    withToaster: true,
+    query: s.query,
+  })
   wrapper = r.wrapper
   return { a, router: r.router, w: r.wrapper }
 }
@@ -71,6 +78,171 @@ async function openAndConfirm(w: VueWrapper, button: string) {
   q('confirm-dialog-confirm')?.click()
   await flushPromises()
 }
+
+// ---- language (P8) ----
+
+const EN_BLOCK = {
+  sms: { body: 'Hi {{first_name}}' },
+  email: { subject: 'Your cart', body: 'Hi {{first_name}}' },
+}
+
+/** A bilingual version whose worst case carries the English measurement enWC. */
+function bilingualVersion(enWC = { sms_runes: 120, subject_runes: 20 }) {
+  return version(
+    V1,
+    1,
+    { ...version().content, en: EN_BLOCK } as never,
+    {
+      worst_case: { sms_runes: 160, subject_runes: 42, en: enWC },
+    } as never,
+  )
+}
+
+/** A preview of the shown language (REQ-LNG-03 C6 fields). */
+function langPreview(language: 'tr' | 'en', fallback = false, customerLanguage: string = language) {
+  const p = preview() as unknown as Record<string, unknown>
+  return {
+    ...p,
+    language,
+    fallback,
+    customer: { ...(p.customer as Record<string, unknown>), language: customerLanguage },
+  }
+}
+
+/** The preview follows the language query of the request (tr when absent). */
+const followQuery = (r: RecordedRequest) =>
+  langPreview(r.opts?.query?.language === 'en' ? 'en' : 'tr')
+
+describe('ApprovalPage preview language (REQ-LNG-04 C4)', () => {
+  it('has no preview-language group on any version', async () => {
+    const { w } = await mountApproval({
+      camp: { value: campaign('content_ready', bilingualVersion()) },
+      previewImpl: followQuery,
+    })
+    expect(w.find(sel('page-approval')).exists()).toBe(true)
+    expect(w.find(sel('preview-language')).exists()).toBe(false)
+    expect(w.find(sel('preview-language-tr')).exists()).toBe(false)
+    expect(w.find(sel('preview-language-en')).exists()).toBe(false)
+  })
+
+  it.each([
+    { fallback: true, shown: true },
+    { fallback: false, shown: false },
+  ])(
+    'preview.fallback=$fallback => preview-fallback-note shown=$shown',
+    async ({ fallback, shown }) => {
+      const { w } = await mountApproval({
+        camp: { value: campaign('content_ready', version()) },
+        previewImpl: () => langPreview('tr', fallback, 'en'),
+      })
+      const note = w.find(sel('preview-fallback-note'))
+      expect(note.exists()).toBe(shown)
+      if (shown) expect(note.text()).toBe(t('preview.fallbackNote'))
+    },
+  )
+
+  it('a Turkish-only version: no language-tabs and no language in the preview request', async () => {
+    const { w, a } = await mountApproval({
+      camp: { value: campaign('content_ready', version()) },
+      previewImpl: followQuery,
+    })
+    expect(w.find(sel('language-tabs')).exists()).toBe(false)
+    expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBeUndefined()
+  })
+})
+
+describe('ApprovalPage language tabs (REQ-LNG-04 C5)', () => {
+  it('a version with en shows language-tabs; tr is selected first; arrow keys move and select', async () => {
+    const { w } = await mountApproval({
+      camp: { value: campaign('content_ready', bilingualVersion()) },
+      previewImpl: followQuery,
+    })
+    expect(w.get(sel('language-tabs')).attributes('role')).toBe('tablist')
+    const tr = () => w.get(sel('language-tab-tr'))
+    const en = () => w.get(sel('language-tab-en'))
+    expect(tr().attributes('role')).toBe('tab')
+    expect(en().attributes('role')).toBe('tab')
+    expect(tr().attributes('aria-selected')).toBe('true')
+    expect(en().attributes('aria-selected')).toBe('false')
+    await tr().trigger('keydown', { key: 'ArrowRight' })
+    await flushPromises()
+    expect(en().attributes('aria-selected')).toBe('true')
+    await en().trigger('keydown', { key: 'ArrowLeft' })
+    await flushPromises()
+    expect(tr().attributes('aria-selected')).toBe('true')
+  })
+
+  it('the selected language drives approval-preview data-language and the limit check values', async () => {
+    const { w, a } = await mountApproval({
+      camp: { value: campaign('content_ready', bilingualVersion()) },
+      previewImpl: followQuery,
+    })
+    expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBe('tr')
+    expect(w.get(sel('approval-preview')).attributes('data-language')).toBe('tr')
+    const check = () => w.get(sel('approval-limit-check'))
+    expect(check().attributes('data-sms')).toBe('160')
+    expect(check().attributes('data-subject')).toBe('42')
+    expect(check().attributes('data-state')).toBe('pass')
+
+    await w.get(sel('language-tab-en')).trigger('click')
+    await flushPromises()
+    expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBe('en')
+    expect(w.get(sel('approval-preview')).attributes('data-language')).toBe('en')
+    expect(check().attributes('data-sms')).toBe('120')
+    expect(check().attributes('data-subject')).toBe('20')
+    expect(check().attributes('data-state')).toBe('pass')
+  })
+
+  it('the limit check does not pass when the English version is over a limit, even on the tr tab', async () => {
+    const { w } = await mountApproval({
+      camp: {
+        value: campaign('content_ready', bilingualVersion({ sms_runes: 161, subject_runes: 20 })),
+      },
+      previewImpl: followQuery,
+    })
+    expect(w.get(sel('language-tab-tr')).attributes('aria-selected')).toBe('true')
+    expect(w.get(sel('approval-limit-check')).attributes('data-state')).not.toBe('pass')
+  })
+})
+
+describe('ApprovalPage lang query (REQ-LNG-04 C6)', () => {
+  it.each([
+    { lang: 'en', withEN: true, selected: 'en' },
+    { lang: 'tr', withEN: true, selected: 'tr' },
+    { lang: 'xx', withEN: true, selected: 'tr' },
+    { lang: 'en', withEN: false, selected: null },
+  ])(
+    'lang=$lang (version with en: $withEN) opens the $selected tab',
+    async ({ lang, withEN, selected }) => {
+      const { w, a } = await mountApproval({
+        camp: { value: campaign('content_ready', withEN ? bilingualVersion() : version()) },
+        previewImpl: followQuery,
+        query: { lang },
+      })
+      if (selected === null) {
+        expect(w.find(sel('language-tabs')).exists()).toBe(false)
+        expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBeUndefined()
+        return
+      }
+      expect(w.get(sel(`language-tab-${selected}`)).attributes('aria-selected')).toBe('true')
+      expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBe(selected)
+    },
+  )
+
+  it('changing the tab updates the lang query; approval-edit carries it to the content step', async () => {
+    const { w, router } = await mountApproval({
+      camp: { value: campaign('content_ready', bilingualVersion()) },
+      previewImpl: followQuery,
+    })
+    await w.get(sel('language-tab-en')).trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.lang).toBe('en')
+    await w.get(sel('approval-edit')).trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('content')
+    expect(router.currentRoute.value.query.lang).toBe('en')
+  })
+})
 
 describe('ApprovalPage (REQ-APR-01)', () => {
   it('shows the latest version, the channel audiences and requests a preview', async () => {

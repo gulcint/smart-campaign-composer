@@ -73,12 +73,28 @@ var groupNames = []string{
 	"cart_add_29d", "cart_add_30d", "cart_add_31d", "cart_add_then_purchase", "purchase_before_cart_add",
 	"istanbul_no_consent", "istanbul_sms_only", "istanbul_email_only", "sms_consent_missing_phone",
 	"email_consent_missing_email", "empty_first_name", "long_first_name", "shared_contact", "non_istanbul_cart_add",
+	"english_recipients", // REQ-SEED-01 (P8)
 }
 
+// audienceDoc is an audience object of the manifest. Languages is present only in
+// example_brief.audience (REQ-SEED-01, P8); reachable has no language split.
 type audienceDoc struct {
-	Matched int `json:"matched"`
-	SMS     int `json:"sms"`
-	Email   int `json:"email"`
+	Matched   int           `json:"matched"`
+	SMS       int           `json:"sms"`
+	Email     int           `json:"email"`
+	Languages *languagesDoc `json:"languages,omitempty"`
+}
+
+// languagesDoc is example_brief.audience.languages: per channel, the tr / en split of that
+// channel's audience.
+type languagesDoc struct {
+	SMS   langSplit `json:"sms"`
+	Email langSplit `json:"email"`
+}
+
+type langSplit struct {
+	TR int `json:"tr"`
+	EN int `json:"en"`
 }
 
 type consentDoc struct {

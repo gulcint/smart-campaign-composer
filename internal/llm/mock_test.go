@@ -50,8 +50,9 @@ func TestFixtures_MatchContractLengths(t *testing.T) {
 	}
 }
 
-// REQ-AI-02
-// The 14 scenario names of llm-tools.md §3.2, in order; names are case-sensitive.
+// REQ-AI-02, REQ-LNG-02 C4
+// The 14 scenario names of llm-tools.md §3.2, in order; names are case-sensitive. P8 adds no
+// scenario name (CNT_OK_EN is selected by IncludeEnglish, not by a scenario).
 func TestScenarios_ClosedListInOrder(t *testing.T) {
 	t.Parallel()
 	var got []string
@@ -426,6 +427,223 @@ func TestMock_RecordsCalls(t *testing.T) {
 	if diff := cmp.Diff(want, m.Calls()); diff != "" {
 		t.Fatalf("Calls() mismatch (-want +got):\n%s", diff)
 	}
+}
+
+// ---- language (P8) ----
+
+// bilingualPathOrder is the chunk path order of a bilingual stream (REQ-LNG-02: Turkish paths, then
+// en.sms.body, en.email.subject, en.email.body).
+var bilingualPathOrder = map[string]int{
+	"sms.body": 0, "email.subject": 1, "email.body": 2,
+	"en.sms.body": 3, "en.email.subject": 4, "en.email.body": 5,
+}
+
+// REQ-LNG-02 C4, C5
+// IncludeEnglish = true: the ok scenario returns CNT_OK_EN = CNT_OK plus an `en` block (three
+// non-empty strings) that parses and validates with the example longest values. IncludeEnglish =
+// false: the raw output is CNT_OK exactly, without `en`.
+func TestMock_StreamContent_IncludeEnglish(t *testing.T) {
+	t.Parallel()
+	for _, includeEnglish := range []bool{true, false} {
+		t.Run("IncludeEnglish="+strconv.FormatBool(includeEnglish), func(t *testing.T) {
+			t.Parallel()
+			m := llm.NewMock(llm.MockOptions{})
+			req := contentRequest(1)
+			req.IncludeEnglish = includeEnglish
+			s, err := m.StreamContent(llm.WithScenario(context.Background(), llm.ScenarioOK), req)
+			if err != nil {
+				t.Fatalf("StreamContent() error = %v", err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			chunks, endErr := collect(t, s)
+			if !errors.Is(endErr, io.EOF) {
+				t.Fatalf("terminal Recv error = %v, want io.EOF", endErr)
+			}
+			// REQ-LNG-02 C5 (Go): English chunks have the en.* paths and follow every Turkish chunk.
+			got := map[string]string{}
+			last := -1
+			for i, c := range chunks {
+				idx, ok := bilingualPathOrder[c.Path]
+				if !ok || (!includeEnglish && idx > 2) {
+					t.Fatalf("chunk %d has path %q, not allowed here", i, c.Path)
+				}
+				if idx < last {
+					t.Fatalf("chunk %d path %q arrives after a later field; order is sms.body … en.email.body", i, c.Path)
+				}
+				last = idx
+				if c.Text == "" || utf8.RuneCountInString(c.Text) > 20 {
+					t.Fatalf("chunk %d (%s) has %d runes, want 1..20", i, c.Path, utf8.RuneCountInString(c.Text))
+				}
+				got[c.Path] += c.Text
+			}
+			raw := s.Raw()
+			decoded, err := decodeJSON(raw)
+			if err != nil {
+				t.Fatalf("Raw() is not valid JSON (%v): %s", err, raw)
+			}
+			doc, _ := decoded.(map[string]any)
+			if !includeEnglish {
+				if diff := cmp.Diff(any(cntOK.doc()), decoded); diff != "" {
+					t.Fatalf("Raw() without IncludeEnglish differs from CNT_OK (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(cntOK.fields(), got); diff != "" {
+					t.Fatalf("chunk text per path mismatch (-want +got):\n%s", diff)
+				}
+				return
+			}
+			for _, k := range []string{"sms", "email"} {
+				if diff := cmp.Diff(cntOK.doc()[k], doc[k]); diff != "" {
+					t.Fatalf("CNT_OK_EN %s differs from CNT_OK (-want +got):\n%s", k, diff)
+				}
+			}
+			en, ok := doc["en"].(map[string]any)
+			if !ok {
+				t.Fatalf("CNT_OK_EN has no en object: %s", raw)
+			}
+			sms, _ := en["sms"].(map[string]any)
+			email, _ := en["email"].(map[string]any)
+			wantChunks := cntOK.fields()
+			for path, v := range map[string]any{"en.sms.body": sms["body"], "en.email.subject": email["subject"], "en.email.body": email["body"]} {
+				str, ok := v.(string)
+				if !ok || str == "" {
+					t.Fatalf("CNT_OK_EN %s = %v, want a non-empty string", path, v)
+				}
+				wantChunks[path] = str
+			}
+			if diff := cmp.Diff(wantChunks, got); diff != "" {
+				t.Fatalf("chunk text per path mismatch with CNT_OK_EN (-want +got):\n%s", diff)
+			}
+			c, err := content.Parse(raw)
+			if err != nil {
+				t.Fatalf("content.Parse(CNT_OK_EN) error = %v", err)
+			}
+			if c.EN == nil {
+				t.Fatalf("content.Parse(CNT_OK_EN).EN = nil")
+			}
+			if err := content.Validate(c, req.Longest); err != nil {
+				t.Fatalf("content.Validate(CNT_OK_EN) error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// REQ-LNG-02 C3, C6
+// llm.ContentToolSchema returns two schemas: the Turkish-only one has no `en` property; the bilingual
+// one has a required `en` property. Both are strict: every object has additionalProperties false and
+// lists all its properties as required; minLength, maxLength, pattern and oneOf never appear.
+func TestContentToolSchema_EnglishVariant(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		includeEnglish bool
+		wantEN         bool
+	}{
+		{includeEnglish: false, wantEN: false},
+		{includeEnglish: true, wantEN: true},
+	}
+	for _, tc := range tests {
+		t.Run("includeEnglish="+strconv.FormatBool(tc.includeEnglish), func(t *testing.T) {
+			t.Parallel()
+			schema := schemaDoc(t, llm.ContentToolSchema(tc.includeEnglish))
+			hasEN, requiredEN := enProperty(schema)
+			if hasEN != tc.wantEN {
+				t.Fatalf("schema has an en property = %v, want %v", hasEN, tc.wantEN)
+			}
+			if tc.wantEN && !requiredEN {
+				t.Fatalf("en is not in the required list of the bilingual schema")
+			}
+			if problems := strictProblems("$", schema); len(problems) > 0 {
+				t.Fatalf("schema is not strict: %v", problems)
+			}
+		})
+	}
+	a := schemaDoc(t, llm.ContentToolSchema(false))
+	b := schemaDoc(t, llm.ContentToolSchema(true))
+	if cmp.Equal(a, b) {
+		t.Fatalf("ContentToolSchema(false) and ContentToolSchema(true) are the same schema")
+	}
+}
+
+// strictProblems lists the strict-rule violations of a JSON schema (REQ-LNG-02 C6): an object
+// schema (one with "properties") without additionalProperties false, a property missing from
+// "required", or a forbidden keyword anywhere.
+func strictProblems(at string, node any) []string {
+	var out []string
+	switch n := node.(type) {
+	case map[string]any:
+		for _, k := range []string{"minLength", "maxLength", "pattern", "oneOf"} {
+			if _, ok := n[k]; ok {
+				out = append(out, at+": forbidden keyword "+k)
+			}
+		}
+		if props, ok := n["properties"].(map[string]any); ok {
+			if n["additionalProperties"] != false {
+				out = append(out, at+": additionalProperties is not false")
+			}
+			req, _ := n["required"].([]any)
+			for name := range props {
+				found := false
+				for _, r := range req {
+					if r == name {
+						found = true
+					}
+				}
+				if !found {
+					out = append(out, at+": property "+name+" is not required")
+				}
+			}
+		}
+		for k, v := range n {
+			out = append(out, strictProblems(at+"."+k, v)...)
+		}
+	case []any:
+		for i, v := range n {
+			out = append(out, strictProblems(at+"["+strconv.Itoa(i)+"]", v)...)
+		}
+	}
+	return out
+}
+
+// schemaDoc decodes the json.RawMessage returned by llm.ContentToolSchema.
+func schemaDoc(t *testing.T, raw json.RawMessage) any {
+	t.Helper()
+	doc, err := decodeJSON(raw)
+	if err != nil {
+		t.Fatalf("schema is not valid JSON (%v): %s", err, raw)
+	}
+	return doc
+}
+
+// enProperty reports whether some object schema lists "en" under properties, and whether that same
+// object lists "en" as required.
+func enProperty(node any) (has, required bool) {
+	switch n := node.(type) {
+	case map[string]any:
+		if props, ok := n["properties"].(map[string]any); ok {
+			if _, ok := props["en"]; ok {
+				has = true
+				if req, ok := n["required"].([]any); ok {
+					for _, r := range req {
+						if r == "en" {
+							required = true
+						}
+					}
+				}
+				return has, required
+			}
+		}
+		for _, v := range n {
+			if h, r := enProperty(v); h {
+				return h, r
+			}
+		}
+	case []any:
+		for _, v := range n {
+			if h, r := enProperty(v); h {
+				return h, r
+			}
+		}
+	}
+	return false, false
 }
 
 // ---- helpers ----

@@ -655,7 +655,7 @@ C seçilir: onay, sürümleme, üretim kilidi ve düzeltme döngüsü bugünkü 
 **Arayüz (`ui.md`, DESIGN.md):**
 - **Kitle ekranı:** kanal sayılarının yanında dil dağılımı (`audience-languages`; örn. "TR 1.240 · EN 130"). Dağılımı olmayan eski kampanyada satır gizlenir.
 - **İçerik ekranı:** `ContentPanel` içinde TR / EN sekmesi (`content-lang-tab-tr`, `content-lang-tab-en`; `role="tablist"`, klavye ok tuşları, DESIGN.md erişilebilirlik kuralları). Akış sırasında iki dil de akar, etkin sekmenin metni görünür; diğer sekmede "akıyor" rozeti. Düzenleme her sekmede ayrı, kaydet bütün sürümü yollar; alan hataları dil önekli yolla ilgili sekmeye işaretlenir ve sekme başlığında hata göstergesi çıkar.
-- **Önizleme:** dil seçici (`preview-language`); "Bu kitlede 130 kişi İngilizce alır" bilgisi. Sürümde `en` yoksa ve kitlede İngilizce alıcı varsa uyarı: "130 alıcı Türkçe metni alacak". Bu bir engel değildir (D63).
+- **Önizleme:** ayrı dil seçici yok; önizleme TR/EN sekmesini izler, Onay ekranında da aynı sekme vardır ve seçim adımlar arasında korunur (sahip kararı, 2026-10-30; REQ-LNG-04). Sürümde `en` yoksa ve kitlede İngilizce alıcı varsa uyarı: "130 alıcı Türkçe metni alacak". Bu bir engel değildir (D63).
 - i18n metinleri tek dosyada (`web/src/i18n`); LLM içeriği dışında yeni serbest metin yok; içerik `v-html` ile basılmaz.
 
 ### 10.6 Gereksinimler (`docs/requirements.md`, yeni alan LNG) ve testler
