@@ -307,7 +307,7 @@ PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
 | SMS GSM-7/UCS-2 segment sayısı | Karakter sayımıyla yaklaşıldı (D10) |
 | Pazarlamacı brief'i güncelleyemez | API brief güncellemeyi desteklemiyor; "brief'i düzenle" yeni kampanya başlatır |
 | Gerçek ölçek (milyonlar) | PostgreSQL kuyruğu bu proje için yeterli, ölçek yolu `Queue` arayüzü (D1) |
-| Yapılmayan bonuslar | Zamanlanmış gönderim, A/B varyantları, dile göre içerik: çekirdek akış sağlam olunca ayrı REQ'lerle; bitmeyenler README'de belirtilecek |
+| Yapılmayan bonuslar | A/B varyantları, dile göre içerik (sahip kararı, P7): kapsam dışı, README'de belirtilir. Zamanlanmış gönderim P7a'da yapıldı (D62) |
 | Gerçek Claude istemcisi için otomatik test yok | Sözleşme gerçek istemciyi test binary'sinde yasaklar; strict araçlar ve onarım turu elle doğrulandı (D23, D32) |
 | `seed.Generate` 9999'dan fazla kullanıcıyı kabul eder | Yalnız komut satırı reddeder (telefon bloğu 4 hane); mimar `go-interfaces.md`'ye hata ekleyebilir |
 | Manifest sayıları `segment.Match` ile değil el yazısı değerlendirmeyle | P3'te `segment.Match`'e geçilecek, manifest aynı kalmalı |
