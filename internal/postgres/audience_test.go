@@ -60,10 +60,16 @@ type audManifest struct {
 func TestAudience_ExampleBriefMatchesManifest(t *testing.T) {
 	pool, m := audSetup(t)
 	got := audCount(t, pool, audRule(t, string(m.ExampleBrief.Rule)), audRef(t, m))
-	want := segment.Audience{Matched: m.ExampleBrief.Audience.Matched, SMS: m.ExampleBrief.Audience.SMS, Email: m.ExampleBrief.Audience.Email}
-	if diff := cmp.Diff(want, got); diff != "" {
+	want := audAudience{Matched: m.ExampleBrief.Audience.Matched, SMS: m.ExampleBrief.Audience.SMS, Email: m.ExampleBrief.Audience.Email}
+	if diff := cmp.Diff(want, audCounts(got)); diff != "" {
 		t.Fatalf("Count(example rule) mismatch with manifest example_brief.audience (-want +got):\n%s", diff)
 	}
+}
+
+// audCounts projects the three channel counts; the per-language split of REQ-LNG-02 C2 is checked
+// where the criterion names it (audience.languages over HTTP), not here.
+func audCounts(a segment.Audience) audAudience {
+	return audAudience{Matched: a.Matched, SMS: a.SMS, Email: a.Email}
 }
 
 // REQ-AUD-03, REQ-AUD-04
@@ -72,8 +78,8 @@ func TestAudience_ExampleBriefMatchesManifest(t *testing.T) {
 func TestAudience_EveryoneMatchesReachable(t *testing.T) {
 	pool, m := audSetup(t)
 	got := audCount(t, pool, audRule(t, `{"all":[{"field":"total_orders","op":"gte","value":0}]}`), audRef(t, m))
-	want := segment.Audience{Matched: m.Totals.Customers, SMS: m.Reachable.SMS, Email: m.Reachable.Email}
-	if diff := cmp.Diff(want, got); diff != "" {
+	want := audAudience{Matched: m.Totals.Customers, SMS: m.Reachable.SMS, Email: m.Reachable.Email}
+	if diff := cmp.Diff(want, audCounts(got)); diff != "" {
 		t.Fatalf("Count(everyone) mismatch with manifest reachable (-want +got):\n%s", diff)
 	}
 	if m.Reachable.Matched != m.Totals.Customers {
@@ -111,7 +117,7 @@ func TestAudience_SQLInjectionValueIsOnlyAValue(t *testing.T) {
 		`{"any":[{"field":"city","op":"eq","value":"\\'; TRUNCATE customers; --"},{"not":{"field":"city","op":"neq","value":"'; UPDATE customers SET sms_opt_in = true; --"}}]}`,
 	} {
 		got := audCount(t, pool, audRule(t, raw), ref)
-		if diff := cmp.Diff(segment.Audience{}, got); diff != "" {
+		if diff := cmp.Diff(audAudience{}, audCounts(got)); diff != "" {
 			t.Fatalf("Count(%s) mismatch (-want +got):\n%s", raw, diff)
 		}
 	}

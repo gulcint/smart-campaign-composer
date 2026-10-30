@@ -39,9 +39,9 @@ export const api = {
     }),
 
   /** previewContent — GET /api/campaigns/{campaign_id}/preview (REQ-APR-01, REQ-CNT-03) */
-  previewContent: (c: ApiClient, id: string, sampleIndex = 0) =>
+  previewContent: (c: ApiClient, id: string, sampleIndex = 0, language?: 'tr' | 'en') =>
     c.request<Ok<'previewContent', 200>>('GET', `${campaignPath(id)}/preview`, {
-      query: { sample_index: sampleIndex },
+      query: language ? { sample_index: sampleIndex, language } : { sample_index: sampleIndex },
     }),
 
   /** approveContent — POST /api/campaigns/{campaign_id}/approve (REQ-APR-01) */

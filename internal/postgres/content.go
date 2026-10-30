@@ -22,7 +22,9 @@ import (
 
 const versionColumns = `v.id::text, v.campaign_id::text, v.version_number, v.segment_revision, v.status, v.source,
 	v.sms_body, v.email_subject, v.email_body, v.validation_errors, v.llm_attempts,
-	v.worst_case_sms_runes, v.worst_case_subject_runes, v.created_at`
+	v.worst_case_sms_runes, v.worst_case_subject_runes,
+	v.en_sms_body, v.en_email_subject, v.en_email_body, v.worst_case_en_sms_runes, v.worst_case_en_subject_runes,
+	v.created_at`
 
 func scanVersion(row pgx.Row) (campaign.ContentVersion, error) {
 	var (
@@ -30,16 +32,24 @@ func scanVersion(row pgx.Row) (campaign.ContentVersion, error) {
 		status, src  string
 		errs         []byte
 		wcSMS, wcSub *int
+		enSMS, enSub *string
+		enBody       *string
+		wcENSMS      *int
+		wcENSub      *int
 	)
 	if err := row.Scan(&v.ID, &v.CampaignID, &v.VersionNumber, &v.SegmentRevision, &status, &src,
 		&v.Content.SMS.Body, &v.Content.Email.Subject, &v.Content.Email.Body, &errs, &v.LLMAttempts,
-		&wcSMS, &wcSub, &v.CreatedAt); err != nil {
+		&wcSMS, &wcSub, &enSMS, &enSub, &enBody, &wcENSMS, &wcENSub, &v.CreatedAt); err != nil {
 		return campaign.ContentVersion{}, err
 	}
 	v.Status, v.Source = campaign.ContentStatus(status), campaign.ContentSource(src)
 	v.CreatedAt = v.CreatedAt.UTC()
+	v.Content.EN = englishOf(enSMS, enSub, enBody)
 	if wcSMS != nil && wcSub != nil {
 		v.WorstCase = &content.WorstCase{SMSRunes: *wcSMS, SubjectRunes: *wcSub}
+		if wcENSMS != nil && wcENSub != nil {
+			v.WorstCase.EN = &content.WorstCaseLang{SMSRunes: *wcENSMS, SubjectRunes: *wcENSub}
+		}
 	}
 	v.ValidationErrors = []validation.FieldError{}
 	if len(errs) > 0 {
@@ -239,18 +249,28 @@ func (s *CampaignStore) writeContentVersion(ctx context.Context, id string, deci
 	if err != nil {
 		return campaign.ContentVersion{}, fmt.Errorf("postgres: encode validation errors: %w", err)
 	}
-	var wcSMS, wcSub *int
+	var wcSMS, wcSub, wcENSMS, wcENSub *int
 	if w.WorstCase != nil {
 		wcSMS, wcSub = &w.WorstCase.SMSRunes, &w.WorstCase.SubjectRunes
+		if w.WorstCase.EN != nil && w.Content.EN != nil {
+			wcENSMS, wcENSub = &w.WorstCase.EN.SMSRunes, &w.WorstCase.EN.SubjectRunes
+		}
+	}
+	// P8 (D63): the English version, all three columns or none (content_versions_en_all_or_none_check).
+	var enSMS, enSub, enBody *string
+	if en := w.Content.EN; en != nil {
+		enSMS, enSub, enBody = &en.SMS.Body, &en.Email.Subject, &en.Email.Body
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO content_versions (id, campaign_id, version_number, segment_revision, status, source,
 			sms_body, email_subject, email_body, validation_errors, llm_attempts,
-			worst_case_sms_runes, worst_case_subject_runes, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14)`,
+			worst_case_sms_runes, worst_case_subject_runes,
+			en_sms_body, en_email_subject, en_email_body, worst_case_en_sms_runes, worst_case_en_subject_runes,
+			created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 		w.ID, id, number, lc.SegmentRevision, string(w.Status), string(w.Source),
 		w.Content.SMS.Body, w.Content.Email.Subject, w.Content.Email.Body, string(errJSON), w.LLMAttempts,
-		wcSMS, wcSub, w.CreatedAt); err != nil {
+		wcSMS, wcSub, enSMS, enSub, enBody, wcENSMS, wcENSub, w.CreatedAt); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "content_versions_campaign_version_key" {
 			return campaign.ContentVersion{}, errRetryVersionNumber
@@ -344,11 +364,11 @@ func (s *CampaignStore) PreviewSample(ctx context.Context, r segment.Rule, ref t
 	}
 	cu := &out.Customer
 	if customerID != "" {
-		err := s.db.QueryRow(ctx, `SELECT c.id::text, c.first_name, c.last_name, c.city, (
+		err := s.db.QueryRow(ctx, `SELECT c.id::text, c.first_name, c.last_name, c.city, c.language, (
 				SELECT count(*)`+audienceFrom+`(`+comp.Where+`) AND c.id < `+next+`)
 			FROM customers c JOIN customer_stats_at($1) s ON s.customer_id = c.id
 			WHERE (`+comp.Where+`) AND c.id = `+next, append(comp.Args, customerID)...).
-			Scan(&cu.ID, &cu.FirstName, &cu.LastName, &cu.City, &out.Index)
+			Scan(&cu.ID, &cu.FirstName, &cu.LastName, &cu.City, &cu.Language, &out.Index)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return campaign.SampleCustomer{}, campaign.ErrCustomerNotFound
 		}
@@ -360,9 +380,9 @@ func (s *CampaignStore) PreviewSample(ctx context.Context, r segment.Rule, ref t
 	if index >= out.Count {
 		return campaign.SampleCustomer{}, campaign.ErrCustomerNotFound
 	}
-	err = s.db.QueryRow(ctx, `SELECT c.id::text, c.first_name, c.last_name, c.city`+audienceFrom+comp.Where+`
+	err = s.db.QueryRow(ctx, `SELECT c.id::text, c.first_name, c.last_name, c.city, c.language`+audienceFrom+comp.Where+`
 		ORDER BY c.id LIMIT 1 OFFSET `+next, append(comp.Args, index)...).
-		Scan(&cu.ID, &cu.FirstName, &cu.LastName, &cu.City)
+		Scan(&cu.ID, &cu.FirstName, &cu.LastName, &cu.City, &cu.Language)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return campaign.SampleCustomer{}, campaign.ErrCustomerNotFound
 	}

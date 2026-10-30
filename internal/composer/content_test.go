@@ -637,6 +637,149 @@ func TestEvent_JSONShape(t *testing.T) {
 	}
 }
 
+// ---- language (P8) ----
+
+// bilingualContent is CNT_OK plus an English version with the given SMS.
+func bilingualContent(enSMS string) content.Content {
+	c := cOK()
+	c.EN = &content.English{SMS: content.SMS{Body: enSMS}, Email: content.Email{Subject: "Your cart is waiting", Body: "Hi {{first_name}},\n\nYour cart is waiting."}}
+	return c
+}
+
+// deltaJSON is the wire form of one delta event (sse-events keys plus the optional language).
+type deltaJSON struct {
+	Attempt  int     `json:"attempt"`
+	Channel  string  `json:"channel"`
+	Field    string  `json:"field"`
+	Text     string  `json:"text"`
+	Language *string `json:"language"`
+}
+
+// REQ-LNG-02 C4, C5, C7
+// With IncludeEnglish the mock returns CNT_OK_EN and the session streams the English fields too:
+// Turkish deltas first (no `language` key), then English deltas with `language: "en"`; the English
+// deltas concatenate to the outcome's English version, which is validated and measured (WorstCase.EN).
+// Without IncludeEnglish no delta carries a language and the outcome has no English version.
+func TestContentSession_EnglishDeltasFollowTurkish(t *testing.T) {
+	t.Parallel()
+	for _, includeEnglish := range []bool{true, false} {
+		t.Run("IncludeEnglish="+strconv.FormatBool(includeEnglish), func(t *testing.T) {
+			t.Parallel()
+			req := contentRequest()
+			req.IncludeEnglish = includeEnglish
+			out, rec, err := runSession(t, context.Background(), llm.NewMock(llm.MockOptions{}), req)
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if !out.Valid || out.Attempts != 1 {
+				t.Fatalf("outcome Valid/Attempts = %v/%d, want true/1 (errors %+v)", out.Valid, out.Attempts, out.Errors)
+			}
+			en := map[string]string{}
+			seenEnglish := false
+			for i, d := range rec.deltas {
+				b, err := json.Marshal(d)
+				if err != nil {
+					t.Fatalf("marshal delta: %v", err)
+				}
+				var w deltaJSON
+				if err := json.Unmarshal(b, &w); err != nil {
+					t.Fatalf("decode delta %s: %v", b, err)
+				}
+				if w.Language == nil {
+					if seenEnglish {
+						t.Fatalf("delta %d is Turkish after an English delta: Turkish fields stream first", i)
+					}
+					continue
+				}
+				if *w.Language != "en" {
+					t.Fatalf("delta %d language = %q, want en or no key", i, *w.Language)
+				}
+				seenEnglish = true
+				en[w.Channel+"."+w.Field] += w.Text
+			}
+			if !includeEnglish {
+				if seenEnglish || out.Content.EN != nil || (out.WorstCase != nil && out.WorstCase.EN != nil) {
+					t.Fatalf("Turkish-only generation produced English (deltas %v, EN %+v)", seenEnglish, out.Content.EN)
+				}
+				if diff := cmp.Diff(cOK(), out.Content); diff != "" {
+					t.Fatalf("Turkish-only outcome differs from CNT_OK (-want +got):\n%s", diff)
+				}
+				return
+			}
+			if !seenEnglish || out.Content.EN == nil {
+				t.Fatalf("bilingual generation: English deltas %v, outcome EN %+v; want both", seenEnglish, out.Content.EN)
+			}
+			if out.Content.SMS != cOK().SMS || out.Content.Email != cOK().Email {
+				t.Fatalf("Turkish part of CNT_OK_EN = %+v/%+v, want CNT_OK", out.Content.SMS, out.Content.Email)
+			}
+			want := map[string]string{"sms.body": out.Content.EN.SMS.Body, "email.subject": out.Content.EN.Email.Subject, "email.body": out.Content.EN.Email.Body}
+			if diff := cmp.Diff(want, en); diff != "" {
+				t.Fatalf("English delta concatenation differs from the outcome's EN (-want +got):\n%s", diff)
+			}
+			if out.WorstCase == nil || out.WorstCase.EN == nil {
+				t.Fatalf("outcome WorstCase = %+v, want an EN measurement", out.WorstCase)
+			}
+		})
+	}
+}
+
+// REQ-LNG-02 C1, C5, C7, C8
+// An error in the English version triggers the single repair like a Turkish one: the non-final
+// invalid carries the en-prefixed path, attempt 2 regenerates both versions (same IncludeEnglish:
+// the decision is not changed by the repair), at most 2 attempts.
+func TestContentSession_EnglishErrorTriggersRepair(t *testing.T) {
+	t.Parallel()
+	bad := bilingualContent(strings.Repeat("a", 161))
+	good := bilingualContent("Hi {{first_name}}, your cart is waiting.")
+	tests := []struct {
+		name     string
+		steps    []contentStep
+		valid    bool
+		storable bool
+		content  content.Content
+	}{
+		{name: "English SMS 161 then valid bilingual content", steps: []contentStep{{raw: mustJSON(t, bad)}, {raw: mustJSON(t, good)}}, valid: true, content: good},
+		{name: "English SMS 161 twice is a storable draft", steps: []contentStep{{raw: mustJSON(t, bad)}, {raw: mustJSON(t, bad)}}, storable: true, content: bad},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			sc := &scriptedContentClient{steps: tc.steps}
+			req := contentRequest()
+			req.IncludeEnglish = true
+			out, rec, err := runSession(t, context.Background(), sc, req)
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			assertNoTerminal(t, rec)
+			if out.Valid != tc.valid || out.Storable != tc.storable || out.Attempts != 2 {
+				t.Fatalf("outcome Valid/Storable/Attempts = %v/%v/%d, want %v/%v/2 (errors %+v)", out.Valid, out.Storable, out.Attempts, tc.valid, tc.storable, out.Errors)
+			}
+			if diff := cmp.Diff(tc.content, out.Content); diff != "" {
+				t.Fatalf("outcome Content mismatch (-want +got):\n%s", diff)
+			}
+			if !tc.valid && !containsPathCode(projection(out.Errors), pathCode{"en.sms.body", "sms_too_long"}) {
+				t.Fatalf("outcome errors = %+v, want en.sms.body sms_too_long", projection(out.Errors))
+			}
+			if len(rec.invalids) != 1 || !containsPathCode(projection(rec.invalids[0].Errors), pathCode{"en.sms.body", "sms_too_long"}) {
+				t.Fatalf("non-final invalid events = %+v, want one with en.sms.body sms_too_long", rec.invalids)
+			}
+			reqs := sc.requests()
+			if len(reqs) != 2 {
+				t.Fatalf("StreamContent calls = %d, want 2 (at most one repair)", len(reqs))
+			}
+			for i, r := range reqs {
+				if !r.IncludeEnglish {
+					t.Fatalf("request %d IncludeEnglish = false; the decision is made once and kept for the repair", i+1)
+				}
+			}
+			if reqs[1].Previous == nil || !containsPathCode(projection(reqs[1].Previous.Errors), pathCode{"en.sms.body", "sms_too_long"}) {
+				t.Fatalf("repair feedback = %+v, want en.sms.body sms_too_long", reqs[1].Previous)
+			}
+		})
+	}
+}
+
 func ip(n int) *int { return &n }
 
 // ---- scripted content client ----
@@ -677,7 +820,11 @@ func (s *scriptedContentClient) StreamContent(ctx context.Context, req llm.Conte
 	if chunks == nil && step.raw != "" {
 		var c content.Content
 		if json.Unmarshal([]byte(step.raw), &c) == nil {
-			for _, p := range []llm.ContentChunk{{Path: "sms.body", Text: c.SMS.Body}, {Path: "email.subject", Text: c.Email.Subject}, {Path: "email.body", Text: c.Email.Body}} {
+			parts := []llm.ContentChunk{{Path: "sms.body", Text: c.SMS.Body}, {Path: "email.subject", Text: c.Email.Subject}, {Path: "email.body", Text: c.Email.Body}}
+			if c.EN != nil { // REQ-LNG-02 C5: English chunks use the en.* paths, after the Turkish ones
+				parts = append(parts, llm.ContentChunk{Path: "en.sms.body", Text: c.EN.SMS.Body}, llm.ContentChunk{Path: "en.email.subject", Text: c.EN.Email.Subject}, llm.ContentChunk{Path: "en.email.body", Text: c.EN.Email.Body})
+			}
+			for _, p := range parts {
 				if p.Text != "" {
 					chunks = append(chunks, p)
 				}

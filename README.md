@@ -13,7 +13,7 @@ Pazarlamacı ne istediğini doğal dille yazar. Claude hedef kitleyi ve SMS ile 
 | Bonus: zamanlanmış gönderim | ✅ Tamam |
 | Bonus: CI pipeline | ✅ Tamam |
 | Bonus: A/B varyantları | ⬜ Yapılmadı |
-| Bonus: kullanıcının diline göre içerik | ⬜ Yapılmadı |
+| Bonus: kullanıcının diline göre içerik | ✅ Yapıldı (P8: Türkçe ana metin + kitlede İngilizce alıcı varsa İngilizce sürüm; alıcı diline göre gönderim, D63) |
 
 Kullanılan teknolojiler: Vue 3 (arayüz), Go (backend), Claude API, PostgreSQL (veritabanı ve kuyruk).
 
@@ -173,7 +173,7 @@ flowchart LR
 
 Yetiştirilemeyenler ve bilinçli ödünler:
 
-- **A/B varyantları ve dile göre içerik yapılmadı** (seed'de `language` alanı hazır).
+- **A/B varyantları yapılmadı.** Dile göre içerik yalnız `tr` ve `en` içindir; İngilizce sürümün dil kalitesini sistem ölçmez, insan onayı tek güvencedir (D63).
 - **Ölçek:** kitle Go belleğine yüklenir, kuyruk PostgreSQL'dedir. 5000 kişi için yeterli, milyonlar için değil (D1).
 - **Hız:** elle denemede kanal başına yaklaşık 50 mesaj/sn ölçüldü (limit 100). Otomatik hız testi yok.
 - **SMS uzunluğu** karakter olarak sayılır. Türkçe harf içeren gerçek bir SMS parçası 70 karakterdir (D10).

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gulcint/smart-campaign-composer/internal/content"
+	"github.com/gulcint/smart-campaign-composer/internal/segment"
 )
 
 // ExampleBrief is the case document's example brief (seed.md §5).
@@ -22,6 +23,7 @@ var GroupNames = []string{
 	"cart_add_29d", "cart_add_30d", "cart_add_31d", "cart_add_then_purchase", "purchase_before_cart_add",
 	"istanbul_no_consent", "istanbul_sms_only", "istanbul_email_only", "sms_consent_missing_phone",
 	"email_consent_missing_email", "empty_first_name", "long_first_name", "shared_contact", "non_istanbul_cart_add",
+	"english_recipients",
 }
 
 // expectedGroups is the seed.md §3.3 table (matches example brief, in SMS audience, in email
@@ -41,6 +43,7 @@ var expectedGroups = map[string][3]bool{
 	"long_first_name":             {true, true, true},
 	"shared_contact":              {true, true, true},
 	"non_istanbul_cart_add":       {false, false, false},
+	"english_recipients":          {true, true, true},
 }
 
 // Manifest mirrors the manifest schema in seed.md §5. Field order is the canonical key order.
@@ -91,6 +94,8 @@ type Audience struct {
 	Matched int `json:"matched"`
 	SMS     int `json:"sms"`
 	Email   int `json:"email"`
+	// Languages (P8): set only in example_brief.audience (tr + en = the channel count).
+	Languages *segment.AudienceLanguages `json:"languages,omitempty"`
 }
 
 type ExampleBriefInfo struct {
@@ -179,6 +184,15 @@ func consentOf(c *customer, bd *ConsentBreakdown) {
 	}
 }
 
+// countLanguage adds one customer of language lang ("tr" | "en") to lc.
+func countLanguage(lc *segment.LanguageCounts, lang string) {
+	if lang == content.LangEN {
+		lc.EN++
+	} else {
+		lc.TR++
+	}
+}
+
 func buildManifest(opts Options, customers []customer, sha string) (Manifest, error) {
 	m := Manifest{
 		SchemaVersion: 1,
@@ -190,6 +204,8 @@ func buildManifest(opts Options, customers []customer, sha string) (Manifest, er
 	}
 	longest := content.Longest{}
 	matched := 0
+	langs := &segment.AudienceLanguages{}
+	m.ExampleBrief.Audience.Languages = langs
 	members := map[string][]*customer{}
 	for i := range customers {
 		c := &customers[i]
@@ -231,9 +247,11 @@ func buildManifest(opts Options, customers []customer, sha string) (Manifest, er
 		}
 		if c.inSMSAudience {
 			m.ExampleBrief.Audience.SMS++
+			countLanguage(&langs.SMS, c.language)
 		}
 		if c.inEmailAud {
 			m.ExampleBrief.Audience.Email++
+			countLanguage(&langs.Email, c.language)
 		}
 		if c.group != "" {
 			members[c.group] = append(members[c.group], c)
