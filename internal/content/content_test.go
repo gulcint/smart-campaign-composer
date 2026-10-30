@@ -109,7 +109,11 @@ func TestRuneCount(t *testing.T) {
 	}
 }
 
-// REQ-AI-01, REQ-APR-02, REQ-CNT-01 (D46)
+// trDoc is a structurally valid Turkish document WITHOUT its closing brace, so a test can append
+// `,"en":…}` (REQ-LNG-01 C1).
+const trDoc = `{"sms":{"body":"a"},"email":{"subject":"b","body":"c"}`
+
+// REQ-AI-01, REQ-APR-02, REQ-CNT-01 (D46), REQ-LNG-01 C1
 // Parse checks STRUCTURE only: unknown keys, wrong types and missing keys are schema_violation at
 // that path; broken JSON is invalid_json; an empty string is structurally valid (Validate reports it
 // as required); strings are NFC-normalized and not trimmed.
@@ -135,6 +139,14 @@ func TestParse_Structure(t *testing.T) {
 		{name: "null subject is a schema violation", raw: `{"sms":{"body":"a"},"email":{"subject":null,"body":"c"}}`, sentinel: validation.ErrSchemaViolation, path: sp("email.subject"), code: "schema_violation"},
 		{name: "array root is a schema violation", raw: `[]`, sentinel: validation.ErrSchemaViolation, code: "schema_violation"},
 		{name: "unknown nested key is a schema violation", raw: `{"sms":{"body":"a","html":"<b>x</b>"},"email":{"subject":"b","body":"c"}}`, sentinel: validation.ErrSchemaViolation, code: "schema_violation"},
+		// REQ-LNG-01 C1: the optional en block has the same strict shape.
+		{name: "en null is a schema violation at en", raw: trDoc + `,"en":null}`, sentinel: validation.ErrSchemaViolation, path: sp("en"), code: "schema_violation"},
+		{name: "en empty object is a schema violation", raw: trDoc + `,"en":{}}`, sentinel: validation.ErrSchemaViolation, code: "schema_violation"},
+		{name: "en string is a schema violation at en", raw: trDoc + `,"en":"hello"}`, sentinel: validation.ErrSchemaViolation, path: sp("en"), code: "schema_violation"},
+		{name: "missing en.sms is reported at en.sms", raw: trDoc + `,"en":{"email":{"subject":"b","body":"c"}}}`, sentinel: validation.ErrSchemaViolation, path: sp("en.sms"), code: "schema_violation"},
+		{name: "missing en.email.subject is reported at en.email.subject", raw: trDoc + `,"en":{"sms":{"body":"a"},"email":{"body":"c"}}}`, sentinel: validation.ErrSchemaViolation, path: sp("en.email.subject"), code: "schema_violation"},
+		{name: "html inside en is reported at en.html", raw: trDoc + `,"en":{"sms":{"body":"a"},"email":{"subject":"b","body":"c"},"html":"<b>x</b>"}}`, sentinel: validation.ErrSchemaViolation, path: sp("en.html"), code: "schema_violation"},
+		{name: "number en.sms.body is a schema violation", raw: trDoc + `,"en":{"sms":{"body":160},"email":{"subject":"b","body":"c"}}}`, sentinel: validation.ErrSchemaViolation, path: sp("en.sms.body"), code: "schema_violation"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -168,6 +180,34 @@ func TestParse_Structure(t *testing.T) {
 		want := content.Content{SMS: content.SMS{Body: "Merhaba {{first_name}}"}, Email: content.Email{Subject: "Konu", Body: "Gövde"}}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Fatalf("Parse() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	// REQ-LNG-01 C1, C8: a document with en decodes into Content.EN; without en, EN stays nil.
+	t.Run("valid document with en decodes into EN", func(t *testing.T) {
+		t.Parallel()
+		got, err := content.Parse([]byte(trDoc + `,"en":{"sms":{"body":"Hi {{first_name}}"},"email":{"subject":"Subject","body":"Body"}}}`))
+		if err != nil {
+			t.Fatalf("Parse() error = %v", err)
+		}
+		want := content.Content{
+			SMS:   content.SMS{Body: "a"},
+			Email: content.Email{Subject: "b", Body: "c"},
+			EN:    &content.English{SMS: content.SMS{Body: "Hi {{first_name}}"}, Email: content.Email{Subject: "Subject", Body: "Body"}},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("Parse() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("empty en strings are structurally valid", func(t *testing.T) {
+		t.Parallel()
+		got, err := content.Parse([]byte(trDoc + `,"en":{"sms":{"body":""},"email":{"subject":"","body":""}}}`))
+		if err != nil {
+			t.Fatalf("Parse() error = %v, want nil (empty values are Validate's required)", err)
+		}
+		if got.EN == nil {
+			t.Fatalf("Parse() EN = nil, want an empty English version")
 		}
 	})
 
@@ -513,6 +553,7 @@ func TestRenderContentAndCheckRendered(t *testing.T) {
 		SMSText:      strings.ReplaceAll(cntOKSMS, "{{first_name}}", "Değerli müşterimiz"),
 		EmailSubject: cntOKSubject,
 		EmailText:    strings.ReplaceAll(strings.ReplaceAll(cntOKBody, "{{first_name}}", "Değerli müşterimiz"), "{{city}}", "İstanbul"),
+		Language:     "tr", // REQ-LNG-03 C3: a recipient without a language gets the Turkish main text
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("RenderContent() mismatch (-want +got):\n%s", diff)
@@ -551,7 +592,7 @@ func TestRenderContentAndCheckRendered(t *testing.T) {
 	}
 }
 
-// REQ-CNT-05
+// REQ-CNT-05, REQ-LNG-01 C3, C4
 // MeasureWorstCase uses the same substitution as Validate; it fails only on template syntax.
 func TestMeasureWorstCase(t *testing.T) {
 	t.Parallel()
@@ -568,6 +609,16 @@ func TestMeasureWorstCase(t *testing.T) {
 		{name: "subject placeholder", c: withSubject("{{last_name}} için"), l: content.Longest{FirstName: 18, LastName: 12}, want: content.WorstCase{SMSRunes: 160 - 50 + 18, SubjectRunes: 17}},
 		{name: "malformed variable", c: withSMS("{{first_name"), l: exampleLongest, err: content.ErrMalformedVariable},
 		{name: "unknown variable", c: withSMS(cntUnknownSMS), l: exampleLongest, err: content.ErrUnknownVariable},
+		// REQ-LNG-01 C3, C4: the English version is measured with the SAME longest values and
+		// reported in EN; the Turkish fields are unchanged; without en there is no EN.
+		{name: "English version is measured with the same longest values", c: bi(cntOKSMS, "Hi {{first_name}}, "+strings.Repeat("b", 100), "Your cart: {{city}}"), l: exampleLongest,
+			want: content.WorstCase{SMSRunes: 160, SubjectRunes: 42, EN: &content.WorstCaseLang{SMSRunes: 155, SubjectRunes: 19}}},
+		{name: "English over-limit content is still measured", c: bi(cntOKSMS, "{{first_name}}"+strings.Repeat("b", 111), "Subject"), l: exampleLongest,
+			want: content.WorstCase{SMSRunes: 160, SubjectRunes: 42, EN: &content.WorstCaseLang{SMSRunes: 161, SubjectRunes: 7}}},
+		{name: "English empty-audience fallback is measured with the same set", c: bi(cntOKSMS, "{{first_name}}", "{{last_name}}"), l: emptyLongest,
+			want: content.WorstCase{SMSRunes: 128, SubjectRunes: 42, EN: &content.WorstCaseLang{SMSRunes: 18, SubjectRunes: 0}}},
+		{name: "malformed variable in the English SMS", c: bi(cntOKSMS, "Hi {{first_name", "Subject"), l: exampleLongest, err: content.ErrMalformedVariable},
+		{name: "unknown variable in the English subject", c: bi(cntOKSMS, "Hi", "{{password}}"), l: exampleLongest, err: content.ErrUnknownVariable},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -589,7 +640,7 @@ func TestMeasureWorstCase(t *testing.T) {
 	}
 }
 
-// REQ-CNT-05 (D37, D39, D46)
+// REQ-CNT-05 (D37, D39, D46), REQ-LNG-01 C6
 // CheckWorstCase is the approval-time re-check: same substitution, only sms.body <= 160 and
 // email.subject <= 80, codes *_worst_case matching both the length sentinel and
 // ErrWorstCaseTooLong; email.body is not re-checked.
@@ -617,6 +668,22 @@ func TestCheckWorstCase(t *testing.T) {
 			},
 			sentinels: []error{content.ErrSMSTooLong, content.ErrSubjectTooLong, content.ErrWorstCaseTooLong}},
 		{name: "email body over 5000 is not re-checked at approval", c: withBody("{{city}}" + strings.Repeat("c", 4995)), l: content.Longest{FirstName: 18, City: 10}},
+		// REQ-LNG-01 C6: the approval re-check covers the English version with the same codes,
+		// en-prefixed paths and limits 160 / 80.
+		{name: "English version at the boundary passes", c: bi(trNoVarSMS, "{{first_name}}"+strings.Repeat("b", 110), "{{last_name}}"+strings.Repeat("b", 72)), l: exampleLongest},
+		{name: "a longer first name at approval fails the English SMS", c: bi(trNoVarSMS, "{{first_name}}"+strings.Repeat("b", 110), "Subject"), l: longer,
+			want:      []fieldWant{{Path: "en.sms.body", Code: "sms_too_long_worst_case", Limit: ip(160), Actual: ip(161)}},
+			sentinels: []error{content.ErrSMSTooLong, content.ErrWorstCaseTooLong}},
+		{name: "a longer last name at approval fails the English subject", c: bi(trNoVarSMS, "Hi", "{{last_name}}"+strings.Repeat("b", 72)), l: content.Longest{FirstName: 18, LastName: 9},
+			want:      []fieldWant{{Path: "en.email.subject", Code: "subject_too_long_worst_case", Limit: ip(80), Actual: ip(81)}},
+			sentinels: []error{content.ErrSubjectTooLong, content.ErrWorstCaseTooLong}},
+		{name: "Turkish and English failures come in field order", c: bi(cntOKSMS, "{{first_name}}"+strings.Repeat("b", 110), "Subject"), l: longer,
+			want: []fieldWant{
+				{Path: "sms.body", Code: "sms_too_long_worst_case", Limit: ip(160), Actual: ip(161)},
+				{Path: "en.sms.body", Code: "sms_too_long_worst_case", Limit: ip(160), Actual: ip(161)},
+			},
+			sentinels: []error{content.ErrSMSTooLong, content.ErrWorstCaseTooLong}},
+		{name: "English email body over 5000 is not re-checked at approval", c: biBody("{{city}}" + strings.Repeat("c", 4995)), l: content.Longest{FirstName: 18, City: 10}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -686,7 +753,206 @@ func TestRenderEmailHTML_EscapesAndUsesOnlyTheSkeleton(t *testing.T) {
 	}
 }
 
+// ---- language (P8) ----
+
+// REQ-LNG-01 C7, C8
+// The language constants and the English first-name fallback.
+func TestLanguageConstants(t *testing.T) {
+	t.Parallel()
+	got := []string{content.LangTR, content.LangEN, content.FirstNameFallbackEN}
+	if diff := cmp.Diff([]string{"tr", "en", "Dear customer"}, got); diff != "" {
+		t.Fatalf("constants mismatch (-want +got):\n%s", diff)
+	}
+	if n := content.RuneCount(content.FirstNameFallbackEN); n != 13 {
+		t.Fatalf("RuneCount(FirstNameFallbackEN) = %d, want 13", n)
+	}
+}
+
+// REQ-LNG-01 C2, C3
+// Validate checks the English version with the same rules as the Turkish one: fields
+// en.sms.body, en.email.subject, en.email.body; the same codes, limits and priority (one error per
+// field); length after substitution with the campaign's single set of longest values; errors in the
+// order sms.body, email.subject, email.body, en.sms.body, en.email.subject, en.email.body.
+func TestValidate_English(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		c        content.Content
+		l        content.Longest
+		want     []fieldWant // nil => valid
+		sentinel error
+	}{
+		{name: "valid English version is accepted", c: bi(cntOKSMS, "Hi {{first_name}}, your cart is waiting.", "Your cart is waiting"), l: exampleLongest},
+		{name: "content without en is valid as today", c: cntOK(), l: exampleLongest},
+		{name: "160-char English SMS is accepted", c: bi(cntOKSMS, strings.Repeat("a", 160), "Subject"), l: exampleLongest},
+		{name: "161-char English SMS is rejected", c: bi(cntOKSMS, strings.Repeat("a", 161), "Subject"), l: exampleLongest,
+			want: []fieldWant{{"en.sms.body", "sms_too_long", ip(160), ip(161)}}, sentinel: content.ErrSMSTooLong},
+		{name: "80-char English subject is accepted", c: bi(cntOKSMS, "Hi", strings.Repeat("s", 80)), l: exampleLongest},
+		{name: "81-char English subject is rejected", c: bi(cntOKSMS, "Hi", strings.Repeat("s", 81)), l: exampleLongest,
+			want: []fieldWant{{"en.email.subject", "subject_too_long", ip(80), ip(81)}}, sentinel: content.ErrSubjectTooLong},
+		{name: "5000-char English body is accepted", c: biBody(strings.Repeat("e", 5000)), l: exampleLongest},
+		{name: "5001-char English body is rejected", c: biBody(strings.Repeat("e", 5001)), l: exampleLongest,
+			want: []fieldWant{{"en.email.body", "email_body_too_long", ip(5000), ip(5001)}}, sentinel: content.ErrEmailBodyTooLong},
+		{name: "English first_name placeholder at 160 after substitution", c: bi(cntOKSMS, "{{first_name}}"+strings.Repeat("b", 110), "Subject"), l: exampleLongest},
+		{name: "English first_name placeholder one over after substitution", c: bi(cntOKSMS, "{{first_name}}"+strings.Repeat("b", 111), "Subject"), l: exampleLongest,
+			want: []fieldWant{{"en.sms.body", "sms_too_long", ip(160), ip(161)}}, sentinel: content.ErrSMSTooLong},
+		{name: "English city placeholder in the subject one over", c: bi(cntOKSMS, "Hi", "{{city}}"+strings.Repeat("b", 73)), l: exampleLongest,
+			want: []fieldWant{{"en.email.subject", "subject_too_long", ip(80), ip(81)}}, sentinel: content.ErrSubjectTooLong},
+		{name: "empty English SMS is required", c: bi(cntOKSMS, "", "Subject"), l: exampleLongest,
+			want: []fieldWant{{Path: "en.sms.body", Code: "required"}}, sentinel: validation.ErrRequired},
+		{name: "whitespace-only English subject is required", c: bi(cntOKSMS, "Hi", " \t "), l: exampleLongest,
+			want: []fieldWant{{Path: "en.email.subject", Code: "required"}}, sentinel: validation.ErrRequired},
+		{name: "empty English body is required", c: biBody(""), l: exampleLongest,
+			want: []fieldWant{{Path: "en.email.body", Code: "required"}}, sentinel: validation.ErrRequired},
+		{name: "unknown variable in the English SMS", c: bi(cntOKSMS, "Your password {{password}}", "Subject"), l: exampleLongest,
+			want: []fieldWant{{Path: "en.sms.body", Code: "unknown_variable"}}, sentinel: content.ErrUnknownVariable},
+		{name: "malformed variable in the English subject", c: bi(cntOKSMS, "Hi", "Hi {{first_name"), l: exampleLongest,
+			want: []fieldWant{{Path: "en.email.subject", Code: "malformed_variable"}}, sentinel: content.ErrMalformedVariable},
+		{name: "unknown variable in a 200-char English SMS reports only unknown_variable", c: bi(cntOKSMS, "{{password}}"+strings.Repeat("a", 200), "Subject"), l: exampleLongest,
+			want: []fieldWant{{Path: "en.sms.body", Code: "unknown_variable"}}, sentinel: content.ErrUnknownVariable},
+		{name: "Turkish errors come before English errors",
+			c: content.Content{
+				SMS:   content.SMS{Body: cntSMS161},
+				Email: content.Email{Subject: "  ", Body: cntOKBody},
+				EN:    &content.English{SMS: content.SMS{Body: strings.Repeat("a", 161)}, Email: content.Email{Subject: "{{x-y}}", Body: ""}},
+			},
+			l: exampleLongest,
+			want: []fieldWant{
+				{Path: "sms.body", Code: "sms_too_long"}, {Path: "email.subject", Code: "required"},
+				{Path: "en.sms.body", Code: "sms_too_long"}, {Path: "en.email.subject", Code: "malformed_variable"}, {Path: "en.email.body", Code: "required"},
+			}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := content.Validate(tc.c, tc.l)
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if tc.sentinel != nil && !errors.Is(err, tc.sentinel) {
+				t.Fatalf("Validate() error = %v, want %v", err, tc.sentinel)
+			}
+			withLengths := tc.want[0].Limit != nil
+			if diff := cmp.Diff(tc.want, project(fieldsOf(t, err), withLengths)); diff != "" {
+				t.Fatalf("field errors mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// REQ-LNG-03 C3, REQ-LNG-01 C7
+// RenderContent picks the language: Recipient.Language "en" and an English version => English text,
+// Rendered.Language "en"; otherwise Turkish with Language "tr"; "en" without an English version is a
+// fallback (Fallback true). The first-name fallback follows the language of the rendered text.
+func TestRenderContent_Language(t *testing.T) {
+	t.Parallel()
+	enSMS, enSubj, enBody := "Hi {{first_name}}, your cart is waiting.", "{{first_name}}, your cart", "Hi {{first_name}},\n\n{{city}} has a 30% discount."
+	bilingual := cntOK()
+	bilingual.EN = &content.English{SMS: content.SMS{Body: enSMS}, Email: content.Email{Subject: enSubj, Body: enBody}}
+	fill := func(tmpl, first, city string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(tmpl, "{{first_name}}", first), "{{city}}", city)
+	}
+	tests := []struct {
+		name string
+		c    content.Content
+		r    content.Recipient
+		want content.Rendered
+	}{
+		{name: "en recipient with an English version gets English", c: bilingual, r: content.Recipient{FirstName: " Ayşe ", City: "İzmir", Language: "en"},
+			want: content.Rendered{SMSText: fill(enSMS, "Ayşe", "İzmir"), EmailSubject: fill(enSubj, "Ayşe", "İzmir"), EmailText: fill(enBody, "Ayşe", "İzmir"), Language: "en"}},
+		{name: "en recipient with an empty first name gets Dear customer", c: bilingual, r: content.Recipient{City: "Bursa", Language: "en"},
+			want: content.Rendered{SMSText: fill(enSMS, "Dear customer", "Bursa"), EmailSubject: fill(enSubj, "Dear customer", "Bursa"), EmailText: fill(enBody, "Dear customer", "Bursa"), Language: "en"}},
+		{name: "tr recipient gets Turkish", c: bilingual, r: content.Recipient{FirstName: "Ayşe", City: "İzmir", Language: "tr"},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Ayşe", "İzmir"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Ayşe", "İzmir"), Language: "tr"}},
+		{name: "unset language gets Turkish", c: bilingual, r: content.Recipient{FirstName: "Ayşe", City: "İzmir"},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Ayşe", "İzmir"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Ayşe", "İzmir"), Language: "tr"}},
+		{name: "en recipient without an English version falls back to Turkish", c: cntOK(), r: content.Recipient{FirstName: "", City: "İzmir", Language: "en"},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Değerli müşterimiz", "İzmir"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Değerli müşterimiz", "İzmir"), Language: "tr", Fallback: true}},
+		{name: "tr recipient of a Turkish-only version is no fallback", c: cntOK(), r: content.Recipient{FirstName: "Ali", City: "Konya", Language: "tr"},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Ali", "Konya"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Ali", "Konya"), Language: "tr"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := content.RenderContent(tc.c, tc.r)
+			if err != nil {
+				t.Fatalf("RenderContent() error = %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatalf("RenderContent() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// REQ-LNG-03 C2
+// RenderEmailHTMLLang sets the document language: lang="en" for English, lang="tr" for Turkish;
+// RenderEmailHTML is RenderEmailHTMLLang("tr", …) byte for byte. English text is escaped the same way.
+func TestRenderEmailHTMLLang(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		lang     string
+		subject  string
+		body     string
+		contains []string
+		absent   []string
+	}{
+		{name: "English document", lang: "en", subject: "Your cart", body: "Hi Ayşe,\n\nYour cart is waiting.", contains: []string{`<html lang="en">`}, absent: []string{`lang="tr"`}},
+		{name: "Turkish document", lang: "tr", subject: "Sepetin", body: "Merhaba Ayşe", contains: []string{`<html lang="tr">`}, absent: []string{`lang="en"`}},
+		{name: "English text is escaped", lang: "en", subject: "<i>Cart</i>", body: "<script>alert('xss')</script> & more",
+			contains: []string{`<html lang="en">`, "&lt;i&gt;Cart&lt;/i&gt;", "&lt;script&gt;", "&amp; more"}, absent: []string{"<script", "<i>"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := content.RenderEmailHTMLLang(tc.lang, tc.subject, tc.body)
+			for _, s := range tc.contains {
+				if !strings.Contains(out, s) {
+					t.Fatalf("output lacks %q: %s", s, out)
+				}
+			}
+			for _, s := range tc.absent {
+				if strings.Contains(out, s) {
+					t.Fatalf("output contains %q: %s", s, out)
+				}
+			}
+		})
+	}
+	t.Run("RenderEmailHTML equals the tr variant byte for byte", func(t *testing.T) {
+		t.Parallel()
+		subject, body := "Sepetin seni bekliyor", "Merhaba Ayşe,\n\n<b>%30</b> indirim & fırsat"
+		if a, b := content.RenderEmailHTML(subject, body), content.RenderEmailHTMLLang("tr", subject, body); a != b {
+			t.Fatalf("RenderEmailHTML() != RenderEmailHTMLLang(\"tr\"):\n%s\n%s", a, b)
+		}
+		if out := content.RenderEmailHTML(subject, body); !strings.Contains(out, `<html lang="tr">`) {
+			t.Fatalf("RenderEmailHTML() lacks <html lang=\"tr\">: %s", out)
+		}
+	})
+}
+
 // ---- helpers ----
+
+// trNoVarSMS is a Turkish SMS without variables: its length does not depend on Longest.
+const trNoVarSMS = "Merhaba, sepetindeki ürünler seni bekliyor."
+
+// bi is a bilingual content: Turkish SMS trSMS with the CNT_OK email, and an English version with
+// enSMS, enSubject and a short English body.
+func bi(trSMS, enSMS, enSubject string) content.Content {
+	c := withSMS(trSMS)
+	c.EN = &content.English{SMS: content.SMS{Body: enSMS}, Email: content.Email{Subject: enSubject, Body: "Hi {{first_name}}, your cart is waiting."}}
+	return c
+}
+
+// biBody is CNT_OK with a valid English SMS and subject and the English email body enBody.
+func biBody(enBody string) content.Content {
+	c := bi(cntOKSMS, "Hi {{first_name}}", "Your cart")
+	c.EN.Email.Body = enBody
+	return c
+}
 
 func sp(s string) *string { return &s }
 

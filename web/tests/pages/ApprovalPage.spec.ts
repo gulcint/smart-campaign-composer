@@ -35,6 +35,7 @@ interface Setup {
   approve?: () => unknown
   send?: () => unknown
   cancelSchedule?: () => unknown
+  previewImpl?: () => unknown
 }
 
 async function mountApproval(s: Setup) {
@@ -44,7 +45,7 @@ async function mountApproval(s: Setup) {
       s.cancelSchedule
         ? s.cancelSchedule()
         : { campaign_id: CAMPAIGN_ID, state: 'approved', scheduled_at: null },
-    [`GET ${C}/preview`]: () => preview(),
+    [`GET ${C}/preview`]: () => (s.previewImpl ? s.previewImpl() : preview()),
     [`POST ${C}/approve`]: () =>
       s.approve ? s.approve() : campaign('approved', s.camp.value.latest_content_version),
     [`POST ${C}/send`]: () =>
@@ -71,6 +72,34 @@ async function openAndConfirm(w: VueWrapper, button: string) {
   q('confirm-dialog-confirm')?.click()
   await flushPromises()
 }
+
+// REQ-LNG-04 C4: preview-language and preview-fallback-note live only in ContentPage's preview area.
+describe('ApprovalPage preview language (REQ-LNG-04 C4)', () => {
+  it('has no preview-language group and no preview-fallback-note, even for a fallback preview', async () => {
+    const en = {
+      sms: { body: 'Hi {{first_name}}' },
+      email: { subject: 'Your cart', body: 'Hi {{first_name}}' },
+    }
+    const { w } = await mountApproval({
+      camp: {
+        value: campaign('content_ready', version(V1, 1, { ...version().content, en } as never)),
+      },
+      previewImpl: () => {
+        const p = preview() as unknown as Record<string, unknown>
+        return {
+          ...p,
+          language: 'tr',
+          fallback: true,
+          customer: { ...(p.customer as Record<string, unknown>), language: 'en' },
+        }
+      },
+    })
+    await flushPromises()
+    expect(w.find(sel('page-approval')).exists()).toBe(true)
+    expect(w.find(sel('preview-language')).exists()).toBe(false)
+    expect(w.find(sel('preview-fallback-note')).exists()).toBe(false)
+  })
+})
 
 describe('ApprovalPage (REQ-APR-01)', () => {
   it('shows the latest version, the channel audiences and requests a preview', async () => {

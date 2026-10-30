@@ -434,7 +434,7 @@ func (h *harness) setCustomerColumn(t *testing.T, id, column, value string) {
 
 // ---- tests ----
 
-// REQ-CNT-04, REQ-AI-01, REQ-CNT-05
+// REQ-CNT-04, REQ-AI-01, REQ-CNT-05, REQ-LNG-02 C1, C4
 // A successful generation persists the version BEFORE the validated event is emitted: inside the
 // emit callback of the terminal event the campaign already reports it as latest_content_version
 // and state content_ready. The version is validated, source llm, and its worst case is measured
@@ -476,8 +476,15 @@ func TestService_ValidatedVersionIsStoredBeforeTheEvent(t *testing.T) {
 	if v.Attempt != 1 || v.VersionNumber != 1 {
 		t.Fatalf("validated attempt/version_number = %d/%d, want 1/1", v.Attempt, v.VersionNumber)
 	}
-	if diff := cmp.Diff(okContent(), v.Content); diff != "" {
-		t.Fatalf("validated content mismatch (-want +got):\n%s", diff)
+	// REQ-LNG-02 C1, C4: the example audience has English recipients, so the mock returns CNT_OK_EN:
+	// the Turkish part is CNT_OK and an English version is present.
+	if v.Content.EN == nil {
+		t.Fatalf("validated content has no English version; the example audience has en recipients")
+	}
+	trOnly := v.Content
+	trOnly.EN = nil
+	if diff := cmp.Diff(okContent(), trOnly); diff != "" {
+		t.Fatalf("validated Turkish content mismatch (-want +got):\n%s", diff)
 	}
 	if seenInEmit == nil || seenInEmit.LatestContentVersion == nil || seenInEmit.LatestContentVersion.ID != v.ContentVersionID {
 		t.Fatalf("while emitting validated, latest_content_version = %+v, want the new version %s", seenInEmit, v.ContentVersionID)
@@ -494,12 +501,21 @@ func TestService_ValidatedVersionIsStoredBeforeTheEvent(t *testing.T) {
 	if len(lv.ValidationErrors) != 0 {
 		t.Fatalf("validated version has validation errors %+v", lv.ValidationErrors)
 	}
-	wantWC, err := content.MeasureWorstCase(okContent(), c.Segment.LongestValues)
+	wantWC, err := content.MeasureWorstCase(v.Content, c.Segment.LongestValues)
 	if err != nil {
 		t.Fatalf("MeasureWorstCase() error = %v", err)
 	}
-	if lv.WorstCase == nil || *lv.WorstCase != wantWC || v.WorstCase != wantWC {
-		t.Fatalf("worst case (version %v, event %+v), want %+v", lv.WorstCase, v.WorstCase, wantWC)
+	if wantWC.EN == nil {
+		t.Fatalf("MeasureWorstCase(CNT_OK_EN) has no EN measurement")
+	}
+	if lv.WorstCase == nil {
+		t.Fatalf("version worst case = nil, want %+v", wantWC)
+	}
+	if diff := cmp.Diff(wantWC, *lv.WorstCase); diff != "" {
+		t.Fatalf("version worst case mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantWC, v.WorstCase); diff != "" {
+		t.Fatalf("event worst case mismatch (-want +got):\n%s", diff)
 	}
 	if c.Segment.LongestValues != h.m.ExampleBrief.LongestValues {
 		t.Fatalf("segment longest_values = %+v, want the manifest's %+v", c.Segment.LongestValues, h.m.ExampleBrief.LongestValues)
@@ -1615,7 +1631,7 @@ func TestService_PreviewUnknownVersionWithoutSegment(t *testing.T) {
 	}
 }
 
-// REQ-CNT-05, REQ-APR-03 (openapi approveContent check 6, D37)
+// REQ-CNT-05, REQ-APR-03 (openapi approveContent check 6, D37), REQ-LNG-01 C6
 // The approval re-checks the worst case with the longest values of the customers matched by the
 // rule NOW (before consent): content validated at the 160/80 boundary, then a matched customer gets
 // a longer first_name (or last_name) => Approve is a *validation.Error with
@@ -1668,6 +1684,45 @@ func TestService_ApproveRechecksWorstCaseWithCurrentCustomers(t *testing.T) {
 			},
 			value:  func(l content.Longest) string { return strings.Repeat("Ğ", l.LastName+1) },
 			path:   "email.subject",
+			code:   validation.CodeSubjectTooLongWorstCase,
+			limit:  80,
+			actual: 81,
+			match:  []error{content.ErrSubjectTooLong, content.ErrWorstCaseTooLong},
+		},
+		// REQ-LNG-01 C6: the approval re-check covers the English version (en-prefixed paths).
+		{
+			name:   "longer first name breaks the English SMS",
+			column: "first_name",
+			prepare: func(t *testing.T, h *harness, id string, l content.Longest) string {
+				c := editContent("en")
+				c.EN = &content.English{SMS: content.SMS{Body: "{{first_name}}" + strings.Repeat("b", 160-l.FirstName)}, Email: content.Email{Subject: "Your cart", Body: "Hi {{first_name}}"}}
+				v := h.edit(t, id, campaign.ExpectedVersionNone, c)
+				if v.WorstCase == nil || v.WorstCase.EN == nil || v.WorstCase.EN.SMSRunes != 160 {
+					t.Fatalf("setup: English worst case = %+v, want sms_runes 160 at the boundary", v.WorstCase)
+				}
+				return v.ID
+			},
+			value:  func(l content.Longest) string { return strings.Repeat("Ş", l.FirstName+1) },
+			path:   "en.sms.body",
+			code:   validation.CodeSMSTooLongWorstCase,
+			limit:  160,
+			actual: 161,
+			match:  []error{content.ErrSMSTooLong, content.ErrWorstCaseTooLong},
+		},
+		{
+			name:   "longer last name breaks the English subject",
+			column: "last_name",
+			prepare: func(t *testing.T, h *harness, id string, l content.Longest) string {
+				c := editContent("en")
+				c.EN = &content.English{SMS: content.SMS{Body: "Hi"}, Email: content.Email{Subject: "{{last_name}}" + strings.Repeat("b", 80-l.LastName), Body: "Hi {{first_name}}"}}
+				v := h.edit(t, id, campaign.ExpectedVersionNone, c)
+				if v.WorstCase == nil || v.WorstCase.EN == nil || v.WorstCase.EN.SubjectRunes != 80 {
+					t.Fatalf("setup: English worst case = %+v, want subject_runes 80 at the boundary", v.WorstCase)
+				}
+				return v.ID
+			},
+			value:  func(l content.Longest) string { return strings.Repeat("Ğ", l.LastName+1) },
+			path:   "en.email.subject",
 			code:   validation.CodeSubjectTooLongWorstCase,
 			limit:  80,
 			actual: 81,

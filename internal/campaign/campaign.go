@@ -336,6 +336,9 @@ type PreviewQuery struct {
 	CustomerID       string
 	ContentVersionID string
 	SampleIndex      int
+	// Language (P8, D63): "" = the sample customer's own language, or "tr" | "en". Anything else =>
+	// *validation.Error {Path: "query.language", Code: "invalid_value"}.
+	Language string
 }
 
 type PreviewCustomer struct {
@@ -343,6 +346,7 @@ type PreviewCustomer struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	City      string `json:"city"`
+	Language  string `json:"language"` // P8: customers.language
 }
 
 type PreviewSMS struct {
@@ -367,6 +371,8 @@ type Preview struct {
 	SampleIndex      int             `json:"sample_index"`
 	SampleCount      int             `json:"sample_count"`
 	Customer         PreviewCustomer `json:"customer"`
+	Language         string          `json:"language"` // P8: language of the shown text (content.Rendered.Language)
+	Fallback         bool            `json:"fallback"` // P8: content.Rendered.Fallback
 	SMS              PreviewSMS      `json:"sms"`
 	Email            PreviewEmail    `json:"email"`
 }

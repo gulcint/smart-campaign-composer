@@ -274,7 +274,7 @@ func (d *Dispatcher) process(ctx context.Context, job Job) error {
 	} else {
 		msg.Subject = rendered.EmailSubject
 		msg.Text = rendered.EmailText
-		msg.HTML = content.RenderEmailHTML(rendered.EmailSubject, rendered.EmailText)
+		msg.HTML = content.RenderEmailHTMLLang(rendered.Language, rendered.EmailSubject, rendered.EmailText)
 	}
 
 	waitStart := d.deps.Clock.Now()
