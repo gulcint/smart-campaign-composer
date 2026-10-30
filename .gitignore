@@ -45,3 +45,6 @@ pgdata/
 # --- Logs ---
 *.log
 logs/
+
+# Playwright MCP session output (snapshots, console logs)
+.playwright-mcp/
