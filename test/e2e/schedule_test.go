@@ -8,6 +8,8 @@ package e2e_test
 // and canceled in t.Cleanup. Helpers carry a sch prefix.
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -48,6 +50,46 @@ func schParse(t *testing.T, name string, v any) time.Time {
 	return ts
 }
 
+// schCancelIfScheduled runs in t.Cleanup, where t.Context() is already canceled: it uses its own
+// short context derived from context.Background. If the campaign is still scheduled the plan is
+// canceled with DELETE /schedule; failures are reported but never panic the cleanup.
+func schCancelIfScheduled(t *testing.T, api, id string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	do := func(method, url string) (int, []byte, error) {
+		req, err := http.NewRequestWithContext(ctx, method, url, nil)
+		if err != nil {
+			return 0, nil, err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, nil, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, err := io.ReadAll(resp.Body)
+		return resp.StatusCode, b, err
+	}
+	status, body, err := do(http.MethodGet, api+"/api/campaigns/"+id)
+	if err != nil || status != http.StatusOK {
+		t.Errorf("cleanup: GET campaign %s = %d, %v; body: %s", id, status, err, body)
+		return
+	}
+	var c struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(body, &c); err != nil {
+		t.Errorf("cleanup: decode campaign %s: %v", id, err)
+		return
+	}
+	if c.State != "scheduled" {
+		return
+	}
+	if status, body, err := do(http.MethodDelete, api+"/api/campaigns/"+id+"/schedule"); err != nil || status != http.StatusOK {
+		t.Errorf("cleanup: DELETE schedule of %s = %d, %v; body: %s", id, status, err, body)
+	}
+}
+
 // schMustSchedule plans the campaign at at (sent with the TSİ offset) and checks the 202 body; the
 // plan is canceled in t.Cleanup if the campaign is still scheduled.
 func schMustSchedule(t *testing.T, api, id, vid string, at time.Time) map[string]any {
@@ -56,11 +98,7 @@ func schMustSchedule(t *testing.T, api, id, vid string, at time.Time) map[string
 	if status != http.StatusAccepted {
 		t.Fatalf("POST send with scheduled_at status = %d, want 202; body: %s", status, body)
 	}
-	t.Cleanup(func() {
-		if c := getCampaignDoc(t, api, id); c.State == "scheduled" {
-			doJSON(t, http.MethodDelete, api+"/api/campaigns/"+id+"/schedule", nil, nil)
-		}
-	})
+	t.Cleanup(func() { schCancelIfScheduled(t, api, id) })
 	obj := decodeObject(t, body)
 	if diff := cmp.Diff(sndAcceptedKeys, sortedKeys(obj)); diff != "" {
 		t.Fatalf("scheduled 202 keys mismatch (-want +got):\n%s", diff)
@@ -324,7 +362,9 @@ func TestE2E_Schedule_ScheduledCampaignIsLocked(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
 	m := readManifest(t)
-	id, vid := sndApprovedEmpty(t, api, m)
+	// The example campaign (matched customers), like TestE2E_Preview: an empty audience has no sample
+	// customer to preview. It is never sent: the plan is 5 h ahead and canceled in t.Cleanup.
+	id, vid := sndApprovedExample(t, api, m)
 	at := schServerNow(t, api).Add(5 * time.Hour).Truncate(time.Second)
 	schMustSchedule(t, api, id, vid, at)
 	versions := len(listVersions(t, api, id))
