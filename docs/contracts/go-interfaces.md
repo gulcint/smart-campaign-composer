@@ -290,9 +290,25 @@ type Audience struct {
 	Matched int `json:"matched"`
 	SMS     int `json:"sms"`
 	Email   int `json:"email"`
+	// P8 (D63): per-channel split by customers.language; tr + en == the channel count. nil only for a
+	// campaign whose segment was generated before P8 (campaigns.audience_languages IS NULL).
+	Languages *AudienceLanguages `json:"languages,omitempty"`
+}
+type AudienceLanguages struct {
+	SMS   LanguageCounts `json:"sms"`
+	Email LanguageCounts `json:"email"`
+}
+type LanguageCounts struct {
+	TR int `json:"tr"`
+	EN int `json:"en"`
 }
 
+// WantsEnglish reports whether an English version is worth generating: Languages != nil and
+// SMS.EN + Email.EN > 0 (REQ-LNG-02).
+func (a Audience) WantsEnglish() bool
+
 // Counter counts the audience of a valid rule at ref (channel consent applied, segment-dsl.md §6).
+// P8: it also fills Audience.Languages (the same per-channel population split by customers.language, same query).
 // Implemented by postgres.NewAudience.
 type Counter interface {
 	Count(ctx context.Context, r Rule, ref time.Time) (Audience, error)
@@ -309,11 +325,22 @@ const (
 	SubjectMaxRunes   = 80
 	EmailBodyMaxRunes = 5000
 	FirstNameFallback = "Değerli müşterimiz"
+	// P8 (D63)
+	FirstNameFallbackEN = "Dear customer" // 13 runes
+	LangTR              = "tr"
+	LangEN              = "en"
 )
 
 var AllowedVariables = []string{"first_name", "last_name", "city"}
 
+// Content: SMS and Email are the Turkish main copy. EN (P8, D63) is the optional English version for
+// English-speaking customers; nil = no English version (every pre-P8 document and fixture).
 type Content struct {
+	SMS   SMS      `json:"sms"`
+	Email Email    `json:"email"`
+	EN    *English `json:"en,omitempty"`
+}
+type English struct {
 	SMS   SMS   `json:"sms"`
 	Email Email `json:"email"`
 }
@@ -331,11 +358,17 @@ type Email struct {
 // "html"). Parse does NOT enforce the schema's `minLength: 1`: an empty string is structurally valid
 // and is reported by Validate as `required` (README §5.2), never as schema_violation. Strings are
 // NFC-normalized and otherwise stored as given (no trimming). On a Parse error Validate is not run.
+// P8: the optional "en" object must be complete; "en": null, a missing en.sms / en.email / en.email.subject
+// key or an unknown key inside "en" are schema_violation at that path ("en", "en.sms", "en.email.subject", "en.html").
 // Errors: *validation.Error matching validation.ErrInvalidJSON / ErrSchemaViolation.
 func Parse(raw []byte) (Content, error)
 
 // Validate is THE validator for both LLM output and human edits (REQ-APR-02, REQ-CNT-01).
 // l = longest values of the campaign's CURRENT segment (Campaign.Segment.LongestValues).
+// P8: when c.EN != nil the same checks run for en.sms.body, en.email.subject, en.email.body (paths with the
+// "en." prefix, same codes and limits) AFTER the three Turkish fields; both language versions use the SAME
+// Longest (language independent). The returned FieldError order is: sms.body, email.subject, email.body,
+// en.sms.body, en.email.subject, en.email.body.
 // Checks per field, in order sms.body, email.subject, email.body:
 //   required (present but empty after TrimSpace) -> malformed_variable -> unknown_variable -> length.
 // At most ONE FieldError per field (the first that applies); the returned order is the field order
@@ -351,6 +384,11 @@ func Validate(c Content, l Longest) error
 // WorstCase are the post-substitution lengths reported on every content version whose template
 // syntax is valid (API field ContentVersion.worst_case).
 type WorstCase struct {
+	SMSRunes     int            `json:"sms_runes"`
+	SubjectRunes int            `json:"subject_runes"`
+	EN           *WorstCaseLang `json:"en,omitempty"` // P8: nil iff Content.EN == nil
+}
+type WorstCaseLang struct {
 	SMSRunes     int `json:"sms_runes"`
 	SubjectRunes int `json:"subject_runes"`
 }
@@ -381,21 +419,35 @@ func Variables(tmpl string) ([]string, error)
 
 type Recipient struct {
 	FirstName, LastName, City string
+	// Language is customers.language ("tr" | "en"; "" is treated as "tr"). P8 (D63).
+	Language string
 }
 
 // EffectiveFirstName returns strings.TrimSpace(s), or FirstNameFallback if that is empty.
+// It is the Turkish form; EffectiveFirstNameLang is the P8 language-aware one.
 func EffectiveFirstName(s string) string
 
-// Render substitutes {{first_name}} (EffectiveFirstName), {{last_name}} and {{city}} (raw,
-// possibly empty). Errors: ErrMalformedVariable, ErrUnknownVariable.
+// EffectiveFirstNameLang is EffectiveFirstName with the fallback by language: FirstNameFallbackEN for
+// lang == LangEN, FirstNameFallback otherwise.
+func EffectiveFirstNameLang(s, lang string) string
+
+// Render substitutes {{first_name}} (EffectiveFirstNameLang(r.FirstName, r.Language)), {{last_name}} and
+// {{city}} (raw, possibly empty). Errors: ErrMalformedVariable, ErrUnknownVariable.
 func Render(tmpl string, r Recipient) (string, error)
 
 type Rendered struct {
 	SMSText      string
 	EmailSubject string
 	EmailText    string
+	// P8 (D63): language of the rendered text ("tr" | "en") and whether English was wanted but the
+	// content has no English version (the Turkish main copy was used).
+	Language string
+	Fallback bool
 }
 
+// RenderContent picks the language version for r: r.Language == "en" and c.EN != nil => the English
+// version (Rendered.Language "en"); otherwise the Turkish main copy (Language "tr"); r.Language == "en"
+// with c.EN == nil sets Fallback = true. The fallback first name follows the USED text's language.
 func RenderContent(c Content, r Recipient) (Rendered, error)
 
 // CheckRendered is the per-recipient send-time check (REQ-CNT-05):
@@ -424,6 +476,8 @@ func CheckWorstCase(c Content, l Longest) error
 //   <!doctype html><html lang="tr"><head><meta charset="utf-8">
 //   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
 //   <title>{subject}</title></head><body style="{emailBodyStyle}"><p>{paragraph}</p>...</body></html>
+// P8: RenderEmailHTML(subject, bodyText) is RenderEmailHTMLLang("tr", subject, bodyText) (byte-identical to
+// the pre-P8 output). RenderEmailHTMLLang writes lang="en" for "en" and lang="tr" for anything else.
 // emailBodyStyle is one constant inline style (never built from content) that mirrors the editor
 // field: margin:0;padding:0 16px; font-family 'Figtree Variable',Figtree,system-ui,…,sans-serif
 // (no font download: the document CSP has no font-src); 16px/24px; color #241c20 on #fcfcf9.
@@ -432,6 +486,9 @@ func CheckWorstCase(c Content, l Longest) error
 // Every text fragment is escaped with html.EscapeString; the output never contains a tag that
 // was not produced by this skeleton (no "<script", no "<a", no attributes from content).
 func RenderEmailHTML(subject, bodyText string) string
+
+// RenderEmailHTMLLang is RenderEmailHTML with <html lang="..."> by language (P8, D63).
+func RenderEmailHTMLLang(lang, subject, bodyText string) string
 ```
 
 **Değişken söz dizimi tablosu** (`Variables` → `Validate`; boşluk = yalnız U+0020 ve U+0009):
@@ -515,6 +572,11 @@ const (
 // against the FULL schemas (schemas/*.schema.json) via segment.Parse / content.Parse.
 func ToolSchema(name string) (json.RawMessage, error)
 
+// ContentToolSchema returns the content tool's strict input_schema: false => schemas/llm/content.tool.json
+// (same bytes as ToolSchema(ToolEmitCampaignContent)), true => schemas/llm/content-en.tool.json (bilingual,
+// `en` required; P8, D63). Both obey the strict rules of llm-tools.md §1.1.
+func ContentToolSchema(includeEnglish bool) json.RawMessage
+
 // Client is one LLM attempt; validation and repair live in internal/composer.
 type Client interface {
 	// GenerateSegment returns the raw emit_segment_rule tool input (JSON bytes, possibly invalid).
@@ -541,12 +603,15 @@ type ContentRequest struct {
 	Brief    string
 	Rule     json.RawMessage  // stored segment rule, for context
 	Longest  content.Longest  // current segment's longest values; told to the model as length budget
+	// IncludeEnglish (P8, D63): ask for the bilingual tool (ContentToolSchema(true)). Set by composer
+	// from segment.Audience.WantsEnglish(); the same value is used for the repair attempt.
+	IncludeEnglish bool
 	Attempt  int
 	Previous *Repair
 }
 
 type ContentChunk struct {
-	Path string // "sms.body" | "email.subject" | "email.body"
+	Path string // "sms.body" | "email.subject" | "email.body" | (IncludeEnglish) "en.sms.body" | "en.email.subject" | "en.email.body"
 	Text string // non-empty
 }
 
@@ -687,6 +752,8 @@ type ContentOutcome struct {
 type ContentSession struct{ /* unexported */ }
 
 // OpenContent starts attempt 1. req.Longest is used both as model hint and for content.Validate.
+// P8 (D63): the caller sets req.IncludeEnglish = campaign.Segment.Audience.WantsEnglish(); the value is kept
+// for the repair attempt, and Run's validation covers the English version when present.
 // Errors: llm.ErrUnavailable, ctx errors (=> HTTP 502 / no stream).
 func OpenContent(ctx context.Context, c llm.Client, req llm.ContentRequest) (*ContentSession, error)
 
@@ -981,6 +1048,9 @@ type PreviewQuery struct {
 	CustomerID       string
 	ContentVersionID string
 	SampleIndex      int
+	// Language (P8, D63): "" = the sample customer's own language, or "tr" | "en". Anything else =>
+	// *validation.Error {Path: "query.language", Code: "invalid_value"}.
+	Language string
 }
 
 type PreviewCustomer struct {
@@ -988,6 +1058,7 @@ type PreviewCustomer struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	City      string `json:"city"`
+	Language  string `json:"language"` // P8: customers.language
 }
 type PreviewSMS struct {
 	Text        string `json:"text"`
@@ -1009,6 +1080,8 @@ type Preview struct {
 	SampleIndex      int             `json:"sample_index"`
 	SampleCount      int             `json:"sample_count"`
 	Customer         PreviewCustomer `json:"customer"`
+	Language         string          `json:"language"` // P8: language of the shown text (content.Rendered.Language)
+	Fallback         bool            `json:"fallback"` // P8: content.Rendered.Fallback
 	SMS              PreviewSMS      `json:"sms"`
 	Email            PreviewEmail    `json:"email"`
 }
@@ -1313,7 +1386,7 @@ type Job struct {
 	Channel        Channel
 	To             string // CURRENT phone (sms) or email (email) re-read from customers at claim time; "" if NULL. NEVER logged
 	Consent        bool   // CURRENT channel opt-in (sms_opt_in / email_opt_in) re-read at claim time
-	Recipient      content.Recipient
+	Recipient      content.Recipient // P8: Language = customers.language, re-read at claim time
 	Content        content.Content // approved version template
 	Attempts       int             // after this claim
 	FailedAttempts int
@@ -1437,6 +1510,8 @@ func (d *Dispatcher) Leader() bool
 // one channel MUST pass the same RateLimiter instance to all of them. For each job, in this order:
 //   1. !job.Consent || job.To == ""  => MarkFailed(recipient_unavailable, LastError "recipient_unavailable"),
 //      NO provider call, NO limiter permit (REQ-AUD-04 at send time);
+//   (P8, D63: Job.Recipient.Language = customers.language re-read at claim time; RenderContent picks the
+//   language version, the email HTML uses content.RenderEmailHTMLLang(rendered.Language, ...).)
 //   2. content.RenderContent + content.CheckRendered fails => MarkFailed(content_too_long,
 //      LastError "content_too_long"), NO provider call, NO limiter permit (REQ-CNT-05);
 //   3. Limiter.Wait -> Provider.Send -> Policy.Next -> Store.MarkSent / ScheduleRetry / MarkFailed.
@@ -1478,7 +1553,7 @@ type Message struct {
 	SMSBody    string            // sms
 	Subject    string            // email
 	Text       string            // email plain text
-	HTML       string            // email html (content.RenderEmailHTML)
+	HTML       string            // email html (content.RenderEmailHTMLLang(rendered.Language, ...) since P8)
 }
 
 type Response struct {
