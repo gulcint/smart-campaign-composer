@@ -13,6 +13,7 @@ import (
 
 	"github.com/gulcint/smart-campaign-composer/internal/campaign"
 	"github.com/gulcint/smart-campaign-composer/internal/composer"
+	"github.com/gulcint/smart-campaign-composer/internal/content"
 	"github.com/gulcint/smart-campaign-composer/internal/sse"
 	"github.com/gulcint/smart-campaign-composer/internal/validation"
 )
@@ -283,6 +284,10 @@ func (a *api) previewContent(w http.ResponseWriter, r *http.Request) {
 	n, ok := intQuery(query.Get("sample_index"), 0, 0, -1)
 	if !ok {
 		fields = append(fields, invalidQuery("sample_index", "sample_index must be a non-negative integer"))
+	}
+	// P8 (D63): optional language tr | en; absent = the sample customer's own language.
+	if q.Language = query.Get("language"); query.Has("language") && q.Language != content.LangTR && q.Language != content.LangEN {
+		fields = append(fields, invalidQuery("language", "language must be tr or en"))
 	}
 	if len(fields) > 0 {
 		writeFieldError(w, r, http.StatusUnprocessableEntity, "validation_failed", "request validation failed", fields)

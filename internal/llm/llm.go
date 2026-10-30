@@ -86,8 +86,11 @@ const (
 // (go:embed cannot reach outside the package directory); `make check-tool-schemas`
 // fails when the copies drift from the contract.
 //
-//go:embed schemas/segment-rule.tool.json schemas/content.tool.json
+//go:embed schemas/segment-rule.tool.json schemas/content.tool.json schemas/content-en.tool.json
 var toolSchemas embed.FS
+
+// contentENToolSchemaFile is the bilingual emit_campaign_content schema (P8, D63; llm-tools.md §1.3).
+const contentENToolSchemaFile = "schemas/content-en.tool.json"
 
 var toolSchemaFiles = map[string]string{
 	ToolEmitSegmentRule:     "schemas/segment-rule.tool.json",
@@ -106,6 +109,21 @@ func ToolSchema(name string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("llm: read tool schema %s: %w", name, err)
 	}
 	return json.RawMessage(b), nil
+}
+
+// ContentToolSchema returns the emit_campaign_content input_schema: content.tool.json (Turkish
+// only, same as ToolSchema(ToolEmitCampaignContent)) or, with includeEnglish, content-en.tool.json
+// (the `en` block required). Both obey the strict rules of llm-tools.md §1.1.
+func ContentToolSchema(includeEnglish bool) json.RawMessage {
+	file := toolSchemaFiles[ToolEmitCampaignContent]
+	if includeEnglish {
+		file = contentENToolSchemaFile
+	}
+	b, err := toolSchemas.ReadFile(file)
+	if err != nil {
+		panic(fmt.Sprintf("llm: embedded tool schema %s: %v", file, err)) // unreachable: go:embed
+	}
+	return json.RawMessage(b)
 }
 
 // Client is one LLM attempt; validation and repair live in internal/composer.
@@ -137,10 +155,14 @@ type ContentRequest struct {
 	Longest  content.Longest // current segment's longest values; told to the model as length budget
 	Attempt  int
 	Previous *Repair
+	// IncludeEnglish (P8, D63): ask for the bilingual tool (ContentToolSchema(true)). Set by the
+	// campaign service (internal/campaign/content.go) from segment.Audience.WantsEnglish(); composer
+	// only carries it and keeps the same value for the repair attempt.
+	IncludeEnglish bool
 }
 
 type ContentChunk struct {
-	Path string // "sms.body" | "email.subject" | "email.body"
+	Path string // "sms.body" | "email.subject" | "email.body" | (IncludeEnglish) "en.sms.body" | "en.email.subject" | "en.email.body"
 	Text string // non-empty
 }
 

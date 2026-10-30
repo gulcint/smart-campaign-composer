@@ -5,21 +5,21 @@
     "users": 5000,
     "ref_time": "2026-01-15T12:00:00Z"
   },
-  "dataset_sha256": "406fed7e0de163eaa6c81698b82c6a2fb03f1d9746c9d05cb77c8a8781e3968b",
+  "dataset_sha256": "8b83f4ffc1e4713720692effccfe7f5a1f36930df3c42212b01bdc4065d30a4d",
   "totals": {
     "customers": 5000,
-    "events": 29551,
+    "events": 29511,
     "events_by_type": {
-      "cart_add": 13272,
-      "purchase": 4348,
-      "page_view": 11931
+      "cart_add": 13254,
+      "purchase": 4341,
+      "page_view": 11916
     }
   },
   "consent": {
-    "both": 2483,
-    "sms_only": 752,
+    "both": 2486,
+    "sms_only": 751,
     "email_only": 735,
-    "none": 1030
+    "none": 1028
   },
   "contact": {
     "missing_phone": 276,
@@ -27,20 +27,20 @@
   },
   "reachable": {
     "matched": 5000,
-    "sms": 3058,
-    "email": 3121
+    "sms": 3060,
+    "email": 3124
   },
   "cities": {
     "Adana": 350,
     "Ankara": 397,
     "Antalya": 407,
     "Bursa": 367,
-    "Eskişehir": 378,
-    "Gaziantep": 376,
+    "Eskişehir": 377,
+    "Gaziantep": 377,
     "Kayseri": 404,
     "Konya": 371,
-    "İstanbul": 1557,
-    "İzmir": 393
+    "İstanbul": 1559,
+    "İzmir": 391
   },
   "example_brief": {
     "brief": "Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder. Samimi ama kısa olsun.",
@@ -66,15 +66,25 @@
       ]
     },
     "audience": {
-      "matched": 584,
-      "sms": 350,
-      "email": 368
+      "matched": 589,
+      "sms": 356,
+      "email": 374,
+      "languages": {
+        "sms": {
+          "tr": 305,
+          "en": 51
+        },
+        "email": {
+          "tr": 317,
+          "en": 57
+        }
+      }
     },
     "consent": {
-      "both": 290,
+      "both": 296,
       "sms_only": 77,
       "email_only": 87,
-      "none": 130
+      "none": 129
     },
     "longest_values": {
       "first_name": 50,
@@ -280,6 +290,20 @@
       "matches_example_brief": false,
       "in_sms_audience": false,
       "in_email_audience": false
+    },
+    "english_recipients": {
+      "count": 6,
+      "customer_ids": [
+        "05d128e2-406a-5374-9c0c-939fe76e73c1",
+        "5d358ae0-f5b1-570f-870e-0a467b22f1a4",
+        "8cf35642-fe23-51e7-9b2f-46d560f23cd3",
+        "a613bcac-dfb5-5970-8269-0c46f3acef06",
+        "e12104c0-383d-5afb-a3e3-771b428386e2",
+        "fc67139a-94c7-5464-89ad-21fc35dac817"
+      ],
+      "matches_example_brief": true,
+      "in_sms_audience": true,
+      "in_email_audience": true
     }
   }
 }

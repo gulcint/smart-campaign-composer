@@ -713,10 +713,11 @@ func GenerateSegment(ctx context.Context, c llm.Client, brief string) (SegmentOu
 type Event interface{ Name() string }
 
 type DeltaEvent struct {
-	Attempt int    `json:"attempt"`
-	Channel string `json:"channel"` // "sms" | "email"
-	Field   string `json:"field"`   // "body" | "subject"
-	Text    string `json:"text"`
+	Attempt  int    `json:"attempt"`
+	Language string `json:"language,omitempty"` // P8 (D63): "en" on English chunks only; empty (key absent) on Turkish
+	Channel  string `json:"channel"`            // "sms" | "email"
+	Field    string `json:"field"`              // "body" | "subject"
+	Text     string `json:"text"`
 }
 type InvalidEvent struct {
 	Attempt          int                     `json:"attempt"`

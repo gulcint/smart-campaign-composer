@@ -54,7 +54,9 @@ const limitCheck = computed(() => {
   if (!v) return null
   const sms = v.worst_case?.sms_runes ?? runeCount(v.content.sms.body)
   const subject = v.worst_case?.subject_runes ?? runeCount(v.content.email.subject)
-  return { sms, subject, pass: sms <= SMS_LIMIT && subject <= SUBJECT_LIMIT }
+  const en = v.worst_case?.en
+  const enPass = !en || (en.sms_runes <= SMS_LIMIT && en.subject_runes <= SUBJECT_LIMIT)
+  return { sms, subject, pass: sms <= SMS_LIMIT && subject <= SUBJECT_LIMIT && enPass }
 })
 
 // ---- preview of one sample recipient (ui.md §1.1, REQ-APR-01) ----

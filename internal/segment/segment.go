@@ -213,9 +213,31 @@ type Audience struct {
 	Matched int `json:"matched"`
 	SMS     int `json:"sms"`
 	Email   int `json:"email"`
+	// Languages is the per-channel split by customers.language; tr + en == the channel count. nil only
+	// for a campaign whose segment was generated before P8 (campaigns.audience_languages IS NULL; D63).
+	Languages *AudienceLanguages `json:"languages,omitempty"`
+}
+
+// AudienceLanguages is the per-channel language split of an Audience (P8, D63).
+type AudienceLanguages struct {
+	SMS   LanguageCounts `json:"sms"`
+	Email LanguageCounts `json:"email"`
+}
+
+// LanguageCounts are the customers of one channel by customers.language.
+type LanguageCounts struct {
+	TR int `json:"tr"`
+	EN int `json:"en"`
+}
+
+// WantsEnglish reports whether an English version is worth generating: Languages != nil and
+// SMS.EN + Email.EN > 0 (REQ-LNG-02).
+func (a Audience) WantsEnglish() bool {
+	return a.Languages != nil && a.Languages.SMS.EN+a.Languages.Email.EN > 0
 }
 
 // Counter counts the audience of a valid rule at ref (channel consent applied, segment-dsl.md §6).
+// It also fills Audience.Languages (same population, split by customers.language; P8).
 // Implemented by postgres.NewAudience.
 type Counter interface {
 	Count(ctx context.Context, r Rule, ref time.Time) (Audience, error)

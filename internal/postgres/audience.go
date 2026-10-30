@@ -34,13 +34,22 @@ func (a audience) Count(ctx context.Context, r segment.Rule, ref time.Time) (seg
 	if err != nil {
 		return segment.Audience{}, err
 	}
+	// One query: the channel counts and their split by customers.language (P8, D63). language is
+	// 'tr' or 'en' (CHECK), so tr + en == the channel count.
 	q := `SELECT count(*),
 		count(*) FILTER (WHERE c.sms_opt_in AND c.phone IS NOT NULL),
-		count(*) FILTER (WHERE c.email_opt_in AND c.email IS NOT NULL)` + audienceFrom + comp.Where
+		count(*) FILTER (WHERE c.email_opt_in AND c.email IS NOT NULL),
+		count(*) FILTER (WHERE c.sms_opt_in AND c.phone IS NOT NULL AND c.language = 'tr'),
+		count(*) FILTER (WHERE c.sms_opt_in AND c.phone IS NOT NULL AND c.language = 'en'),
+		count(*) FILTER (WHERE c.email_opt_in AND c.email IS NOT NULL AND c.language = 'tr'),
+		count(*) FILTER (WHERE c.email_opt_in AND c.email IS NOT NULL AND c.language = 'en')` + audienceFrom + comp.Where
 	var out segment.Audience
-	if err := a.db.QueryRow(ctx, q, comp.Args...).Scan(&out.Matched, &out.SMS, &out.Email); err != nil {
+	var langs segment.AudienceLanguages
+	if err := a.db.QueryRow(ctx, q, comp.Args...).Scan(&out.Matched, &out.SMS, &out.Email,
+		&langs.SMS.TR, &langs.SMS.EN, &langs.Email.TR, &langs.Email.EN); err != nil {
 		return segment.Audience{}, fmt.Errorf("postgres: count audience: %w", err)
 	}
+	out.Languages = &langs
 	return out, nil
 }
 

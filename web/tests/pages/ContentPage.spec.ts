@@ -24,7 +24,10 @@ import {
   validated,
   version,
   fakeApi,
+  frame,
+  type RecordedRequest,
 } from '../helpers/p4'
+import { t } from '@/i18n/index'
 
 const C = `/campaigns/${CAMPAIGN_ID}`
 
@@ -38,12 +41,13 @@ afterEach(() => {
 interface Setup {
   camp: { value: Campaign }
   saveImpl?: (body: unknown) => unknown
+  previewImpl?: (req: RecordedRequest) => unknown
 }
 
 function api(s: Setup) {
   return fakeApi({
     [`GET ${C}`]: () => s.camp.value,
-    [`GET ${C}/preview`]: () => preview(),
+    [`GET ${C}/preview`]: (r) => (s.previewImpl ? s.previewImpl(r) : preview()),
     [`POST ${C}/content-versions`]: (r) => {
       if (s.saveImpl) return s.saveImpl(r.opts?.body)
       return version(V2, 2, r.opts?.body as never, { source: 'edit', llm_attempts: null })
@@ -261,6 +265,197 @@ describe('ContentPage edit conflict (REQ-APR-03, D40)', () => {
     )
     expect(w.get(sel('editor-save')).attributes('aria-disabled')).toBe('true')
   })
+})
+
+// ---- language (P8) ----
+
+const EN = {
+  sms: { body: 'Hi {{first_name}}, your cart is waiting.' },
+  email: { subject: 'Your cart is waiting', body: 'Hi {{first_name}},\n\nYour cart is waiting.' },
+}
+
+/** CNT_OK with an English version (REQ-LNG-01 C1 shape). */
+function bilingual() {
+  return { ...content(), en: EN } as never
+}
+
+/** A preview of the given shown language (REQ-LNG-03 C6: language, fallback, customer.language). */
+function langPreview(language: 'tr' | 'en', fallback = false, customerLanguage = language) {
+  const p = preview() as unknown as Record<string, unknown>
+  return {
+    ...p,
+    language,
+    fallback,
+    customer: { ...(p.customer as Record<string, unknown>), language: customerLanguage },
+  }
+}
+
+describe('ContentPage language tabs (REQ-LNG-04 C3)', () => {
+  it('a version with en shows language-tabs (role tablist) with the tr and en tabs', async () => {
+    const { w } = await mountContent({
+      camp: { value: campaign('content_ready', version(V1, 1, bilingual())) },
+    })
+    const tabs = w.get(sel('language-tabs'))
+    expect(tabs.attributes('role')).toBe('tablist')
+    expect(w.find(sel('language-tab-tr')).exists()).toBe(true)
+    expect(w.find(sel('language-tab-en')).exists()).toBe(true)
+  })
+
+  it('a Turkish-only version shows no language-tabs', async () => {
+    const { w } = await mountContent({ camp: { value: campaign('content_ready', version()) } })
+    expect(w.find(sel('language-tabs')).exists()).toBe(false)
+  })
+
+  it('an English delta in the stream shows language-tabs', async () => {
+    const s = controllableStream()
+    const fetchMock = vi.fn(async () => sseResponse(s.stream))
+    const { w } = await mountContent(
+      { camp: { value: campaign('audience_ready', null) } },
+      { fetch: fetchMock },
+    )
+    await w.get(sel('content-regenerate')).trigger('click')
+    s.push(delta(1, 'sms', 'body', 'Merhaba'))
+    await vi.waitFor(() =>
+      expect(w.get(sel('streaming-text-content-sms-body')).element.textContent).toBe('Merhaba'),
+    )
+    expect(w.find(sel('language-tabs')).exists()).toBe(false)
+    s.push(
+      frame('delta', { attempt: 1, channel: 'sms', field: 'body', text: 'Hi', language: 'en' }),
+    )
+    await vi.waitFor(() => expect(w.find(sel('language-tabs')).exists()).toBe(true))
+  })
+
+  it('tabs are role=tab; tr is selected first; ArrowRight / ArrowLeft move and select', async () => {
+    const { w } = await mountContent({
+      camp: { value: campaign('content_ready', version(V1, 1, bilingual())) },
+    })
+    const tr = () => w.get(sel('language-tab-tr'))
+    const en = () => w.get(sel('language-tab-en'))
+    expect(tr().attributes('role')).toBe('tab')
+    expect(en().attributes('role')).toBe('tab')
+    expect(tr().attributes('aria-selected')).toBe('true')
+    expect(en().attributes('aria-selected')).toBe('false')
+
+    await tr().trigger('keydown', { key: 'ArrowRight' })
+    await flushPromises()
+    expect(en().attributes('aria-selected')).toBe('true')
+    expect(tr().attributes('aria-selected')).toBe('false')
+
+    await en().trigger('keydown', { key: 'ArrowLeft' })
+    await flushPromises()
+    expect(tr().attributes('aria-selected')).toBe('true')
+    expect(en().attributes('aria-selected')).toBe('false')
+  })
+
+  it('en-prefixed field errors show in inline-error-<f> only while the en tab is selected', async () => {
+    const setup: Setup = {
+      camp: { value: campaign('content_ready', version(V1, 1, bilingual())) },
+      saveImpl: () => {
+        throw apiError(422, 'validation_failed', [
+          fieldError('en.sms.body', 'sms_too_long', 160, 161),
+          fieldError('en.email.subject', 'subject_too_long', 80, 81),
+          fieldError('en.email.body', 'required'),
+        ])
+      },
+    }
+    const { w } = await mountContent(setup)
+    await typeSMS(w, 'Düzenlenmiş SMS')
+    await clickSave(w)
+    // tr tab selected: only unprefixed paths are shown, and there are none.
+    for (const f of ['sms-body', 'email-subject', 'email-body']) {
+      expect(w.find(sel(`inline-error-${f}`)).exists()).toBe(false)
+    }
+    await w.get(sel('language-tab-en')).trigger('click')
+    await flushPromises()
+    expect(w.get(sel('language-tab-en')).attributes('aria-selected')).toBe('true')
+    // SMS channel selected: only the SMS field and its error; the email error shows on its tab.
+    expect(w.get(sel('inline-error-sms-body')).attributes('data-code')).toBe('sms_too_long')
+    expect(w.find(sel('inline-error-email-subject')).exists()).toBe(false)
+    expect(w.find(sel('inline-error-email-body')).exists()).toBe(false)
+    expect(w.get(sel('channel-tab-email')).attributes('data-status')).toBe('invalid')
+
+    // Email channel selected: the email errors inline; the SMS error shows on the SMS tab.
+    await w.get(sel('channel-tab-email')).trigger('click')
+    await flushPromises()
+    expect(w.find(sel('inline-error-sms-body')).exists()).toBe(false)
+    expect(w.get(sel('inline-error-email-subject')).attributes('data-code')).toBe(
+      'subject_too_long',
+    )
+    expect(w.get(sel('inline-error-email-body')).attributes('data-code')).toBe('required')
+    expect(w.get(sel('channel-tab-sms')).attributes('data-status')).toBe('invalid')
+  })
+
+  it('a Turkish error stays on the tr tab: tr shows it, en does not', async () => {
+    const setup: Setup = {
+      camp: { value: campaign('content_ready', version(V1, 1, bilingual())) },
+      saveImpl: () => {
+        throw apiError(422, 'validation_failed', [fieldError('sms.body', 'sms_too_long', 160, 161)])
+      },
+    }
+    const { w } = await mountContent(setup)
+    await typeSMS(w, 'Düzenlenmiş SMS')
+    await clickSave(w)
+    expect(w.get(sel('inline-error-sms-body')).attributes('data-code')).toBe('sms_too_long')
+    expect(w.get(sel('language-tab-en')).attributes('data-has-error')).not.toBe('true')
+    await w.get(sel('language-tab-en')).trigger('click')
+    await flushPromises()
+    expect(w.find(sel('inline-error-sms-body')).exists()).toBe(false)
+  })
+
+  it('a 422 on an en-prefixed path marks the en tab with data-has-error, not the tr tab', async () => {
+    const setup: Setup = {
+      camp: { value: campaign('content_ready', version(V1, 1, bilingual())) },
+      saveImpl: () => {
+        throw apiError(422, 'validation_failed', [
+          fieldError('en.sms.body', 'sms_too_long', 160, 161),
+        ])
+      },
+    }
+    const { w } = await mountContent(setup)
+    await typeSMS(w, 'Düzenlenmiş SMS')
+    await clickSave(w)
+    expect(w.get(sel('language-tab-en')).attributes('data-has-error')).toBe('true')
+    expect(w.get(sel('language-tab-tr')).attributes('data-has-error')).not.toBe('true')
+  })
+})
+
+describe('ContentPage preview language (REQ-LNG-04 C4)', () => {
+  it('preview-language marks the shown language with aria-pressed; choosing en re-requests the preview with language=en', async () => {
+    const setup: Setup = {
+      camp: { value: campaign('content_ready', version(V1, 1, bilingual())) },
+      previewImpl: (r) => langPreview(r.opts?.query?.language === 'en' ? 'en' : 'tr'),
+    }
+    const { w, a } = await mountContent(setup)
+    await flushPromises()
+    expect(w.find(sel('preview-language')).exists()).toBe(true)
+    expect(w.get(sel('preview-language-tr')).attributes('aria-pressed')).toBe('true')
+    expect(w.get(sel('preview-language-en')).attributes('aria-pressed')).not.toBe('true')
+
+    const before = a.count('GET', `${C}/preview`)
+    await w.get(sel('preview-language-en')).trigger('click')
+    await flushPromises()
+    expect(a.count('GET', `${C}/preview`)).toBeGreaterThan(before)
+    expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBe('en')
+    expect(w.get(sel('preview-language-en')).attributes('aria-pressed')).toBe('true')
+    expect(w.get(sel('preview-language-tr')).attributes('aria-pressed')).not.toBe('true')
+  })
+
+  it.each([
+    { fallback: true, shown: true },
+    { fallback: false, shown: false },
+  ])(
+    'preview.fallback=$fallback => preview-fallback-note shown=$shown',
+    async ({ fallback, shown }) => {
+      const { w } = await mountContent({
+        camp: { value: campaign('content_ready', version()) },
+        previewImpl: () => langPreview('tr', fallback, 'en'),
+      })
+      await flushPromises()
+      const note = w.find(sel('preview-fallback-note'))
+      expect(note.exists()).toBe(shown)
+      if (shown) expect(note.text()).toBe(t('preview.fallbackNote'))
+    },
+  )
 })
 
 describe('ContentPage locked states (REQ-APR-03)', () => {

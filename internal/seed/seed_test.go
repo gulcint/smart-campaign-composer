@@ -174,9 +174,17 @@ func TestManifest_ExampleBriefMatchesExport(t *testing.T) {
 	}
 
 	evs := eventsByCustomer(g.events)
-	var aud audienceDoc
+	aud := audienceDoc{Languages: &languagesDoc{}}
 	var consent consentDoc
 	var longest longestDoc
+	// REQ-SEED-01 (P8): languages = per channel tr / en split of the channel audience.
+	countLang := func(s *langSplit, lang string) {
+		if lang == "en" {
+			s.EN++
+		} else {
+			s.TR++
+		}
+	}
 	for _, c := range g.customers {
 		if !matchesExample(c, evs[c.ID], canonicalRefTime) {
 			continue
@@ -184,9 +192,11 @@ func TestManifest_ExampleBriefMatchesExport(t *testing.T) {
 		aud.Matched++
 		if c.SMSOptIn && c.Phone != nil {
 			aud.SMS++
+			countLang(&aud.Languages.SMS, c.Language)
 		}
 		if c.EmailOptIn && c.Email != nil {
 			aud.Email++
+			countLang(&aud.Languages.Email, c.Language)
 		}
 		addConsent(&consent, c)
 		longest.FirstName = max(longest.FirstName, utf8.RuneCountInString(effectiveFirstName(c.FirstName)))
@@ -198,6 +208,9 @@ func TestManifest_ExampleBriefMatchesExport(t *testing.T) {
 	}
 	if diff := cmp.Diff(aud, eb.Audience); diff != "" {
 		t.Errorf("example_brief.audience mismatch (-export +manifest):\n%s", diff)
+	}
+	if l := aud.Languages; l.SMS.EN < 6 || l.Email.EN < 6 {
+		t.Errorf("example_brief.audience.languages = %+v, want at least 6 en per channel (english_recipients)", *l)
 	}
 	if diff := cmp.Diff(consent, eb.Consent); diff != "" {
 		t.Errorf("example_brief.consent mismatch (-export +manifest):\n%s", diff)
@@ -291,6 +304,15 @@ func groupSpecs() map[string]groupSpec {
 		"non_istanbul_cart_add": {count: 10, check: func(t *testing.T, c customer, evs []event, ref time.Time) {
 			defaults(t, c, func(c customer) bool { return c.City == "Ankara" })
 			wantEvents(t, c, evs, []time.Time{ref.Add(-days(3))}, nil)
+		}},
+		// REQ-SEED-01 (P8): 6 İstanbul customers with language en, cart add 7 days ago, both consents,
+		// phone and email present; all in the example audience.
+		"english_recipients": {count: 6, matches: true, sms: true, eml: true, check: func(t *testing.T, c customer, evs []event, ref time.Time) {
+			wantCustomer(t, c, "İstanbul", true, true, true, true)
+			if c.Language != "en" {
+				t.Errorf("customer %s language = %q, want en", c.ID, c.Language)
+			}
+			wantEvents(t, c, evs, []time.Time{ref.Add(-days(7))}, nil)
 		}},
 	}
 }

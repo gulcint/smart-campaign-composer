@@ -50,6 +50,7 @@ function onNext() {
   <div
     data-testid="sms-preview"
     :data-state="state"
+    :data-language="preview?.language"
     :aria-busy="state === 'loading' ? 'true' : undefined"
     class="flex flex-col gap-3"
   >
