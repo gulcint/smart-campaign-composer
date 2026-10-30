@@ -350,7 +350,7 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | `ConfirmDialog` | Onay/gönder/yeniden üret teyidi | shadcn `Alert Dialog` | `approve`, `send` (kanal sayıları özetlenir: "SMS 1.204 · Email 987 kişiye gidecek"), `regenerate` (mevcut içerik silinecek) | açık, submitting, hata (diyalog içinde inline) | REQ-APR-01, REQ-SND-01 |
 | `ProgressBar` / `ProgressRow` | Referans çubuk dili | custom (`role="progressbar"`) | `single` (tek dolgu `--gradient-brand-vivid`), `segmented` (sent `--success` · failed `--error` · sending `--info` · queued `--track` desen); satır: solda etiket, ortada çubuk (8 px, pill), sağda sayı + yüzde (`numeral-sm`) | indeterminate yok (her zaman sayı); güncelleme `--dur-bar` | REQ-AUD-03, REQ-TRK-01 |
 | `DeliveryCounters` | Kuyrukta / Gönderiliyor / Gönderildi / Başarısız | custom (Card) | kanal başına ve toplam | live, stale (SSE koptu: sayılar soluk + "Son güncelleme 12 sn önce"), completed | REQ-TRK-01 |
-| `ActivityFeed` | Canlı olay akışı (son 50) | custom + shadcn `Scroll Area` | — | boş ("Henüz olay yok"), live, paused (kullanıcı yukarı kaydırdıysa "Yeni 12 olay ↓"), kopuk. Satır: zaman (mono) · kanal noktası · `StatusBadge` · kısa metin; kişisel veri (telefon/e-posta) gösterilmez, yalnızca müşteri kimliği | REQ-TRK-01, REQ-SEC-01 (ruhu) |
+| `ActivityFeed` | **Kapsam dışı, uygulanmadı** (sahip kararı): Takip ekranında yalnız sayaçlar var (§8.5) | — | — | — | — |
 | `Toast` | Geçici geri bildirim | shadcn `Sonner` (`vue-sonner`) | success, info, warning, error | otomatik kapanma 5 s (error: kalıcı, kapat butonu) | HTTP kodları |
 | `InlineError` / `ErrorCard` | Alan ve bölüm hataları | shadcn `Alert` | field (alan altı, 14 px, `--error`, ikon), section (kart, başlık + açıklama + eylem) | — | HTTP kodları |
 | `EmptyState` | Boş durumlar | shadcn `Empty` | ikon (48 px, `--orange-300` çizgi), başlık, açıklama, tek eylem | — | — |
@@ -484,10 +484,6 @@ Email sekmesinde: konu `Input` + sayaç `/80`, gövde `Textarea`; sağda `EmailP
 │ │ Gönderildi  742  Başarısız  9 │ │ Gönderildi 371  Başarısız 4  │ │
 │ │ Gönderiliyor 12  Kuyrukta 441 │ │ Gönderiliyor 8  Kuyrukta 604 │ │
 │ └───────────────────────────────┘ └──────────────────────────────┘ │
-│ ┌ Canlı akış ─────────────────────────────────────────────────┐   │
-│ │ 14:02:11 ● SMS   [Gönderildi]  müşteri #4821                 │   │
-│ │ 14:02:11 ● Email [Başarısız]   müşteri #0193 · 5. deneme     │   │
-│ └──────────────────────────────────────────────────────────────┘   │
 ```
 `completed`: başlık "Kampanya tamamlandı", rozet `Tamamlandı`, başarısız sayısı sıfır değilse `--error` vurgulu ve "Başarısızları gör" listesi (kayıt alanları sözleşmeye bağlı). Kampanya düzeyinde "Başarısız" durumu gösterilmez (REQ-TRK-01).
 
@@ -524,7 +520,7 @@ Test genişlikleri **375 / 768 / 1280 px**; kanıt `.playwright-mcp/p5-responsiv
 - **Odak:** her etkileşimli öğede `:focus-visible` → `--shadow-focus` (2 px boşluk + 2 px `--orange-600`, açık zeminlerde ≥3:1). Odak halkası asla `outline: none` ile silinmez. Programatik odak hedefleri (`tabindex=-1` başlıklar: adım değişince `h1`, açılan liste başlığı) halka göstermez; etkileşimli değildirler ve odak `preventScroll` ile taşınır.
 - **Akan metin:** `StreamingText` kapsayıcısı `aria-live="off"` (her delta okunmaz); ayrı, görsel olarak gizli bir `role="status"` bölgesi yalnızca durum değişimlerini okur: "SMS içeriği üretiliyor", "SMS içeriği doğrulandı", "Email konusu geçersiz: 83 karakter, sınır 80". Akış boyunca kapsayıcı `aria-busy="true"`.
 - **Sayaçlar:** `CharCounter` `aria-live="polite"` yalnızca eşik değişiminde (normal → near → over) duyurur; her tuşta değil. Alan `aria-describedby` ile sayaca ve hata listesine bağlı; over-limit'te `aria-invalid="true"`.
-- **Dashboard:** `DeliveryCounters` her SSE güncellemesinde değil, en fazla 10 sn'de bir `polite` özet ("SMS: 742 gönderildi, 9 başarısız"); `ActivityFeed` `role="log"`, `aria-live="off"` (yoğun akış ekran okuyucuyu boğmasın), tamamlanma `assertive` değil `polite` duyurulur.
+- **Dashboard:** `DeliveryCounters` her SSE güncellemesinde değil, en fazla 10 sn'de bir `polite` özet ("SMS: 742 gönderildi, 9 başarısız"); tamamlanma `assertive` değil `polite` duyurulur.
 - **Klavye akışı:** Brief textarea → gönder (⌘/Ctrl+Enter) → Kitle kartı → "İçeriği üret" → sekmeler (← →, Reka Tabs) → editör → değişken chip'leri → onay. Adım değişince odak yeni ekranın `h1`'ine taşınır (`tabindex="-1"`). Dialog odak tuzağı ve Esc (Reka); kapanınca odak tetikleyiciye döner.
 - **Renkten bağımsız durum:** her durum ikon + metin taşır; segmentli çubuğun altında sayılar metin olarak yazılıdır; kanal ayrımı renk + etiket ("SMS"/"Email").
 - **Pasif onay:** `ApprovalBar` butonu `aria-disabled="true"` (odaklanabilir kalır) ve `aria-describedby` ile neden metnine bağlıdır.
@@ -564,7 +560,7 @@ web/src/
 1. Onay öncesi en uzun uzunluk (REQ-CNT-05) API'den döner: her içerik sürümü ve `validated` olayı `worst_case {sms_runes, subject_runes}` taşır; `CharCounter` ikinci satırı gösterir (`docs/contracts/ui.md`).
 2. Önizleme varsayılan olarak eşleşen ilk alıcıyı gösterir; "sonraki örnek" kontrolü `sample_index` ile ilerler.
 3. İçerik üretimi **POST + fetch tabanlı akış** (EventSource değil); canlı durum GET + EventSource, otomatik yeniden bağlanma.
-4. `ActivityFeed`, sayaçlar değiştiğinde en fazla 2 sn'de bir `deliveries?order=recent` sorgusuyla beslenir.
+4. Canlı olay akışı (`ActivityFeed`) sahip kararıyla kapsam dışı; Takip ekranında yalnız sayaçlar var.
 5. E-posta gövdesi düz metin.
 6. Turuncu metin preset'i: `accent` (varsayılan; sahip itiraz etmedi).
 7. Dark tema: teslimde zorunlu değil, opsiyonel (P6).
@@ -577,7 +573,7 @@ web/src/
 - V4. CTA gradient'i erişilebilirlik için referanstan (`#FA5B23→#EA2D2B`) koyulaştırıldı (`#D63A1E→#C42A26`).
 - V5. Near-limit eşiği %90 (SMS 144, konu 72); brief için 1800/2000.
 - V6. Karakter sayımı Unicode code point (`[...s].length`), backend'in rune sayımıyla aynı; emoji ZWJ dizileri birden çok sayılır.
-- V7. Teslimat sayaç duyuruları en fazla 10 sn'de bir; feed tamponu 50 olay (mobil 20).
+- V7. Teslimat sayaç duyuruları en fazla 10 sn'de bir.
 - V8. Kanal renkleri SMS teal `#0E7C7E`, Email indigo `#3B5BDB` (referansta karşılığı yok).
 - V9. Grafik kütüphanesi kullanılmaz; çubuklar custom.
 - V10. Varsayılan turuncu metin preset'i `accent`.

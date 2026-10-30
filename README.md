@@ -13,7 +13,7 @@ Pazarlamacı ne istediğini doğal dille yazar. Claude hedef kitleyi ve SMS ile 
 | Bonus: zamanlanmış gönderim | ✅ Tamam |
 | Bonus: CI pipeline | ✅ Tamam |
 | Bonus: A/B varyantları | ⬜ Yapılmadı |
-| Bonus: kullanıcının diline göre içerik | ✅ Yapıldı (P8: Türkçe ana metin + kitlede İngilizce alıcı varsa İngilizce sürüm; alıcı diline göre gönderim, D63) |
+| Bonus: kullanıcının diline göre içerik | ✅ Tamam |
 
 Kullanılan teknolojiler: Vue 3 (arayüz), Go (backend), Claude API, PostgreSQL (veritabanı ve kuyruk).
 
@@ -117,7 +117,7 @@ docker compose down -v   # ayrıca veritabanı volume'unu (pgdata) siler
 
 ![Tamamlanmış bir kampanyanın takip ekranı](docs/img/tracking-completed.png)
 
-Kampanya şu durumlardan geçer: `draft` → `audience_ready` → `content_ready` → `approved` → `sending` → `completed`. Kitle ya da metin değişirse kampanya bir önceki uygun duruma döner ve yeniden onay gerekir.
+Kampanya şu durumlardan geçer: `draft` → `audience_ready` → `content_ready` → `approved` → `sending` → `completed`. İleri tarihe planlanan kampanya `approved` ile `sending` arasında `scheduled` durumunda bekler. Kitle ya da metin değişirse kampanya bir önceki uygun duruma döner ve yeniden onay gerekir.
 
 ## Case isterleri ve nasıl karşılandı
 
@@ -175,7 +175,7 @@ Yetiştirilemeyenler ve bilinçli ödünler:
 
 - **A/B varyantları yapılmadı.** Dile göre içerik yalnız `tr` ve `en` içindir; İngilizce sürümün dil kalitesini sistem ölçmez, insan onayı tek güvencedir (D63).
 - **Ölçek:** kitle Go belleğine yüklenir, kuyruk PostgreSQL'dedir. 5000 kişi için yeterli, milyonlar için değil (D1).
-- **Hız:** elle denemede kanal başına yaklaşık 50 mesaj/sn ölçüldü (limit 100). Otomatik hız testi yok.
+- **Hız:** elle denemede kanal başına yaklaşık 50 mesaj/sn ölçüldü (limit 100). 100/sn sınırı sahte saatle çalışan bir testte doğrulanır; gerçek zamanlı yük testi yok.
 - **SMS uzunluğu** karakter olarak sayılır. Türkçe harf içeren gerçek bir SMS parçası 70 karakterdir (D10).
 - **Gönderimde uzunluk kontrolü** bir kişinin SMS ve emailini birlikte değerlendirir; biri uzarsa diğeri de `content_too_long` ile düşer.
 - **Brief kampanya açıldıktan sonra değişmez;** "Brief'i düzenle" yeni kampanya başlatır.
@@ -189,6 +189,7 @@ Tüm liste ve gerekçeleri için [`DECISIONS.md`](DECISIONS.md).
 ## Bonuslar
 
 - **Zamanlanmış gönderim (D62):** onaylı kampanya 1 dakika ile 30 gün sonrasına planlanır; plan değiştirilebilir, iptal edilebilir ya da hemen gönderilebilir.
+- **Kullanıcının diline göre içerik (D63):** kitlede İngilizce konuşan alıcı varsa Claude Türkçe metnin yanında İngilizce sürümü de yazar. İçerik ve onay ekranlarında TR/EN sekmeleri vardır. Her alıcıya kendi dilindeki metin gider; İngilizce sürüm yoksa Türkçe gider.
 - **CI (GitHub Actions):** `main`'e girmek için `ci-ok` kontrolü yeşil olmalı (lint, `make test`, gitleaks, govulncheck, API sözleşmesi kontrolü).
 
 ## Teslim edilenler
