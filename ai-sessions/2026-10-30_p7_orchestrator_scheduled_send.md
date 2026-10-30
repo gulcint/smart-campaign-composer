@@ -134,7 +134,7 @@ grep -E "ci-ok|fail"" completed (exit code 0)
      eklerim, ardından p6-done etiketini atarım.
 
   Bilinçli sapma: Git geçmişinde commit yazarı olarak ad-soyad ve
-  ce.<user>@gmail.com hâlâ görünüyor (yaklaşık 52 commit). Bu, geçmişi
+  <personal-email> hâlâ görünüyor (yaklaşık 52 commit). Bu, geçmişi
   yeniden yazmama kararın (D58). Yeni squash merge'ler noreply adresiyle
   yazılıyor. Fikrini değiştirirsen söyle, ama bu geçmişi yeniden yazmak ve
   force-push gerektirir.
@@ -268,7 +268,7 @@ grep -E "ci-ok|fail"" completed (exit code 0)
   Silebilirsin; main'dekiler esas sürüm.
 
   Hâlâ açık olan tek yer: Git geçmişindeki commit yazarı bilgileri. Ad-soyad ve
-  ce.<user>@gmail.com yaklaşık 52 eski commit'te duruyor. Bunu D58 ile
+  <personal-email> yaklaşık 52 eski commit'te duruyor. Bunu D58 ile
   bilerek yeniden yazmamaya karar vermiştin.
 
   Advisory-lock testi önerisini başlatayım mı?
