@@ -94,7 +94,8 @@ Doküman "her şeyi yapmak yerine çekirdek akışı sağlam yap" diyor; fronten
 | 4 | **P4 İçerik + onay dilimi** | SMS/email üretimi (stream protokolü 0.5), limitler, kişiselleştirme, düzenleme, yeniden doğrulama, sürümlü onay + ekranlar | REQ-CNT (01–05), REQ-APR, REQ-AI-01 (içerik), REQ-UI-01 testleri yeşil |
 | 5 | **P5 Gönderim + takip dilimi** | **İlk iş, `Send`'den önce: içerik üretim kilidi veritabanına taşınır** (D41, D47; kampanya satırındaki kiraya taşındı, D52). Üretim işareti veritabanında tutulur ve kampanya satır kilidiyle atomik denetlenir; `Send` (üretim, düzenleme ve onayla birlikte) aynı transaction'da kontrol eder, kural birden fazla API sürecinde de geçerlidir (REQ-SND-01). Ardından `deliveries` kuyruğu, dispatcher, rate limit, retry, idempotency, mock provider, SSE dashboard, metrics + ekran (ActivityFeed yok, yalnız sayaçlar; D56). Test yığınına worker trafiği almayan ikinci mock provider (`mockprovider-solo`, D55). İçerik ekranında "Claude düşünüyor" bekleme durumu (ilk parçadan önce). **Responsive tasarım güncellemesi** (DESIGN.md V13) P5 içinde kendi branch'inde, `feat/p5-responsive` (DESIGN.md §8: tablet 768–1023 kuralları, Brief/Kitle/Onay ekranlarının mobil düzeni, tablo/liste davranışı, `viewport` meta; tüm ekranlarda uygulama) | REQ-SND (01–05), REQ-TRK-01/02, REQ-MOCK, REQ-SEC-01 testleri yeşil; responsive (`feat/p5-responsive`): 375/768/1280 px genişliklerinde tüm ekranların ekran görüntüsü kanıtı PR'da (REQ yok, otomatik test yok) |
 | 6 | **P6 Sertleştirme + teslim** | Uçtan uca test, güvenlik taraması, `README.md`, `DECISIONS.md`, session export'ları, değerlendirici erişimi · **Kişisel bilgi temizliği** (sahip isteği, 2026-10-28): izlenen dosyalar ve `ai-sessions/` export'larından ad-soyad, kişisel e-posta (gmail) ve yerel bilgisayar yolları (`/Users/<kullanıcı>/…`) temizlenir; temizleme betiği (`make sanitize-sessions`) ve hook desenleri bu üç türü kapsayacak şekilde genişletilir. Commit meta verisi: GitHub'da e-posta gizliliği açılır ki squash merge commit'leri noreply adresiyle yazılsın; geçmişteki commit'lerin yazar adı/e-postası **yeniden yazılmaz** (sahip kararı, 2026-10-28, `DECISIONS.md` D58). GitHub kullanıcı adı (`gulcint`) repo adresi ve Go modül yolunun parçası olduğu için kalır | REQ-DLV-03, REQ-DLV-04 + REQ eşleme raporu boş + doğrulayıcı onayı + teslim kontrol listesi; kişisel bilgi taraması (izlenen dosyalarda `git grep` ile ad, e-posta, `/Users/` yolu; yeni commit'lerde `git log --format='%an <%ae>'`) temiz |
-| 7 | **P7 Bonus** (`slice/p7-schedule`) | Case'in "Bonus (isteğe bağlı)" listesinden iki kırım (§9): **P7a Zamanlanmış gönderim** — onaylı kampanya ileri bir zamana planlanır, iptal/yeniden planlanır, zamanı gelince worker gönderimi başlatır; Onay ekranında "şimdi / ileri tarihte", Takip ekranında planlanan saat + geri sayım (REQ-SCH-01..04) · **P7b CI pipeline ✅** — P0'da kuruldu, P2–P6'da genişletildi ve sadeleştirildi (§1.2, §2.3, D27, D51); P7'de yeni iş yok. A/B varyantları ve dile göre içerik **kapsam dışı** (sahip eklemedikçe) | P7a: REQ-SCH (01–04) testleri yeşil, `make db-roundtrip` yeşil, §3.2 listesi; P7b: `main` ruleset'i `ci-ok`'u zorunlu tutuyor (kanıt: son merge'lerin `ci-ok` sonucu) |
+| 7 | **P7 Bonus** (`slice/p7-schedule`) | Case'in "Bonus (isteğe bağlı)" listesinden iki kırım (§9): **P7a Zamanlanmış gönderim** — onaylı kampanya ileri bir zamana planlanır, iptal/yeniden planlanır, zamanı gelince worker gönderimi başlatır; Onay ekranında "şimdi / ileri tarihte", Takip ekranında planlanan saat + geri sayım (REQ-SCH-01..04) · **P7b CI pipeline ✅** — P0'da kuruldu, P2–P6'da genişletildi ve sadeleştirildi (§1.2, §2.3, D27, D51); P7'de yeni iş yok. A/B varyantları **kapsam dışı** (sahip eklemedikçe); dile göre içerik P8'e taşındı | P7a: REQ-SCH (01–04) testleri yeşil, `make db-roundtrip` yeşil, §3.2 listesi; P7b: `main` ruleset'i `ci-ok`'u zorunlu tutuyor (kanıt: son merge'lerin `ci-ok` sonucu) |
+| 7+ | **P8 Bonus: dile göre içerik** (`slice/p8-language`) | Kullanıcının `language` alanına (`tr`/`en`) göre içerik: Claude tek çağrıda Türkçe ana metni ve İngilizce varyantı üretir, tek sürüm ikisini taşır, doğrulama ve onay her dil için aynı kurallarla yapılır, gönderimde her alıcıya kendi dilindeki metin gider, İngilizce varyantı olmayan sürümde İngilizce alıcı Türkçe yedek metni alır; Kitle ekranında dil dağılımı, İçerik ekranında TR/EN sekmeleri (§10, REQ-LNG-01..04) | REQ-LNG (01–04) testleri yeşil, `make db-roundtrip` yeşil, mevcut REQ-CNT/SND/SCH testleri değişmeden yeşil, §3.2 listesi |
 
 Her faz sonunda `main` üzerinde `p<N>-done` etiketi.
 
@@ -453,13 +454,14 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 - [ ] Kişisel bilgi yok: izlenen dosyalarda ve session export'larında ad-soyad, kişisel e-posta ve yerel bilgisayar yolları temizlendi; squash merge commit'leri noreply adresiyle yazılıyor (geçmiş commit'ler yeniden yazılmaz, D58)
 - [ ] REQ eşleme raporu: testi olmayan REQ yok
 - [ ] P7 yapıldıysa: `p7-done` etiketi, REQ-SCH testleri yeşil, `README.md` bonuslarda CI'ın yanında zamanlanmış gönderimi anar (§9.6); yapılmadıysa P7a dalı `main`'e girmemiştir
+- [ ] P8 yapıldıysa: `p8-done` etiketi, REQ-LNG testleri yeşil, `README.md` bonus tablosunda dile göre içerik "yapıldı" olarak geçer (§10.7); yapılmadıysa P8 dalı `main`'e girmemiştir
 
 ---
 
 ## 9. P7 — Bonus fazı
 
 > **Kaynak:** case dokümanının "Bonus (isteğe bağlı)" bölümü: zamanlanmış gönderim, A/B varyantları, kullanıcının diline göre içerik, CI pipeline. Bonus yalnızca çekirdek akış sağlamsa yapılır [DOK]; P6 kapısı (`p6-done`) P7'nin ön koşuludur.
-> **Kapsam [SEN]:** P7a zamanlanmış gönderim (yapılacak) ve P7b CI pipeline (yapıldı). **A/B varyantları ve dile göre içerik kapsam dışıdır**; sahip eklerse ayrı kırım ve ayrı REQ alanı alır (`language` seed alanı §5.2'de hazır bekler).
+> **Kapsam [SEN]:** P7a zamanlanmış gönderim (yapılacak) ve P7b CI pipeline (yapıldı). **A/B varyantları kapsam dışıdır**; sahip eklerse ayrı kırım ve ayrı REQ alanı alır. **Dile göre içerik P7'de değil, P8'de yapılır** (§10; `language` seed alanı §5.2'de hazırdı).
 
 ### 9.1 P7b — CI pipeline ✅ (yapıldı, P0–P6)
 
@@ -592,3 +594,119 @@ P2–P6 ile aynı akış (§1.2, §3): sözleşme → test → kod; hiçbir rol 
 | Uzun süre açık SSE | Planlı kampanyanın Takip sayfası günlerce açık kalabilir | Bugünkü 1 sn yoklama + 15 sn keepalive yeter; sekme kapanınca akış kapanır |
 
 **Sahip kararları (2026-10-28, `DECISIONS.md` D62):** (1) planlama `POST /send`'e isteğe bağlı `scheduled_at` ile yapılır, iptal için ayrı `DELETE …/schedule`; (2) `scheduled`'da düzenleme 409 `invalid_state` (durum makinesinin sonucu, ek akış yok); (3) worker kapalıyken kaçan plan geç de olsa gönderilir; (4) göreli pencereler planlanan ana göre yeniden hesaplanmaz (hazırlama anındaki referans zamana bağlı kalır); (5) ufuk sınırları (en az 1 dk, en çok 30 gün) ve yalnız TSİ arayüzü, sahip itiraz etmediği için varsayılan olarak uygulanır.
+
+
+---
+
+## 10. P8 — Bonus: kullanıcının diline göre içerik
+
+> **Kaynak:** case dokümanı, Bonus listesi: "Kullanıcının diline göre içerik" [DOK]. Case başka ayrıntı vermez; aşağıdaki tasarım VARSAYIM'dır ve `DECISIONS.md` D63 olarak yazılır. Ön koşul: `p7-done`. Bonus yalnızca çekirdek akış sağlamsa yapılır; çekirdek akışın anlamı (kitle → içerik → onay → gönderim → takip) değişmez.
+> **Kapsam [SEN]:** yalnızca A/B dışındaki bu bonus. A/B varyantları kapsam dışı kalır ve burada "varyant" sözcüğü A/B anlamına gelmez; bu fazda adı **dil sürümü**dür.
+
+### 10.1 Bugünkü durum (tasarımın dayanağı)
+
+- `customers.language` zaten var: `tr` %90, `en` %10 (`CHECK IN ('tr','en')`, seed.md); segment DSL'de `language` alanı (`eq/neq/in/not_in`) var. Yani **veri ve kitle tarafı hazır**; eksik olan içerik ve gönderim.
+- İçerik tek dillidir: `content_versions.sms_body / email_subject / email_body`; araç açıklaması "in Turkish" der (llm-tools.md §1); `Render` alıcının dilini bilmez, yedek metin sabit `Değerli müşterimiz`; e-posta HTML'i `<html lang="tr">`.
+- Gönderim anında şablon her alıcı için `content.RenderContent` ile doldurulur (REQ-CNT-05 ikinci denetimi); teslimat alıcı adresi veya metin saklamaz. Dil seçimi bu noktaya eklenir; kuyruk, hız sınırı, retry, idempotency değişmez.
+
+### 10.2 Tasarım seçenekleri (karar D63)
+
+| | A — Dil başına ayrı üretim ve ayrı sürüm | B — Çeviri adımı (Türkçe üret, sonra çevir) | **C — Tek sürüm, tek araç çağrısı, iki dil sürümü (seçilen)** |
+|---|---|---|---|
+| Onay | Dil başına ayrı onay; hangisinin onaylandığı karışır | Çeviri ayrı doğrulanır, yine iki aşama | Pazarlamacı tek sürümü, iki dil sürümüyle birlikte onaylar |
+| LLM çağrısı | İki akış, iki kira, iki kez hata yolu | İki ardışık çağrı; ikincinin ilkine bağımlılığı | Bugünkü tek akış, tek düzeltme turu; model iki metni birlikte tutarlı yazar |
+| Doğrulama | İki ayrı döngü | Çeviri hatası ayrı kod ister | Mevcut `content.Validate` her dil sürümüne uygulanır |
+| Geriye uyumluluk | Sürüm modeli kırılır | Orta | Yalnızca ekleme: Türkçe alanlar yerinde kalır, `en` isteğe bağlı |
+
+C seçilir: onay, sürümleme, üretim kilidi ve düzeltme döngüsü bugünkü haliyle çalışır; yeni olan tek şey "bir sürümde birden fazla dil metni" ve gönderimde dil seçimidir. Bedel: kitlede İngilizce alıcı varsa araç çıktısı iki katına çıkar (token ve akış süresi), ve iki dil aynı çağrıda üretildiği için biri geçersizse ikisi birlikte yeniden denenir.
+
+### 10.3 Veri modeli ve içerik sözleşmesi
+
+- **Desteklenen diller:** `tr` (ana/varsayılan) ve `en`; kümesi `customers.language` kısıtıyla aynıdır. Yeni dil eklemek bu fazın işi değildir.
+- **İçerik şeması (`content.schema.json`), yalnız ekleme:** `sms`/`email` Türkçe ana metin olarak aynen kalır; isteğe bağlı `en: { sms: { body }, email: { subject, body } }` eklenir. `en` yoksa içerik eskisi gibi geçerlidir (mevcut fixture'lar ve testler değişmez). Aynı `content.Parse` + `content.Validate` hem LLM çıktısını hem insan düzenlemesini doğrular (REQ-APR-02 kalıbı).
+- **Doğrulama:** her dil sürümü için aynı kurallar: SMS ≤ 160, konu ≤ 80, gövde ≤ 5000; izinli değişkenler aynı üç (`first_name`, `last_name`, `city`); bilinmeyen/bozuk değişken reddedilir. Alan hatası yolları `en.sms.body`, `en.email.subject` gibi öneklidir; mevcut kodlar (`sms_too_long`, `unknown_variable`, `required` …) aynen kullanılır, yeni kod yalnız gerekirse eklenir. Ölçü **en kötü durum**dur (REQ-CNT-05): her dil sürümü, kampanyanın segmentindeki en uzun değerlerle (`longest_*`) doldurulur. Değerler dilden bağımsız tek kümedir (kitle = kuralla eşleşen herkes), böylece yeni migration gerekmez; bilinçli muhafazakârlık (VARSAYIM).
+- **Yedek metin dile göre:** `first_name` boşsa `tr` için `Değerli müşterimiz`, `en` için `Dear customer`. `Recipient` dil bilgisi taşır; `Render` bu bilgiyle yedek metni seçer.
+- **Saklama — migration `0009_content_en` (up + down):** `content_versions` tablosuna `en_sms_body`, `en_email_subject`, `en_email_body` (üçü birlikte NULL veya üçü birlikte dolu; `CHECK`) ve `worst_case_en_sms_runes`, `worst_case_en_subject_runes` (NULL olabilir). `campaigns` tablosuna `audience_languages jsonb` (kanal başına `{"sms":{"tr":n,"en":m},"email":{…}}`; segment üretiminde mevcut sayım sorgusuyla birlikte yazılır, `NULL` = eski kampanya). Down: kolonlar `-- allow-destructive` ile düşer; `make db-roundtrip` `up → down → up` ve boş şema diff'i. 0003 düzenlenmez.
+- **Etkin sürüm kuralı:** `en` yoksa dil sürümü yoktur; `en` olan sürümde ikisi de tam doğrulanmıştır (yarım dil sürümü yok: ya üçü de dolu ya yok).
+- **Yedek davranış (VARSAYIM, D63):** `language = 'en'` alıcı ve sürümde `en` yoksa alıcı Türkçe ana metni alır. Bu yol artık gerçekten ortaya çıkabilir: kitlede İngilizce yokken üretilen sürüm sonradan düzenlemeyle de olsa İngilizce alıcıya gidebilir (ör. izinler değişti) ya da pazarlamacı İngilizce sekmesini silerek düzenledi. Gönderim reddedilmez: bu, kullanıcı İngilizce metin istemediğinde bugünkü davranışın aynısıdır. `language` değeri tanımsız olamaz (DB kısıtı), dolayısıyla "bilinmeyen dil" yolu yoktur.
+
+### 10.4 LLM ve akış
+
+- **Ne zaman İngilizce üretilir (D63, sahip kararı):** yalnız kampanyanın kitlesinde İngilizce alıcı varsa, yani `audience_languages` içinde herhangi bir kanalda `en` > 0 ise. Yoksa model yalnız Türkçe üretir (bugünkü davranış, token maliyeti artmaz). Karar içerik üretimi başlarken, kampanyanın güncel segmentinin sayımından verilir; segment değişince sürüm zaten eskir (güncel `segment_revision` kuralı) ve yeni üretimde karar yeniden verilir.
+- **Araç:** strict modda isteğe bağlı alan olmadığı için (llm-tools.md §1.1) iki strict varyant gönderilir: yalnız Türkçe (`content.tool.json`, bugünkü, değişmez) ve iki dilli (`content-en.tool.json`, `en` nesnesi `required`). Hangisinin gideceğini yukarıdaki kural seçer; `llm.ToolSchema` iki ada da cevap verir. İki dilli aracın açıklaması "Turkish as the main copy and an English version for English-speaking customers" der. Tam şemada `en` isteğe bağlıdır. İstem, her dil sürümü için sayılı sınırları ayrı ayrı söyler; İngilizce metin birebir çeviri değil, aynı niyet ve ton (samimi/kısa) olmalıdır. Brief hâlâ `<brief>` içinde veridir.
+- **Sahte LLM:** iki dilli araç seçildiğinde `CNT_OK_EN` (Türkçe + `en`) döner; yalnız Türkçe araçta bugünkü `CNT_OK` aynen döner, mevcut fixture'lar değişmez; yeni senaryo `en_too_long` (İngilizce SMS 161 karakter; deneme 1'de geçersiz, deneme 2'de düzelir) ve `en_unknown_variable` eklenir. Mevcut senaryoların Türkçe davranışı ve sonuçları aynıdır.
+- **Akış protokolü (`sse-events.md` §1):** `delta` olayının alan adı kümesi `sms.body`, `email.subject`, `email.body`'ye `en.sms.body`, `en.email.subject`, `en.email.body` ile genişler (ekleme; Türkçe alanlar önce akar). `invalid` olayındaki hata yolları aynı önekle gelir. Olay şekli değişmez; eski istemci bilinmeyen alanı yok sayabilmelidir (REQ yazılırken denetlenir).
+- **Düzeltme turu:** hata `tool_result` içinde dil önekli yollarla gider; tek düzeltme denemesi iki dil sürümünü birlikte yeniden üretir (deneme sayısı ≤ 2 değişmez).
+
+### 10.5 API, gönderim ve arayüz
+
+**API (`openapi.yaml`, hepsi ekleme):**
+- `ContentVersion`, `content-versions` isteği (insan düzenlemesi) ve yanıt gövdelerine isteğe bağlı `en`; `en` olmadan gelen düzenleme "İngilizce sürümü yok" anlamına gelir (sessizce eskisini korumaz; yeni sürüm tam gövdeyi taşır).
+- Segment yanıtına `audience.languages` (kanal başına `tr`/`en` sayıları, §10.3'teki saklama); `Campaign` üzerinde okunur.
+- `GET …/preview` sorgusuna isteğe bağlı `language` (`tr`|`en`); verilmezse örnek alıcının kendi dili. Yanıt hangi dilin gösterildiğini ve `fallback: true`'yi (İngilizce alıcıya Türkçe düşme) taşır. Geçersiz değer 422 `validation_failed`.
+- Onay: her dil sürümünün en kötü durum denetimi onay anında yeniden yapılır (REQ-CNT-05 kalıbı); hata yolu dil önekli. Onay, sürümü bütün olarak onaylar; dil bazlı kısmi onay yoktur.
+
+**Gönderim (`internal/delivery`):**
+- Alıcının metni `content.RenderContent(content, recipient)` ile seçilir: `recipient.Language == "en"` ve sürümde `en` varsa İngilizce, yoksa Türkçe. Seçim `Dispatcher`'ın mevcut render noktasındadır; **kuyruk, claim, token bucket, retry, idempotency anahtarı değişmez**. Send-time `CheckRendered` (REQ-CNT-05 ikinci denetimi) seçilen metne uygulanır; aşan teslimat bugünkü gibi `content_too_long` ile `failed` olur.
+- Teslimat satırına dil kolonu **eklenmez** (metin ve adres de saklanmıyor; PII ilkesi, db-schema §3.7). Dil dağılımı gerekiyorsa `customers` ile birleştirilir. Planlı gönderimde (P7a) aynı yol çalışır; dil, gönderim anında alıcının güncel `customers.language` değerinden okunur.
+- E-posta HTML'i: `RenderEmailHTML` dil alır, `<html lang="tr|en">` yazar (Türkçe çıktı baytı baytına aynı kalır, yani mevcut testler geçer).
+- Mock provider değişmez (içerik opak).
+
+**Arayüz (`ui.md`, DESIGN.md):**
+- **Kitle ekranı:** kanal sayılarının yanında dil dağılımı (`audience-languages`; örn. "TR 1.240 · EN 130"). Dağılımı olmayan eski kampanyada satır gizlenir.
+- **İçerik ekranı:** `ContentPanel` içinde TR / EN sekmesi (`content-lang-tab-tr`, `content-lang-tab-en`; `role="tablist"`, klavye ok tuşları, DESIGN.md erişilebilirlik kuralları). Akış sırasında iki dil de akar, etkin sekmenin metni görünür; diğer sekmede "akıyor" rozeti. Düzenleme her sekmede ayrı, kaydet bütün sürümü yollar; alan hataları dil önekli yolla ilgili sekmeye işaretlenir ve sekme başlığında hata göstergesi çıkar.
+- **Önizleme:** dil seçici (`preview-language`); "Bu kitlede 130 kişi İngilizce alır" bilgisi. Sürümde `en` yoksa ve kitlede İngilizce alıcı varsa uyarı: "130 alıcı Türkçe metni alacak". Bu bir engel değildir (D63).
+- i18n metinleri tek dosyada (`web/src/i18n`); LLM içeriği dışında yeni serbest metin yok; içerik `v-html` ile basılmaz.
+
+### 10.6 Gereksinimler (`docs/requirements.md`, yeni alan LNG) ve testler
+
+Test yazarı yalnız `docs/requirements.md`'den çalışır (D50): testte gerekecek her ad, yol, alan kodu ve fixture REQ metnine yazılır. "Kapsam dışı ve bonus" paragrafı güncellenir (dile göre içerik artık REQ'li; yalnız A/B kapsam dışı). Taslak kabul ölçütleri:
+
+- **REQ-LNG-01 — İçerik iki dil sürümü taşır ve her biri doğrulanır · Faz P8 · [DOK] bonus + VARSAYIM tasarım:** `en` bloğunun biçimi, alan yolları (`en.sms.body` …), 160/80/5000 sınırları ve değişken kuralları her dil için; `en` yokken içerik eskisi gibi geçerli; yarım `en` (`schema_violation`); en kötü durum ölçümü her dil için ayrı (`worst_case_en_*`); düzenleme `en`'i aynı doğrulayıcıdan geçirir; onay her dil sürümünü yeniden denetler (422, dil önekli yol).
+- **REQ-LNG-02 — Claude kitle gerektirdiğinde iki dilde üretir, akış ve düzeltme dil bilir · Faz P8 · VARSAYIM:** kitlede `en` > 0 ise iki dilli araç ve `CNT_OK_EN`, değilse yalnız Türkçe araç ve `CNT_OK` (sahte LLM'in aldığı araç adından denetlenir); `delta` olaylarında `en.*` alan adları; `en_too_long` ve `en_unknown_variable` senaryoları tek düzeltme turuyla biter (deneme ≤ 2); araç şeması strict kurallarına uyar (llm-tools.md §1.1 birim testi); `llm_attempts` ve üretim kilidi davranışı değişmez.
+- **REQ-LNG-03 — Gönderimde her alıcıya kendi dilindeki metin gider · Faz P8 · VARSAYIM:** `recipient.Language` = `en` ve sürümde `en` var → İngilizce SMS/konu/gövde ve `<html lang="en">`; `tr` → Türkçe (baytı baytına bugünkü çıktı); `en` yoksa İngilizce alıcıya Türkçe düşer ve gönderim başarılıdır; yedek ad (`Dear customer` / `Değerli müşterimiz`); send-time `CheckRendered` seçilen dil metnine uygulanır; planlı gönderimde aynı seçim; kanal izni, tekillik (`UNIQUE`), ≤ 100/sn ve retry iddiaları değişmeden geçer (mevcut REQ-SND testleri değiştirilmez).
+- **REQ-LNG-04 — Arayüz: dil dağılımı, sekmeler, önizleme · Faz P8 · VARSAYIM:** §10.5'teki testid'ler; `audience-languages` sayıları; TR/EN sekme klavye erişimi; dil önekli alan hatasının doğru sekmeye düşmesi; `preview-language` ve Türkçe-yedek uyarısı; `v-html` yok.
+
+İzlenebilirlik tablosuna dört satır: LNG-01 `unit, integration, e2e`; LNG-02 `unit, e2e`; LNG-03 `unit, integration, delivery, e2e`; LNG-04 `web-unit`.
+
+| Katman | Senaryolar |
+|---|---|
+| **Unit** | `content.Parse/Validate` dil sürümüyle (sınırlar 160/161, 80/81, bilinmeyen/bozuk değişken, yarım `en`); `Render` dil ve yedek metin; `RenderEmailHTML` `lang`; strict şema anahtar denetimi; sahte LLM senaryoları |
+| **Entegrasyon (DB)** | 0009 kısıtları (`en_*` ya hepsi ya hiçbiri); `audience_languages` doğru sayım (izin süzgeci sonrası, kanal başına); sürüm kaydı ve onay iptali (`content_changed`) `en` değişince; iki API örneğiyle üretim kilidi değişmez |
+| **Gönderim — gerçek mock provider** | İki dilli bir kitleyle gönderim: mock provider'a giden gövdelerde alıcı dilinin metni; hız/tekillik iddiaları aynı |
+| **API E2E** | Key'siz: brief → segment (dil dağılımı) → içerik (`en` dahil) → onay → gönder → sağlayıcıya giden dil dağılımı kitleyle eşleşir; `en` olmayan sürümde İngilizce alıcıya Türkçe; 422 vakaları; yeni/değişen işlemler en az bir kez çağrılır (D30 `OPENAPI_VALIDATE=strict`) |
+| **Frontend (Vitest)** | Sekmeler ve klavye, akışta iki dil, dil önekli hata eşlemesi, dağılım satırı, önizleme seçici ve yedek uyarısı |
+| **Elle** | 375/768/1280 px'de İçerik sekmeleri ve Kitle dil satırı ekran görüntüsü PR'da; gerçek Claude ile (anahtar varsa) bir kez uçtan uca İngilizce metin kalitesi gözle kontrol |
+
+### 10.7 Dilim akışı, sıra, roller ve kapı
+
+P2–P7 ile aynı akış (§1.2, §3); `docs/PLAN.md` §9.5 ve P7'de öğrenilen kalıp geçerli: yanıt şekli değişen bir özellikte sözleşme, test, backend ve web aynı API'yi kullandığı için tek tek kırmızı olur; P7 gibi **tek entegrasyon branch'i** (`chore/p8-language-integrate`) planlanır (test yazarı dosyaları kopyalanır, `make test` koşulur, orkestratör commit'ler). Uygulayıcı ajanlar test dosyasına dokunmaz.
+
+1. **Sözleşme** — `docs/p8-language-contracts` → `main` (mimar): `docs/requirements.md` (REQ-LNG-01..04, kapsam dışı paragrafı, izlenebilirlik), `content.schema.json` + strict varyant, `llm-tools.md` (araç açıklaması, senaryolar), `sse-events.md`, `openapi.yaml`, `db-schema.md` (0009), `go-interfaces.md` (`Recipient.Language`, `Content.En`, `Render*`, `Preview`), `ui.md`, DESIGN.md (sekmeler), `DECISIONS.md` D63. **Kabul:** `api-contract` yeşil; sahip REQ metnini onayladı.
+2. **Dilim branch'i** — `slice/p8-language` güncel `main`'den.
+3. **Testler** — `scripts/test-writer-worktree.sh origin/slice/p8-language test/p8-language`, ayrı session'da `claude --agent test-writer`; yalnız REQ-LNG ölçütlerinden; eksik ad varsa "REQ eksik" döner (adım 1'e). Test yazarı session export'u `ai-sessions/`'a eklenir (P7'den kalan açık soru).
+4. **Backend** — içerik paketi (`Content.En`, doğrulama, en kötü durum), migration 0009 (+down), kitle sayımı, composer/LLM aracı + sahte LLM, preview, dispatcher render seçimi, e-posta HTML `lang`. **Kabul:** Go testleri yeşil, `make db-roundtrip` yeşil, mevcut REQ-CNT/SND/SCH testleri değişmeden yeşil.
+5. **Arayüz** — Kitle dil satırı, İçerik sekmeleri, önizleme seçici, `api-types` yeniden üretimi. **Kabul:** Vitest yeşil, üç genişlikte ekran görüntüsü.
+6. **Kapı** — `slice/p8-language` → `main`: `code-reviewer` raporu (dil seçimi ve doğrulama kapsaması için ayrıca `security-reviewer`: LLM çıktısı iki katına çıktı, `v-html` ve HTML kaçışı), `verifier` kanıtı, `ci-ok` yeşil, squash merge, `p8-done` etiketi, session export'ları.
+
+**Faz kapısı (P8):**
+- §3.2 listesinin tamamı; REQ-LNG-01..04'ün her biri en az bir testle eşli ve yeşil; testsiz REQ listesi boş.
+- `make db-roundtrip` yeşil (0009 `up → down → up`, boş şema diff'i); `make test` key'siz yeşil.
+- Mevcut REQ-CNT/SND/SCH/TRK testleri değiştirilmeden yeşil (Türkçe çıktı baytı baytına aynı).
+- Elle kanıt: compose yığınında iki dilli kitleyle gönderim; mock provider isteklerinde Türkçe ve İngilizce gövdeler kitle dağılımıyla eşleşir; `en` içermeyen eski sürümle gönderimde İngilizce alıcı Türkçe alır.
+- `README.md` bonus tablosunda dile göre içerik "yapıldı" (CI ve zamanlanmış gönderimin yanında); `DECISIONS.md` D63 güncel.
+
+### 10.8 Riskler ve VARSAYIM'lar
+
+| Konu | VARSAYIM / risk | Azaltma |
+|---|---|---|
+| Dil kümesi | Yalnız `tr` ve `en` (seed ve DB kısıtı) | Üçüncü dil ayrı kırım ister; şema `en` bloğuna sabitlenmez diye zorlanmaz, ama bu fazda genelleme yapılmaz (YAGNI) |
+| Çeviri kalitesi | Claude'un İngilizcesi doğrulayıcıdan geçer ama dil kalitesini sistem ölçemez | İnsan onayı zaten zorunlu; sekmede açıkça görünür ve düzenlenir; elle kalite kontrolü kapıda |
+| Yedek davranış | `en` yokken İngilizce alıcı Türkçe alır (reddetmez) | Önizlemede alıcı sayısıyla uyarı; sahip isterse yedek yerine onay engeli yapılabilir (D63) |
+| Çıktı boyutu | İki dil → ~2× token ve akış süresi; 4096 `max_tokens` sınırı aşılabilir; yalnız kitlede İngilizce varken ödenir | Türkçe-yalnız kitlede maliyet artmaz; `LLM_MAX_TOKENS` kontrolü ve `truncated_output` yolu zaten var; gerekirse varsayılan yükseltilir (ölçümle) |
+| En uzun değerler | Tek küme (dilden bağımsız) muhafazakâr; İngilizce metinde gereksiz kısıt olabilir | Bilinçli: migration ve tutarsızlık riski yok |
+| Eşzamanlı düzenleme | `en` olmadan gelen düzenleme İngilizceyi düşürür | Arayüz her zaman bütün gövdeyi yollar; OpenAPI açıklaması ve test bu anlamı sabitler |
+| Geriye uyumluluk | Eski kampanyalar `en`'siz, `audience_languages` NULL | Arayüz boş durumu gizler; mevcut testler değişmeden yeşil olmak zorunda (kapı) |
+| Planlı gönderim | Dil gönderim anında alıcının güncel `language`'ından okunur | P7a ile aynı "kitle gönderim anında okunur" ilkesi (D62) |
+
+**Sahip onayı bekleyen noktalar (planı kilitlemeden önce):** (1) yedek davranış: İngilizce metin yoksa Türkçe mi gitsin yoksa onay engellensin mi (plan: Türkçe gider); (2) ~~İngilizce sürüm her zaman mı~~ **karar verildi:** yalnız kitlede İngilizce alıcı varsa üretilir (§10.4); (3) ~~dil kümesi~~ **karar verildi:** yalnız `tr`/`en`. Case yalnız "Kullanıcının diline göre içerik" der; başka ayrıntı yoktur, tüm tasarım VARSAYIM'dır.
