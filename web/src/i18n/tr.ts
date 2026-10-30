@@ -164,7 +164,7 @@ export const tr = {
   'editor.variables': 'Değişken ekle',
   'editor.save': 'Kaydet ve doğrula',
   'editor.shortcut': 'Kaydetmek için Ctrl/⌘ + Enter',
-  'editor.lockedNote': 'Gönderim başladı; içerik artık düzenlenemez.',
+  'editor.lockedNote': 'Gönderim planlandı veya başladı; içerik artık düzenlenemez.',
   'editor.invalidVariables': 'İzin verilmeyen değişkenler',
   'editor.conflict.title': 'İçerik başka bir yerde değişti (sürüm {n}).',
   'editor.conflict.reload': 'Son sürümü yükle',
@@ -295,7 +295,7 @@ export const tr = {
   'toast.approved': 'İçerik onaylandı.',
   'toast.sendStarted': 'Gönderim başladı: {total} mesaj kuyruğa alındı.',
   'toast.scheduled': 'Gönderim {time} için planlandı.',
-  'toast.scheduleCanceled': 'Plan iptal edildi; kampanya yeniden onaylı.',
+  'toast.scheduleCanceled': 'Plan iptal edildi; kampanya onaylı durumda.',
 
   // --- Empty states / pages ---
   'empty.campaign_not_found.title': 'Kampanya bulunamadı',
