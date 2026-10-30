@@ -42,6 +42,7 @@ import { t } from '@/i18n'
 import { walkedSamples } from '@/lib/preview'
 import { isLockedForEditing } from '@/lib/steps'
 import { invalidVariables } from '@/lib/variables'
+import { languageFromQuery } from '@/lib/language'
 import { campaignIdOf } from '@/router'
 import { injectApiClient, reportError } from '@/stores/api'
 import { useCampaignStore } from '@/stores/campaign'
@@ -107,7 +108,7 @@ const dirty = computed(() => {
 
 const channel = ref<ChannelKey>('sms')
 type Language = 'tr' | 'en'
-const language = ref<Language>('tr')
+const language = ref<Language>(languageFromQuery(route.query.lang))
 const langId = useId()
 
 const showStream = computed(
@@ -126,6 +127,11 @@ const englishAvailable = computed(() =>
   showStream.value ? gen.hasEnglish.value : draft.value?.en != null,
 )
 const activeLanguage = computed<Language>(() => (englishAvailable.value ? language.value : 'tr'))
+
+function onLanguage(l: Language) {
+  language.value = l
+  void router.replace({ query: { ...route.query, lang: l } })
+}
 
 const phasesOf = (l: Language): Record<FieldKey, ContentPhase> => {
   if (showStream.value || editingDraft.value) {
@@ -230,23 +236,18 @@ const preview = ref<Preview | null>(null)
 const previewLoading = ref(false)
 const previewError = ref<ApiError | null>(null)
 let previewSeq = 0
-/** P8: language picked in `preview-language`; null => no `language` query (server decides). */
-const previewLanguage = ref<Language | null>(null)
-const showPreviewLanguage = computed(() => {
-  const l = campaign.value?.segment?.audience.languages
-  return draft.value?.en != null || (l ? l.sms.en + l.email.en > 0 : false)
-})
-const shownPreviewLanguage = computed<Language>(
-  () => previewLanguage.value ?? preview.value?.language ?? 'tr',
-)
+/** P8: `language` query of the last preview request; tabs visible => the selected tab's language. */
+let requestedLanguage: Language | undefined
+const previewLanguageParam = () => (englishAvailable.value ? activeLanguage.value : undefined)
 
 async function loadPreview(index: number) {
   const id = campaignId.value
   if (!id) return
   const seq = ++previewSeq
+  requestedLanguage = previewLanguageParam()
   previewLoading.value = true
   try {
-    const p = await api.previewContent(client, id, index, previewLanguage.value ?? undefined)
+    const p = await api.previewContent(client, id, index, requestedLanguage)
     if (seq !== previewSeq) return
     preview.value = p
     previewError.value = null
@@ -260,10 +261,12 @@ async function loadPreview(index: number) {
   }
 }
 
-function onPreviewLanguage(l: Language) {
-  previewLanguage.value = l
-  void loadPreview(preview.value?.sample_index ?? 0)
-}
+// The preview follows the selected language tab (REQ-LNG-04); sample_index is kept.
+watch([englishAvailable, activeLanguage], () => {
+  if (preview.value && previewLanguageParam() !== requestedLanguage) {
+    void loadPreview(preview.value.sample_index)
+  }
+})
 
 function onNextSample() {
   if (previewError.value?.code === 'customer_not_found') {
@@ -493,11 +496,14 @@ function onDraftUpdate(c: Content) {
 function goToApproval() {
   const id = campaignId.value
   if (!id || !canApprove.value) return
-  void router.push({ name: 'approval', params: { campaignId: id } })
+  void router.push({
+    name: 'approval',
+    params: { campaignId: id },
+    ...(englishAvailable.value ? { query: { lang: activeLanguage.value } } : {}),
+  })
 }
 
 const CHANNELS: readonly ChannelKey[] = ['sms', 'email']
-const PREVIEW_LANGUAGES: readonly Language[] = ['tr', 'en']
 const streamLanguages = computed<readonly Language[]>(() =>
   englishAvailable.value ? ['tr', 'en'] : ['tr'],
 )
@@ -570,10 +576,11 @@ onMounted(() => {
       <template v-else>
         <LanguageTabs
           v-if="englishAvailable"
-          v-model="language"
+          :model-value="activeLanguage"
           :phases="languagePhases"
           :errors="languageErrors"
           :id-base="langId"
+          @update:model-value="onLanguage"
         />
         <div
           :id="englishAvailable ? `${langId}-panel` : undefined"
@@ -633,25 +640,6 @@ onMounted(() => {
                   <div class="flex flex-col gap-0.5">
                     <h2 class="text-h4 text-accent-heading">{{ t('content.previewTitle') }}</h2>
                     <p class="text-caption text-ink-500">{{ t('content.previewHint') }}</p>
-                  </div>
-                  <div
-                    v-if="showPreviewLanguage"
-                    data-testid="preview-language"
-                    role="group"
-                    :aria-label="t('preview.language')"
-                    class="inline-flex w-fit gap-1 rounded-pill border border-border-default bg-surface-card p-1"
-                  >
-                    <button
-                      v-for="l in PREVIEW_LANGUAGES"
-                      :key="l"
-                      type="button"
-                      :data-testid="`preview-language-${l}`"
-                      :aria-pressed="shownPreviewLanguage === l ? 'true' : 'false'"
-                      class="inline-flex h-8 items-center rounded-pill px-3 text-body-sm font-semibold text-ink-600 outline-none transition-colors focus-visible:shadow-focus aria-pressed:bg-secondary aria-pressed:text-accent-text max-lg:h-11"
-                      @click="onPreviewLanguage(l)"
-                    >
-                      {{ t(l === 'tr' ? 'language.tr' : 'language.en') }}
-                    </button>
                   </div>
                   <p
                     v-if="preview?.fallback"

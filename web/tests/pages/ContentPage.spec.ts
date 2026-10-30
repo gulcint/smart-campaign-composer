@@ -419,25 +419,50 @@ describe('ContentPage language tabs (REQ-LNG-04 C3)', () => {
   })
 })
 
+/** The preview follows the language query of the request (tr when absent). */
+const followQuery = (r: RecordedRequest) =>
+  langPreview(r.opts?.query?.language === 'en' ? 'en' : 'tr')
+
 describe('ContentPage preview language (REQ-LNG-04 C4)', () => {
-  it('preview-language marks the shown language with aria-pressed; choosing en re-requests the preview with language=en', async () => {
+  it('the preview follows the selected language tab; there is no preview-language selector', async () => {
     const setup: Setup = {
       camp: { value: campaign('content_ready', version(V1, 1, bilingual())) },
-      previewImpl: (r) => langPreview(r.opts?.query?.language === 'en' ? 'en' : 'tr'),
+      previewImpl: followQuery,
     }
     const { w, a } = await mountContent(setup)
     await flushPromises()
-    expect(w.find(sel('preview-language')).exists()).toBe(true)
-    expect(w.get(sel('preview-language-tr')).attributes('aria-pressed')).toBe('true')
-    expect(w.get(sel('preview-language-en')).attributes('aria-pressed')).not.toBe('true')
+    expect(w.find(sel('preview-language')).exists()).toBe(false)
+    expect(w.find(sel('preview-language-tr')).exists()).toBe(false)
+    expect(w.find(sel('preview-language-en')).exists()).toBe(false)
+    const first = a.last('GET', `${C}/preview`)
+    expect(first?.opts?.query?.language).toBe('tr')
+    expect(w.get(sel('sms-preview')).attributes('data-language')).toBe('tr')
 
     const before = a.count('GET', `${C}/preview`)
-    await w.get(sel('preview-language-en')).trigger('click')
+    await w.get(sel('language-tab-en')).trigger('click')
     await flushPromises()
     expect(a.count('GET', `${C}/preview`)).toBeGreaterThan(before)
-    expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBe('en')
-    expect(w.get(sel('preview-language-en')).attributes('aria-pressed')).toBe('true')
-    expect(w.get(sel('preview-language-tr')).attributes('aria-pressed')).not.toBe('true')
+    const next = a.last('GET', `${C}/preview`)
+    expect(next?.opts?.query?.language).toBe('en')
+    // sample_index is kept when the tab changes.
+    expect(next?.opts?.query?.sample_index).toBe(first?.opts?.query?.sample_index)
+    expect(w.get(sel('sms-preview')).attributes('data-language')).toBe('en')
+    // The preview is split by channel: EmailPreview is shown on the email channel tab only.
+    await w.get(sel('channel-tab-email')).trigger('click')
+    await flushPromises()
+    expect(w.get(sel('email-preview')).attributes('data-language')).toBe('en')
+  })
+
+  it('a Turkish-only version: no language-tabs and no language in the preview request', async () => {
+    const { w, a } = await mountContent({
+      camp: { value: campaign('content_ready', version()) },
+      previewImpl: followQuery,
+    })
+    await flushPromises()
+    expect(w.find(sel('language-tabs')).exists()).toBe(false)
+    expect(w.find(sel('preview-language')).exists()).toBe(false)
+    expect(a.count('GET', `${C}/preview`)).toBeGreaterThanOrEqual(1)
+    expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBeUndefined()
   })
 
   it.each([
@@ -456,6 +481,55 @@ describe('ContentPage preview language (REQ-LNG-04 C4)', () => {
       if (shown) expect(note.text()).toBe(t('preview.fallbackNote'))
     },
   )
+})
+
+describe('ContentPage lang query (REQ-LNG-04 C6)', () => {
+  it.each([
+    { lang: 'en', withEN: true, selected: 'en' },
+    { lang: 'tr', withEN: true, selected: 'tr' },
+    { lang: 'xx', withEN: true, selected: 'tr' },
+    { lang: 'en', withEN: false, selected: null },
+  ])(
+    'lang=$lang (version with en: $withEN) opens the $selected tab',
+    async ({ lang, withEN, selected }) => {
+      const { w, a } = await mountContent(
+        {
+          camp: {
+            value: campaign('content_ready', withEN ? version(V1, 1, bilingual()) : version()),
+          },
+          previewImpl: followQuery,
+        },
+        { query: { lang } },
+      )
+      await flushPromises()
+      if (selected === null) {
+        expect(w.find(sel('language-tabs')).exists()).toBe(false)
+        expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBeUndefined()
+        return
+      }
+      expect(w.get(sel(`language-tab-${selected}`)).attributes('aria-selected')).toBe('true')
+      expect(a.last('GET', `${C}/preview`)?.opts?.query?.language).toBe(selected)
+    },
+  )
+
+  it('changing the tab updates the lang query; content-to-approval carries it', async () => {
+    const { w, router } = await mountContent({
+      camp: { value: campaign('content_ready', version(V1, 1, bilingual())) },
+      previewImpl: followQuery,
+    })
+    await w.get(sel('language-tab-en')).trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.lang).toBe('en')
+    await w.get(sel('language-tab-tr')).trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.lang).toBe('tr')
+    await w.get(sel('language-tab-en')).trigger('click')
+    await flushPromises()
+    await w.get(sel('content-to-approval')).trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('approval')
+    expect(router.currentRoute.value.query.lang).toBe('en')
+  })
 })
 
 describe('ContentPage locked states (REQ-APR-03)', () => {

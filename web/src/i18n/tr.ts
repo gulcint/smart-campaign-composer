@@ -243,7 +243,6 @@ export const tr = {
   'preview.empty': 'Önizleme için doğrulanmış içerik gerekiyor.',
   'preview.error': 'Önizleme alınamadı.',
   'preview.subject': 'Konu',
-  'preview.language': 'Önizleme dili',
   'preview.fallbackNote':
     'Alıcı İngilizce konuşuyor ama içerikte İngilizce sürüm yok; Türkçe metin gösteriliyor.',
 

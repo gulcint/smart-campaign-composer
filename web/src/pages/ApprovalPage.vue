@@ -2,8 +2,8 @@
 // Step 4 (ui.md §3.24, §3.17, §3.18; DECISIONS D45; DESIGN.md §8.4): a read-only send summary
 // with one decision panel. Always approves and sends the campaign's latest content version;
 // `stale` appears only after a 409. No editor UI and no sample navigation here: that is step 3.
-import { CircleAlert, CircleCheck, FileText, PencilLine, RotateCw, Users } from '@lucide/vue'
-import { computed, onMounted, ref } from 'vue'
+import { CircleAlert, CircleCheck, FileText, Info, PencilLine, RotateCw, Users } from '@lucide/vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { api } from '@/api/endpoints'
@@ -14,10 +14,12 @@ import ApprovalBar from '@/components/ApprovalBar.vue'
 import Button from '@/components/Button.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import LanguageTabs from '@/components/LanguageTabs.vue'
 import Skeleton from '@/components/Skeleton.vue'
 import StepHeader from '@/components/StepHeader.vue'
 import { useNotify } from '@/composables/useNotify'
 import { formatNumber, t } from '@/i18n'
+import { languageFromQuery } from '@/lib/language'
 import { formatTsi } from '@/lib/schedule'
 import { isLockedForEditing } from '@/lib/steps'
 import { runeCount } from '@/lib/text-cap'
@@ -49,14 +51,32 @@ const locked = computed(() => isLockedForEditing(campaign.value?.state ?? null))
 // REQ-CNT-05: one pass/fail signal from the API's worst case after personalisation (every
 // variable filled with the audience's longest value). worst_case is null only for an invalid
 // template, which never reaches this page; the template length is the fallback.
+// P8: the selected language tab decides which lengths are shown; pass covers Turkish and English.
+const englishAvailable = computed(() => latest.value?.content.en != null)
+const language = ref<'tr' | 'en'>(languageFromQuery(route.query.lang))
+const activeLanguage = computed(() => (englishAvailable.value ? language.value : 'tr'))
+const previewLanguageParam = () => (englishAvailable.value ? activeLanguage.value : undefined)
+let requestedLanguage: 'tr' | 'en' | undefined
+const tabPhases = { tr: 'validated', en: 'validated' } as const
+const tabErrors = { tr: false, en: false }
+
+function onLanguage(l: 'tr' | 'en') {
+  language.value = l
+  void router.replace({ query: { ...route.query, lang: l } })
+}
+
 const limitCheck = computed(() => {
   const v = latest.value
   if (!v) return null
   const sms = v.worst_case?.sms_runes ?? runeCount(v.content.sms.body)
   const subject = v.worst_case?.subject_runes ?? runeCount(v.content.email.subject)
+  const fits = (s: number, j: number) => s <= SMS_LIMIT && j <= SUBJECT_LIMIT
   const en = v.worst_case?.en
-  const enPass = !en || (en.sms_runes <= SMS_LIMIT && en.subject_runes <= SUBJECT_LIMIT)
-  return { sms, subject, pass: sms <= SMS_LIMIT && subject <= SUBJECT_LIMIT && enPass }
+  const pass = fits(sms, subject) && (!en || fits(en.sms_runes, en.subject_runes))
+  if (activeLanguage.value === 'en' && en) {
+    return { sms: en.sms_runes, subject: en.subject_runes, pass }
+  }
+  return { sms, subject, pass }
 })
 
 // ---- preview of one sample recipient (ui.md §1.1, REQ-APR-01) ----
@@ -78,9 +98,10 @@ async function loadPreview() {
   const id = campaignId.value
   if (!id) return
   const seq = ++previewSeq
+  requestedLanguage = previewLanguageParam()
   previewLoading.value = true
   try {
-    const p = await api.previewContent(client, id, 0)
+    const p = await api.previewContent(client, id, 0, requestedLanguage)
     if (seq !== previewSeq) return
     preview.value = p
     previewError.value = null
@@ -93,6 +114,10 @@ async function loadPreview() {
     if (seq === previewSeq) previewLoading.value = false
   }
 }
+
+watch(activeLanguage, () => {
+  if (preview.value && previewLanguageParam() !== requestedLanguage) void loadPreview()
+})
 
 // ---- approve / send (ui.md §3.24) ----
 const dialogKind = ref<'approve' | 'send'>('approve')
@@ -240,7 +265,12 @@ const nextText = computed<string | null>(() =>
 
 function goToContent() {
   const id = campaignId.value
-  if (id) void router.push({ name: 'content', params: { campaignId: id } })
+  if (!id) return
+  void router.push({
+    name: 'content',
+    params: { campaignId: id },
+    ...(englishAvailable.value ? { query: { lang: activeLanguage.value } } : {}),
+  })
 }
 
 onMounted(async () => {
@@ -291,6 +321,18 @@ onMounted(async () => {
             class="rounded-pill border border-border-default px-2.5 py-0.5 font-mono text-caption text-ink-600"
             >{{ t('approval.version', { n: latest.version_number }) }}</span
           >
+        </div>
+
+        <div
+          v-if="latest && englishAvailable"
+          class="border-t border-border-subtle px-4 pt-3 md:px-8"
+        >
+          <LanguageTabs
+            :model-value="activeLanguage"
+            :phases="tabPhases"
+            :errors="tabErrors"
+            @update:model-value="onLanguage"
+          />
         </div>
 
         <p v-if="campaign && !latest" class="px-4 pb-6 text-body text-ink-600 md:px-8">
@@ -356,10 +398,20 @@ onMounted(async () => {
             <div
               data-testid="approval-preview"
               :data-state="previewState"
+              :data-language="preview?.language"
               :aria-busy="previewState === 'loading' ? 'true' : undefined"
               class="flex min-w-0 flex-col gap-4"
             >
               <template v-if="preview">
+                <p
+                  v-if="preview.fallback"
+                  data-testid="preview-fallback-note"
+                  role="note"
+                  class="flex items-start gap-2 rounded-sm bg-info-bg px-3 py-2 text-body-sm text-ink-700"
+                >
+                  <Info class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  {{ t('preview.fallbackNote') }}
+                </p>
                 <p data-testid="approval-preview-sample" class="text-caption text-ink-500">
                   {{ t('approval.sample', { name: sampleName }) }}
                 </p>
