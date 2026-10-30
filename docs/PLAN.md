@@ -96,7 +96,6 @@ Doküman "her şeyi yapmak yerine çekirdek akışı sağlam yap" diyor; fronten
 | 6 | **P6 Sertleştirme + teslim** | Uçtan uca test, güvenlik taraması, `README.md`, `DECISIONS.md`, session export'ları, değerlendirici erişimi · **Kişisel bilgi temizliği** (sahip isteği, 2026-10-28): izlenen dosyalar ve `ai-sessions/` export'larından ad-soyad, kişisel e-posta (gmail) ve yerel bilgisayar yolları (`/Users/<kullanıcı>/…`) temizlenir; temizleme betiği (`make sanitize-sessions`) ve hook desenleri bu üç türü kapsayacak şekilde genişletilir. Commit meta verisi: GitHub'da e-posta gizliliği açılır ki squash merge commit'leri noreply adresiyle yazılsın; geçmişteki commit'lerin yazar adı/e-postası **yeniden yazılmaz** (sahip kararı, 2026-10-28, `DECISIONS.md` D58). GitHub kullanıcı adı (`gulcint`) repo adresi ve Go modül yolunun parçası olduğu için kalır | REQ-DLV-03, REQ-DLV-04 + REQ eşleme raporu boş + doğrulayıcı onayı + teslim kontrol listesi; kişisel bilgi taraması (izlenen dosyalarda `git grep` ile ad, e-posta, `/Users/` yolu; yeni commit'lerde `git log --format='%an <%ae>'`) temiz |
 | 7 | **P7 Bonus** (`slice/p7-schedule`) | Case'in "Bonus (isteğe bağlı)" listesinden iki kırım (§9): **P7a Zamanlanmış gönderim** — onaylı kampanya ileri bir zamana planlanır, iptal/yeniden planlanır, zamanı gelince worker gönderimi başlatır; Onay ekranında "şimdi / ileri tarihte", Takip ekranında planlanan saat + geri sayım (REQ-SCH-01..04) · **P7b CI pipeline ✅** — P0'da kuruldu, P2–P6'da genişletildi ve sadeleştirildi (§1.2, §2.3, D27, D51); P7'de yeni iş yok. A/B varyantları **kapsam dışı** (sahip eklemedikçe); dile göre içerik P8'e taşındı | P7a: REQ-SCH (01–04) testleri yeşil, `make db-roundtrip` yeşil, §3.2 listesi; P7b: `main` ruleset'i `ci-ok`'u zorunlu tutuyor (kanıt: son merge'lerin `ci-ok` sonucu) |
 | 7+ | **P8 Bonus: dile göre içerik** (`slice/p8-language`) | Kullanıcının `language` alanına (`tr`/`en`) göre içerik: Claude tek çağrıda Türkçe ana metni ve İngilizce varyantı üretir, tek sürüm ikisini taşır, doğrulama ve onay her dil için aynı kurallarla yapılır, gönderimde her alıcıya kendi dilindeki metin gider, İngilizce varyantı olmayan sürümde İngilizce alıcı Türkçe yedek metni alır; Kitle ekranında dil dağılımı, İçerik ekranında TR/EN sekmeleri (§10, REQ-LNG-01..04) | REQ-LNG (01–04) testleri yeşil, `make db-roundtrip` yeşil, mevcut REQ-CNT/SND/SCH testleri değişmeden yeşil, §3.2 listesi |
-| 7++ | **P9 Bonus: A/B varyantları** (`slice/p9-ab`) | Pazarlamacı üretimden önce "A/B testi" seçerse Claude tek çağrıda iki içerik varyantı (A, B) ve her birinin kısa açısını üretir; tek sürüm ikisini taşır, doğrulama ve onay her varyant (ve varsa her dil sürümü) için aynı kurallarla yapılır; gönderimde kitle kampanya + alıcı özetiyle belirlenimci olarak %50/%50 bölünür, aynı kişi her kanalda aynı varyantı alır ve hiçbir zaman iki varyantı birden almaz; Takip ekranında varyant başına teslimat sayıları (§11, REQ-ABT-01..04) | REQ-ABT (01–04) testleri yeşil, `make db-roundtrip` yeşil, mevcut REQ-CNT/SND/SCH/LNG testleri değişmeden yeşil, §3.2 listesi |
 
 Her faz sonunda `main` üzerinde `p<N>-done` etiketi.
 
@@ -456,14 +455,13 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 - [ ] REQ eşleme raporu: testi olmayan REQ yok
 - [ ] P7 yapıldıysa: `p7-done` etiketi, REQ-SCH testleri yeşil, `README.md` bonuslarda CI'ın yanında zamanlanmış gönderimi anar (§9.6); yapılmadıysa P7a dalı `main`'e girmemiştir
 - [ ] P8 yapıldıysa: `p8-done` etiketi, REQ-LNG testleri yeşil, `README.md` bonus tablosunda dile göre içerik "yapıldı" olarak geçer (§10.7); yapılmadıysa P8 dalı `main`'e girmemiştir
-- [ ] P9 yapıldıysa: `p9-done` etiketi, REQ-ABT testleri yeşil, `README.md` bonus tablosunda A/B varyantları "yapıldı" olarak geçer (§11.7); yapılmadıysa P9 dalı `main`'e girmemiştir
 
 ---
 
 ## 9. P7 — Bonus fazı
 
 > **Kaynak:** case dokümanının "Bonus (isteğe bağlı)" bölümü: zamanlanmış gönderim, A/B varyantları, kullanıcının diline göre içerik, CI pipeline. Bonus yalnızca çekirdek akış sağlamsa yapılır [DOK]; P6 kapısı (`p6-done`) P7'nin ön koşuludur.
-> **Kapsam [SEN]:** P7a zamanlanmış gönderim (yapılacak) ve P7b CI pipeline (yapıldı). **A/B varyantları P7'de kapsam dışıydı**; sahip 2026-10-30'da ekledi, ayrı kırım ve ayrı REQ alanıyla P9'da yapılır (§11). **Dile göre içerik P7'de değil, P8'de yapılır** (§10; `language` seed alanı §5.2'de hazırdı).
+> **Kapsam [SEN]:** P7a zamanlanmış gönderim (yapılacak) ve P7b CI pipeline (yapıldı). **A/B varyantları kapsam dışıdır**; sahip eklerse ayrı kırım ve ayrı REQ alanı alır. **Dile göre içerik P7'de değil, P8'de yapılır** (§10; `language` seed alanı §5.2'de hazırdı).
 
 ### 9.1 P7b — CI pipeline ✅ (yapıldı, P0–P6)
 
@@ -603,7 +601,7 @@ P2–P6 ile aynı akış (§1.2, §3): sözleşme → test → kod; hiçbir rol 
 ## 10. P8 — Bonus: kullanıcının diline göre içerik
 
 > **Kaynak:** case dokümanı, Bonus listesi: "Kullanıcının diline göre içerik" [DOK]. Case başka ayrıntı vermez; aşağıdaki tasarım VARSAYIM'dır ve `DECISIONS.md` D63 olarak yazılır. Ön koşul: `p7-done`. Bonus yalnızca çekirdek akış sağlamsa yapılır; çekirdek akışın anlamı (kitle → içerik → onay → gönderim → takip) değişmez.
-> **Kapsam [SEN]:** yalnızca A/B dışındaki bu bonus. A/B varyantları bu fazda kapsam dışıdır (P9'da yapılır, §11) ve burada "varyant" sözcüğü A/B anlamına gelmez; bu fazda adı **dil sürümü**dür.
+> **Kapsam [SEN]:** yalnızca A/B dışındaki bu bonus. A/B varyantları kapsam dışı kalır ve burada "varyant" sözcüğü A/B anlamına gelmez; bu fazda adı **dil sürümü**dür.
 
 ### 10.1 Bugünkü durum (tasarımın dayanağı)
 
@@ -712,124 +710,3 @@ P2–P7 ile aynı akış (§1.2, §3); `docs/PLAN.md` §9.5 ve P7'de öğrenilen
 | Planlı gönderim | Dil gönderim anında alıcının güncel `language`'ından okunur | P7a ile aynı "kitle gönderim anında okunur" ilkesi (D62) |
 
 **Sahip onayı bekleyen noktalar (planı kilitlemeden önce):** (1) yedek davranış: İngilizce metin yoksa Türkçe mi gitsin yoksa onay engellensin mi (plan: Türkçe gider); (2) ~~İngilizce sürüm her zaman mı~~ **karar verildi:** yalnız kitlede İngilizce alıcı varsa üretilir (§10.4); (3) ~~dil kümesi~~ **karar verildi:** yalnız `tr`/`en`. Case yalnız "Kullanıcının diline göre içerik" der; başka ayrıntı yoktur, tüm tasarım VARSAYIM'dır.
-
----
-
-## 11. P9 — Bonus: A/B varyantları
-
-> **Kaynak:** case dokümanı, Bonus listesi: "A/B varyantları" [DOK]. Case başka ayrıntı vermez; aşağıdaki tasarım VARSAYIM'dır ve `DECISIONS.md` D64 olarak yazılır. Ön koşul: `p8-done`. Bonus yalnızca çekirdek akış sağlamsa yapılır; çekirdek akışın anlamı (kitle → içerik → onay → gönderim → takip) ve P7a/P8 davranışı değişmez.
-> **Kapsam [SEN]:** sahip 2026-10-30'da ekledi (P7'de kapsam dışıydı). Bu fazda "varyant" yalnız A/B anlamındadır; dil için P8'deki ad (**dil sürümü**) korunur.
-
-### 11.1 Bugünkü durum (tasarımın dayanağı)
-
-- Bir kampanyanın tek etkin onayı ve tek onaylı sürümü vardır (`approvals_one_active_idx`, `campaigns.approved_content_version_id`). Gönderim bu sürümü kullanır.
-- P8 aynı sorunu çözdü: bir sürümün birden fazla metin taşıması (Türkçe + isteğe bağlı `en`), tek araç çağrısı, tek doğrulayıcı, tek onay ve gönderim anında alıcıya göre metin seçimi (D63). A/B aynı kalıba oturur: seçim ölçütü dil yerine **varyant**tır.
-- `deliveries` üzerindeki `UNIQUE (campaign_id, channel, customer_id)` bir kişinin aynı kanalda iki mesaj almasını zaten engeller; dolayısıyla "aynı kişiye hem A hem B gitmez" kuralı yeni bir kısıt istemez.
-- Mock provider yalnız teslimat sonucu döner (2xx, 429, 5xx, gecikme). Açılma, tıklama veya dönüşüm sinyali yoktur. Bu yüzden sistem hangi varyantın "kazandığını" ölçemez; bu fazın ölçebildiği şey bölünme ve varyant başına teslimat sonucudur (§11.8, sahip kararı bekleniyor).
-
-### 11.2 Tasarım seçenekleri (karar D64)
-
-| | A — İki ayrı kampanya | B — İki ayrı sürüm, iki onay | **C — Tek sürüm, isteğe bağlı `b` bloğu (seçilen)** |
-|---|---|---|---|
-| Aynı kişiye iki mesaj | İki kampanya arasında tekillik yok; aynı kişi ikisini de alabilir | `UNIQUE` korur, ama bölme mantığı iki sürüm arasında ayrıca yazılır | `UNIQUE` aynen korur; bölme gönderim anında tek yerde |
-| Onay | İki ayrı onay akışı | `approvals_one_active_idx` ve `approved_content_version_id` değişir (onay modeli kırılır) | Pazarlamacı tek sürümü iki varyantıyla birlikte onaylar (bugünkü model) |
-| LLM çağrısı | İki brief, iki üretim | İki akış, iki kira | Tek akış, tek düzeltme turu; model iki varyantı birbirinden **bilerek farklı** yazar |
-| Takip | İki ayrı ekran, karşılaştırma elle | Sürüm başına sayım | Tek ekranda varyant başına sayım |
-| Geriye uyumluluk | — | Orta | Yalnız ekleme: `b` yoksa sürüm bugünkü gibidir |
-
-C seçilir; gerekçe P8 ile aynıdır (onay, sürümleme, üretim kilidi, düzeltme döngüsü ve kuyruk değişmez). Bedel: A/B seçildiğinde araç çıktısı ~2×, kitlede İngilizce de varsa ~4× (dört metin seti); biri geçersizse hepsi birlikte yeniden denenir.
-
-### 11.3 Veri modeli ve içerik sözleşmesi
-
-- **A/B isteğe bağlıdır:** pazarlamacı üretimden önce "A/B testi" seçer. Seçmezse bugünkü akış birebir aynıdır (VARSAYIM; her kampanyada otomatik A/B token maliyetini boşuna artırır).
-- **İçerik şeması (`content.schema.json`), yalnız ekleme:** üst düzey alanlar (`sms`, `email`, isteğe bağlı `en`) **varyant A**'dır ve yerinde kalır. İsteğe bağlı `b: { sms: { body }, email: { subject, body }, en?: { … } }` ve `angles: { a, b }` eklenir. `angles`, her varyantın neyi denediğini anlatan kısa etikettir (≤ 60 karakter, ör. "İndirim oranı öne çıkar" / "Aciliyet: son gün"). `b` ile `angles` birlikte vardır ya da yoktur.
-- **Dil tutarlılığı:** varyantların dil kümesi aynıdır: üst düzeyde `en` varsa `b.en` zorunludur, yoksa `b.en` yasaktır (`schema_violation`). Böylece "B'nin İngilizcesi yok" gibi yarım bir durum oluşamaz; İngilizce alıcıya Türkçe yedek kuralı (D63) her varyantta aynı çalışır.
-- **Doğrulama:** her varyant × dil sürümü için aynı kurallar (160/80/5000, üç değişken, bilinmeyen/bozuk değişken reddi) ve aynı en kötü durum ölçümü (`longest_*`, REQ-CNT-05). Hata yolları önceklidir: `b.sms.body`, `b.en.email.subject`, `angles.b`. Mevcut hata kodları kullanılır.
-- **Fark denetimi (VARSAYIM):** `b`, A'nın kanal metinlerinin üçüyle de birebir aynıysa (NFC sonrası) geçersizdir (`variants_identical`, yol `b`). Aynı metinle A/B testi anlamsızdır. Daha ince bir benzerlik ölçüsü yapılmaz.
-- **Saklama — migration `0010_content_variants` (up + down):**
-  - `content_versions`: `b_sms_body`, `b_email_subject`, `b_email_body` (üçü birlikte NULL/dolu), `b_en_sms_body`, `b_en_email_subject`, `b_en_email_body` (üçü birlikte; yalnız `b_*` ve `en_*` doluyken dolu), `angle_a`, `angle_b` (`b_*` ile birlikte), `worst_case_b_sms_runes`, `worst_case_b_subject_runes`, `worst_case_b_en_sms_runes`, `worst_case_b_en_subject_runes` (NULL olabilir). Adlandırılmış `CHECK`'ler 0009 kalıbıyla.
-  - `deliveries.variant text NOT NULL DEFAULT 'a'`, `CHECK (variant IN ('a','b'))`. Varsayılan sayesinde eski satırlar ve A/B'siz gönderim değişmez. PII değildir.
-  - Kolonlar 0009 kalıbını sürdürür. Varyant × dil için ayrı bir alt tablo (normalize model) düşünüldü; P8'in `en_*` kolonlarını taşımayı gerektirdiği için reddedildi (D64).
-  - Down: kolonlar `-- allow-destructive` ile düşer; `make db-roundtrip` `up → down → up`, boş şema diff'i. 0009 düzenlenmez.
-- **Bölme kuralı (belirlenimci, VARSAYIM):** alıcının varyantı `sha256(campaign_id ‖ customer_id)` özetinin ilk baytından türetilir: `< 128` → `a`, değilse `b` (≈ %50/%50). Kural yalnız kampanya ve alıcıya bağlıdır, kanala bağlı değildir: **aynı kişi SMS'te ve e-postada aynı varyantı alır**. Bellekte veya rastgele sayıyla seçim yoktur; yeniden başlatma, retry, planlı gönderim ve çoklu worker aynı sonucu üretir. Kural SQL'de teslimatlar oluşturulurken (`startSendingLocked` içindeki `INSERT … SELECT`) `deliveries.variant`'a yazılır; Go'daki ikizi `content.VariantFor(campaignID, customerID)` önizleme ve testler içindir. İkisinin aynı sonucu verdiği sabit test vektörleriyle sınanır. Sürümde `b` yoksa herkes `a` alır.
-
-### 11.4 LLM ve akış
-
-- **Ne zaman iki varyant üretilir:** yalnız üretim isteği `{"ab": true}` taşıyorsa (`POST …/content` gövdesi bugün yok veya `{}`; alan isteğe bağlı, ekleme). İngilizce kararı P8'deki gibi kitleden gelir; iki karar bağımsızdır.
-- **Araç:** strict modda isteğe bağlı alan olmadığı için dört strict şema olur: `content.tool.json` (bugünkü), `content-en.tool.json` (P8), `content-ab.tool.json`, `content-ab-en.tool.json`. Mevcut `llm.ContentToolSchema(includeEnglish bool)` imzası değişmez (P8 testleri dokunulmadan kalır); yeni `llm.ContentToolSchemaAB(includeEnglish bool)` eklenir. Byte kopyaları `make check-tool-schemas` ile denetlenir. İstem, iki varyantın **aynı teklifi** (ör. %30 indirim) farklı bir açıyla anlatmasını ve açıyı `angles`'a yazmasını ister; teklif, kitle ve ton varyantlar arasında değişmez. Brief hâlâ `<brief>` içinde veridir.
-- **Sahte LLM:** araç adına göre `CNT_OK_AB` veya `CNT_OK_AB_EN` döner. Senaryo listesi kapalı kalır (14, D63 kalıbı). B'ye özgü hatalar (161 karakter `b.sms.body`, `variants_identical`) test içi sahte `llm.Client` ile üretilir.
-- **Akış protokolü (`sse-events.md` §1):** `delta` alan adları `b.sms.body`, `b.email.subject`, `b.email.body`, `b.en.*`, `angles.a`, `angles.b` ile genişler. Sıra: A Türkçe, A İngilizce, B Türkçe, B İngilizce, sonra açılar. B parçaları `variant: "b"` taşır; A parçaları bugünküyle bayt bayt aynıdır (P8'deki `language` alanı kalıbı).
-- **Düzeltme turu:** hata önekli yollarla `tool_result`'a gider; tek düzeltme denemesi bütün varyantları birlikte yeniden üretir (deneme ≤ 2 değişmez).
-
-### 11.5 API, gönderim ve arayüz
-
-**API (`openapi.yaml`, hepsi ekleme):**
-- `generateContent` gövdesi isteğe bağlı `{"ab": boolean}`; yanlış tip 422 `validation_failed`.
-- `ContentDraft`, `ContentVersion` ve `content-versions` isteğine isteğe bağlı `b` ve `angles`; `WorstCase`'e `b` (ve `b.en`). `b` olmadan gelen düzenleme "B varyantı yok" anlamına gelir: A/B'yi düzenlemeyle kaldırmanın yolu budur (P8'deki `en` kuralıyla aynı).
-- `GET …/preview` sorgusuna isteğe bağlı `variant` (`a`|`b`, varsayılan `a`); yanıt `variant` taşır. `b`'siz sürümde `variant=b` 422 `validation_failed` (`variant_not_available`).
-- `CampaignStatus` ve `status` SSE olayına `by_variant` eklenir: `null` (sürümde `b` yok) veya `{ a: { sms, email }, b: { sms, email } }` (`StatusCounts`). `Delivery` şemasına `variant`.
-- Onay sürümü bütün olarak onaylar; her varyant × dil sürümünün en kötü durum denetimi onay anında yeniden yapılır (422, önekli yol). Varyant bazlı kısmi onay yoktur.
-
-**Gönderim (`internal/delivery`):**
-- Teslimatın varyantı oluşturulurken yazılır (§11.3); dispatcher claim'de bunu okur ve metni `(variant, recipient.Language)` ile seçer: önce varyant, sonra dil, sonra Türkçe yedek (D63). Send-time `CheckRendered` seçilen metne uygulanır. **Kuyruk, claim, token bucket, retry, idempotency anahtarı değişmez.**
-- Metrics: yeni etiket eklenmez (mevcut serilerin kimliği ve kardinalitesi korunur). Varyant başına sayılar `status` ucundan okunur.
-- Planlı gönderim (P7a) aynı paylaşılan fonksiyonu kullandığı için ek iş istemez.
-
-**Arayüz (`ui.md`, DESIGN.md):**
-- **İçerik ekranı:** üret düğmesinin yanında "A/B testi" anahtarı (`content-ab-toggle`, varsayılan: son sürümde `b` varsa açık). A/B'li sürümde dil sekmelerinin üstünde A/B sekmeleri (`content-variant-tab-a`, `content-variant-tab-b`; `LanguageTabs` ile aynı `role="tablist"` ve ok tuşu davranışı) ve her sekmede açı etiketi (`content-variant-angle`). Hata göstergesi ilgili varyant sekmesine düşer. Önizleme seçili varyant + dil sekmesini izler (P8 kuralı).
-- **Onay ekranı:** aynı varyant sekmeleri; `approval-limit-check` yalnız bütün varyant × dil sürümleri sınırdaysa geçer. Kitle kartı "Kitle iki yarıya bölünür (≈ %50 / %50); aynı kişi iki kanalda aynı varyantı alır" satırını gösterir. Seçili varyant `variant` rota sorgusuyla adımlar arasında taşınır (P8'deki `lang` kalıbı).
-- **Takip ekranı:** `by_variant` doluysa sayaçların altında varyant tablosu (`variant-breakdown`; satır başına açı, kanal başına gönderildi/başarısız/kuyrukta). Kazanan gösterilmez; tablonun altında "Mock provider açılma/tıklama ölçmez; bu tablo yalnız teslimat sonucudur" notu (§11.8).
-- i18n tek dosyada; LLM içeriği (açılar dahil) `v-html` ile basılmaz.
-
-### 11.6 Gereksinimler (`docs/requirements.md`, yeni alan ABT) ve testler
-
-Test yazarı yalnız `docs/requirements.md`'den çalışır (D50): testte gerekecek her ad, yol, alan kodu, fixture ve test vektörü REQ metnine yazılır. "Kapsam dışı ve bonus" paragrafı güncellenir (A/B artık REQ'li; dört bonus da yapıldı). Taslak kabul ölçütleri:
-
-- **REQ-ABT-01 — İçerik isteğe bağlı B varyantı taşır ve her varyant doğrulanır · Faz P9 · [DOK] bonus + VARSAYIM tasarım:** `b` ve `angles` biçimi; önekli yollar; 160/80/5000 ve değişken kuralları her varyant × dil için; `b` yokken içerik eskisi gibi geçerli; yarım `b`, `b` var `angles` yok, `en` var `b.en` yok (ve tersi) → `schema_violation`; `variants_identical`; en kötü durum alanları; düzenleme `b`'yi aynı doğrulayıcıdan geçirir, `b`'siz düzenleme A/B'yi kaldırır; onay her varyantı yeniden denetler (422, önekli yol).
-- **REQ-ABT-02 — Claude istendiğinde iki varyant üretir, akış ve düzeltme varyant bilir · Faz P9 · VARSAYIM:** `{"ab": true}` → A/B aracı ve `CNT_OK_AB` (kitlede `en` varsa `CNT_OK_AB_EN`); gövdesiz/`false` → bugünkü araçlar (P8 davranışı değişmez); `delta`'da `b.*` ve `angles.*`, B parçalarında `variant: "b"`; B'de hata (sahte `llm.Client`) tek düzeltme turuyla biter; dört strict şema strict kurallarına uyar; `llm_attempts` ve üretim kilidi değişmez.
-- **REQ-ABT-03 — Gönderimde kitle belirlenimci bölünür, kimse iki varyant almaz · Faz P9 · VARSAYIM:** `content.VariantFor` sabit vektörleri (REQ'te kampanya/alıcı UUID çiftleri ve beklenen `a`/`b`); SQL'in yazdığı `deliveries.variant` aynı vektörlerde Go ile eşleşir; aynı alıcının SMS ve e-posta teslimatları aynı varyant; `b`'siz sürümde bütün teslimatlar `a`; seed örnek kitlesinde bölünme %40–%60 aralığında; mock provider'a giden gövdeler varyant × dil metniyle eşleşir; `by_variant` sayıları teslimatlarla tutarlı; planlı gönderimde aynı sonuç; kanal izni, `UNIQUE`, ≤ 100/sn ve retry iddiaları değişmeden geçer.
-- **REQ-ABT-04 — Arayüz: A/B anahtarı, varyant sekmeleri, varyant tablosu · Faz P9 · VARSAYIM:** §11.5'teki testid'ler; anahtar → istek gövdesinde `ab: true`; varyant sekmesi klavye erişimi; önekli hatanın doğru varyant + dil sekmesine düşmesi; önizleme ve `variant` rota sorgusu; Onay'da limit denetimi bütün varyantları kapsar; Takip'te `variant-breakdown` ve "kazanan yok" notu; `v-html` yok.
-
-İzlenebilirlik tablosuna dört satır: ABT-01 `unit, integration, e2e`; ABT-02 `unit, e2e`; ABT-03 `unit, integration, delivery, e2e`; ABT-04 `web-unit`.
-
-| Katman | Senaryolar |
-|---|---|
-| **Unit** | `content.Parse/Validate` B ile (sınırlar, dil tutarlılığı, `variants_identical`, `angles` uzunluğu); `VariantFor` vektörleri; `Render` varyant × dil seçimi ve yedek; dört strict şema; sahte LLM araç seçimi |
-| **Entegrasyon (DB)** | 0010 kısıtları; `deliveries.variant` SQL ↔ Go eşleşmesi ve kanal tutarlılığı; sürüm kaydı ve onay iptali (`content_changed`) `b` değişince; `by_variant` sayımı; iki API örneğiyle üretim kilidi değişmez |
-| **Gönderim — gerçek mock provider** | A/B'li ve iki dilli kitleyle gönderim: sağlayıcıya giden gövdeler alıcının varyantı ve diliyle eşleşir; hız/tekillik iddiaları aynı |
-| **API E2E** | Key'siz: brief → segment → içerik (`ab: true`) → onay → gönder → `by_variant` toplamı kanal sayılarına eşit; A/B'siz akış bugünküyle aynı; 422 vakaları; yeni/değişen işlemler en az bir kez çağrılır (D30 `OPENAPI_VALIDATE=strict`) |
-| **Frontend (Vitest)** | Anahtar ve istek gövdesi, varyant sekmeleri ve klavye, akışta dört metin seti, önekli hata eşlemesi, Onay limit denetimi, Takip varyant tablosu |
-| **Elle** | 375/768/1280 px'de İçerik varyant sekmeleri ve Takip varyant tablosu ekran görüntüsü PR'da; gerçek Claude ile (anahtar varsa) bir kez iki varyantın gerçekten farklı açı denediği gözle kontrol |
-
-### 11.7 Dilim akışı, sıra, roller ve kapı
-
-P7/P8 ile aynı akış (§1.2, §3) ve aynı **tek entegrasyon branch'i** kalıbı (`chore/p9-ab-integrate`): yanıt şekli değişen özellikte sözleşme, test, backend ve web birlikte kırmızıdan yeşile döner; test yazarı dosyaları kopyalanır, `make test` koşulur, orkestratör commit'ler. Uygulayıcı ajanlar test dosyasına dokunmaz. Orkestratör Opus 5.5'tir (CLAUDE.md).
-
-1. **Sözleşme** — `docs/p9-ab-contracts` → `main` (mimar): `docs/requirements.md` (REQ-ABT-01..04, `VariantFor` test vektörleri, kapsam dışı paragrafı, izlenebilirlik), `content.schema.json` + iki yeni strict şema, `llm-tools.md`, `sse-events.md`, `openapi.yaml`, `db-schema.md` (0010), `go-interfaces.md` (`Content.B`, `Angles`, `VariantFor`, `ContentToolSchemaAB`, `Recipient`/`Rendered` varyantı, `Preview`), `ui.md`, DESIGN.md (varyant sekmeleri, varyant tablosu), `seed.md` gerekirse, `DECISIONS.md` D64. **Kabul:** `api-contract`, `check-contract-copies`, `check-tool-schemas` yeşil; sahip REQ metnini onayladı.
-2. **Dilim branch'i** — `slice/p9-ab` güncel `main`'den.
-3. **Testler** — `scripts/test-writer-worktree.sh origin/slice/p9-ab test/p9-ab`, ayrı session'da `claude --agent test-writer`; yalnız REQ-ABT ölçütlerinden; eksik ad varsa "REQ eksik" döner (adım 1'e). Test yazarı session export'u `ai-sessions/`'a eklenir.
-4. **Backend** — içerik paketi (`Content.B`, doğrulama, en kötü durum, `VariantFor`), migration 0010 (+down), `startSendingLocked`'ta varyant yazımı, composer/LLM araçları + sahte LLM, preview, dispatcher seçimi, `status` / `by_variant`. **Kabul:** Go testleri yeşil, `make db-roundtrip` yeşil, mevcut REQ-CNT/SND/SCH/LNG testleri değişmeden yeşil.
-5. **Arayüz** — A/B anahtarı, varyant sekmeleri (İçerik + Onay), Takip varyant tablosu, `api-types` yeniden üretimi. **Kabul:** Vitest yeşil, üç genişlikte ekran görüntüsü.
-6. **Kapı** — `slice/p9-ab` → `main`: `code-reviewer` raporu (varyant seçiminin SQL ↔ Go tutarlılığı ve LLM çıktısının ~4× büyümesi için ayrıca `security-reviewer`/mimar bakışı), `verifier` kanıtı, `ci-ok` yeşil, squash merge, `p9-done` etiketi, session export'ları.
-
-**Faz kapısı (P9):**
-- §3.2 listesinin tamamı; REQ-ABT-01..04'ün her biri en az bir testle eşli ve yeşil; testsiz REQ listesi boş.
-- `make db-roundtrip` yeşil (0010 `up → down → up`, boş şema diff'i); `make test` key'siz yeşil.
-- Mevcut REQ-CNT/SND/SCH/TRK/LNG testleri değiştirilmeden yeşil (A/B'siz akış bayt bayt aynı). Değişmesi gereken eski test olursa sapma D64'e gerekçesiyle yazılır (P8'deki D63 madde 1 kalıbı).
-- Elle kanıt: compose yığınında A/B'li ve iki dilli kitleyle gönderim; mock provider isteklerinde dört metin seti kitle bölünmesi × dil dağılımıyla eşleşir; hiçbir `customer_id` iki farklı varyant almaz (SQL sorgusu PR'da).
-- `README.md` bonus tablosunda A/B varyantları "yapıldı" ve "Known limits"te "kazanan ölçülmez" satırı; `DECISIONS.md` D64 güncel.
-
-### 11.8 Riskler ve VARSAYIM'lar
-
-| Konu | VARSAYIM / risk | Azaltma |
-|---|---|---|
-| Kazananı ölçme | Mock provider açılma/tıklama/dönüşüm üretmez; varyant karşılaştırması yalnız teslimat sonucudur | Arayüz ve README bunu açıkça söyler; sahte etkileşim verisi üretilmez (gerçek olmayan bir sinyal review'da savunulamaz). Sahip isterse ayrı kırım: mock provider'a yapılandırılabilir sahte açılma olayı |
-| Bölme oranı | Sabit ≈ %50/%50, kontrol grubu yok | Oran parametresi YAGNI; özet kuralı eşiği (`< 128`) tek yerde, gerekirse oran parametresine dönüşür |
-| Küçük kitle | 10 kişilik kitlede bölünme %50'den çok sapabilir | Belirlenimci ve açıklanabilir; arayüz "yaklaşık" der, kesin sayılar gönderimden sonra `by_variant`'ta |
-| Çıktı boyutu | A/B + İngilizce → dört metin seti, ~4× token; 4096 `max_tokens` aşılabilir | Yalnız istenince ödenir; `truncated_output` yolu var; ölçümle `LLM_MAX_TOKENS` yükseltilir |
-| Varyantların farkı | Model iki benzer metin yazabilir | Birebir aynı metin reddedilir (`variants_identical`); açılar ekranda görünür, insan onayı son karardır |
-| SQL ↔ Go ikizi | Bölme kuralı iki yerde yaşar | Sabit test vektörleri iki tarafı da sınar (REQ-ABT-03); Go ikizi gönderimde kullanılmaz, yalnız önizleme/test |
-| Şema büyümesi | `content_versions` 12 kolon daha alır | Bilinçli: P8 kalıbıyla tutarlı, alt tabloya geçiş P8 kolonlarını taşımayı gerektirirdi (D64) |
-| Geriye uyumluluk | Eski sürümlerde `b` yok, eski teslimatlarda `variant = 'a'` | `by_variant` `null`; arayüz tabloyu gizler; mevcut testler değişmeden yeşil (kapı) |
-
-**Sahip onayı bekleyen noktalar (planı kilitlemeden önce):** (1) kazanan ölçümü: plan yalnız bölünme + teslimat sonucunu gösterir, sahte açılma/tıklama üretmez; (2) bölme oranı: plan sabit %50/%50, oran seçimi yok; (3) A/B'nin açılışı: plan pazarlamacının "A/B testi" anahtarı (her kampanyada otomatik değil). Case yalnız "A/B varyantları" der; başka ayrıntı yoktur, tüm tasarım VARSAYIM'dır.
