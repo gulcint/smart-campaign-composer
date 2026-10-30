@@ -1,5 +1,6 @@
 // REQ-APR-01, REQ-APR-02, REQ-UI-01 (UI): the marketer can edit the SMS body and the email
 // subject/body; a rejected edit shows its field error; content is shown as text, never as HTML.
+// REQ-SCH-04 C5 (UI): the locked mode of a scheduled campaign.
 import { afterEach, describe, expect, it } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import ContentEditor from '@/components/ContentEditor.vue'
@@ -84,6 +85,26 @@ describe('ContentEditor field errors (REQ-APR-02)', () => {
   it('a rejected edit shows the field error on its field', () => {
     const w = mountEditor({ fieldErrors: [fieldError('sms.body', 'sms_too_long', 160, 161)] })
     expect(w.get(sel('inline-error-sms-body')).attributes('data-code')).toBe('sms_too_long')
+  })
+})
+
+// REQ-SCH-04 C5: in a scheduled campaign steps 1–3 are read-only: ContentEditor mode="locked" shows
+// editor-locked-note and its fields are readonly.
+describe('ContentEditor locked (REQ-SCH-04 C5)', () => {
+  it.each([
+    { channel: 'sms', fields: ['editor-sms-body'] },
+    { channel: 'email', fields: ['editor-email-subject', 'editor-email-body'] },
+  ])('$channel: locked note visible, fields readonly', ({ channel, fields }) => {
+    const w = mountEditor({ channel, mode: 'locked' })
+    expect(w.find(sel('editor-locked-note')).exists()).toBe(true)
+    for (const id of fields) {
+      expect(w.get(sel(id)).attributes('readonly'), id).toBeDefined()
+    }
+  })
+
+  it('an editable editor has no locked note', () => {
+    const w = mountEditor({ mode: 'editable' })
+    expect(w.find(sel('editor-locked-note')).exists()).toBe(false)
   })
 })
 

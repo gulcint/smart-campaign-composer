@@ -86,6 +86,7 @@ func run() error {
 		LLM:                  client,
 		Clock:                clk,
 		SegmentReferenceTime: cfg.SegmentReferenceTime,
+		ScheduleMinLead:      cfg.ScheduleMinLead,
 		Logger:               logger,
 	})
 	// Closed when Shutdown starts: open SSE streams end at once instead of holding the
@@ -99,6 +100,8 @@ func run() error {
 		Metrics:     metrics.NewAPIHandler(postgres.NewMetricsSource(pool)),
 		Clock:       clk,
 		Logger:      logger,
+		// Reported by GET /api/config; enforced by the service above.
+		ScheduleMinLead: cfg.ScheduleMinLead,
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

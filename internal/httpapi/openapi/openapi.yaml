@@ -195,7 +195,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           $ref: '#/components/responses/GenerationConflict'
-          description: '`invalid_state` (sending/completed) or `generation_in_progress` (another segment/content generation for this campaign is running).'
+          description: '`invalid_state` (scheduled, sending, completed) or `generation_in_progress` (another segment/content generation for this campaign is running).'
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
         '502': { $ref: '#/components/responses/BadGateway' }
@@ -240,7 +240,8 @@ paths:
 
         Allowed states: audience_ready, content_ready, approved. Errors detected before the stream
         opens are returned as JSON with the status codes below (no SSE); use-case order: 404
-        `campaign_not_found`, 409 `invalid_state`, 409 `generation_in_progress`, 502 `llm_unavailable`.
+        `campaign_not_found`, 409 `invalid_state` (draft, scheduled, sending, completed), 409
+        `generation_in_progress`, 502 `llm_unavailable`.
         After HTTP 200 the equivalent of 502 is the final `invalid` event. HTTP 200 is written only
         after LLM attempt 1 is connected; headers: `Content-Type: text/event-stream; charset=utf-8`,
         `Cache-Control: no-cache`, `X-Accel-Buffering: no`. The `Accept` header is not negotiated
@@ -269,7 +270,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           $ref: '#/components/responses/GenerationConflict'
-          description: '`invalid_state` (draft, sending, completed) or `generation_in_progress` (lock released on client disconnect or after 120 s).'
+          description: '`invalid_state` (draft, scheduled, sending, completed) or `generation_in_progress` (lock released on client disconnect or after 120 s).'
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
         '502':
@@ -325,7 +326,7 @@ paths:
         actually succeeded also yields 409 (its base is no longer latest): the server never de-duplicates;
         the client compares the current version's content with its text (ui.md §3.23).
         Use-case order: 404 `campaign_not_found`, 409 `generation_in_progress`, 409 `invalid_state`
-        (draft, sending, completed), 409 `content_edit_conflict`, then content validation (422). Allowed
+        (draft, scheduled, sending, completed), 409 `content_edit_conflict`, then content validation (422). Allowed
         states: audience_ready, content_ready, approved. On success, in one transaction: new version
         (status validated, source edit, version_number = highest existing number of ANY status + 1,
         never reused, not reset by a new segment revision), state `content_ready`,
@@ -385,7 +386,8 @@ paths:
         2. version belongs to the campaign, else 404 `content_version_not_found`;
         2b. no generation running for the campaign, else 409 `generation_in_progress`;
         3. version status is `validated`, else 409 `content_not_validated`;
-        4. state is `content_ready` or `approved`, else 409 `invalid_state`;
+        4. state is `content_ready` or `approved`, else 409 `invalid_state` (`scheduled` included: cancel
+           the plan first, DELETE /api/campaigns/{campaign_id}/schedule);
         5. version is the latest VALIDATED version (highest version_number among validated versions)
            AND has the current segment revision, else 409 `stale_content_version`;
         6. worst-case RE-check (content.CheckWorstCase with the longest first_name (fallback
@@ -430,26 +432,59 @@ paths:
     post:
       tags: [delivery]
       operationId: sendCampaign
-      summary: Accept the send and create all deliveries atomically (REQ-SND-01, REQ-APR-01, REQ-AUD-04, REQ-SND-03)
+      summary: Send now, or plan the send for a later time (REQ-SND-01, REQ-APR-01, REQ-AUD-04, REQ-SND-03, REQ-SCH-01, REQ-SCH-03)
       description: |
-        Checks in order: 404 `campaign_not_found`; 404 `content_version_not_found`;
-        409 `generation_in_progress` (a content generation could otherwise persist into a campaign that
-        is already `sending`);
-        state must be `approved`, else 409 `invalid_state` (no delivery row is created);
-        `content_version_id` must equal the approved version, else 409 `stale_content_version`.
-        Success, in ONE transaction: one delivery per (channel, customer) of the channel audiences
-        (segment-dsl.md §6) evaluated at the campaign's stored reference time, status `queued`,
-        `next_attempt_at` = now; state `sending`. If both audiences are empty the campaign becomes
-        `completed` in the same transaction. Returns immediately (202); workers send in the background.
-        A second send request => 409 `invalid_state`.
+        One operation, three behaviours (DECISIONS D62), chosen by the campaign state and by whether
+        the body carries `scheduled_at`:
+        - state `approved`, no `scheduled_at` => immediate send (unchanged since P5): in ONE
+          transaction one delivery per (channel, customer) of the channel audiences (segment-dsl.md §6)
+          evaluated at the campaign's stored segment reference time, status `queued`,
+          `next_attempt_at` = now; state `sending`, `sending_started_at` = now. If both audiences are
+          empty the campaign becomes `completed` in the same transaction. 202 with
+          `state` `sending` (or `completed`) and `scheduled_at` null.
+        - state `approved` or `scheduled`, with `scheduled_at` => plan (or re-plan): state `scheduled`,
+          `scheduled_at` stored (UTC, microsecond precision); NO delivery row is created. 202 with
+          `state` `scheduled`, the stored `scheduled_at` and `deliveries` {total: 0, sms: 0, email: 0}.
+          Re-planning a `scheduled` campaign replaces `scheduled_at` (the state stays `scheduled`).
+        - state `scheduled`, no `scheduled_at` => "send now": the plan is dropped (`scheduled_at`
+          becomes null) and the send starts in the SAME transaction exactly as for `approved`; 202
+          with `state` `sending`/`completed` and `scheduled_at` null.
+        A due plan is started by the worker (campaign.Scheduler) with the same transaction as the
+        immediate send; the campaign then keeps its `scheduled_at` in `sending`/`completed`. A plan is
+        cancelled only with DELETE /api/campaigns/{campaign_id}/schedule.
+
+        Checks, in this order (first failure wins; README.md §5.4 pattern, D42):
+        1. malformed path UUID => 404 `campaign_not_found`;
+        2. body: empty, not JSON or non-JSON Content-Type => 400 `malformed_request`; > 65536 bytes =>
+           413; valid JSON that is not an object => 422 `schema_violation` (path `""`); otherwise every
+           field error is collected into ONE 422 `validation_failed`, in this order: unknown properties
+           (`schema_violation`, path = the key, keys in byte order), `content_version_id` missing or not
+           a string (`schema_violation`) or not a UUID (`invalid_value`), `scheduled_at` not a string
+           (`null` included; `schema_violation`) or not an RFC 3339 date-time with an explicit offset
+           (`invalid_value`, path `scheduled_at`; accepted form `YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM)`
+           with upper-case `T` and `Z`; a local time without offset is `invalid_value`);
+        3. only when the body is otherwise valid and carries `scheduled_at` (value truncated to
+           microseconds first): `scheduled_at` < now + SCHEDULE_MIN_LEAD (default 1 min; past times
+           included) => 422 `validation_failed`, code `schedule_too_soon`, path `scheduled_at`;
+           `scheduled_at` > now + 30 days (exactly 720 h) => 422 `schedule_too_far`, path
+           `scheduled_at`. Both bounds are inclusive (`scheduled_at` = now + SCHEDULE_MIN_LEAD and
+           = now + 720 h are accepted). "now" is the API process' injected clock. These 422s come
+           before every 404/409 below;
+        4. unknown campaign => 404 `campaign_not_found`;
+        5. version missing or of another campaign => 404 `content_version_not_found`;
+        6. a segment/content generation holds the campaign lock => 409 `generation_in_progress`;
+        7. state not `approved` and not `scheduled` (draft, audience_ready, content_ready, a second
+           send while `sending`, `completed`) => 409 `invalid_state`;
+        8. `content_version_id` is not the approved version => 409 `stale_content_version`.
+        Every 4xx leaves the campaign (state, `scheduled_at`) unchanged and creates no delivery row.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/VersionRef' }
+            schema: { $ref: '#/components/schemas/SendRequest' }
       responses:
         '202':
-          description: Accepted.
+          description: Accepted (sent now, or planned when `state` is `scheduled`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SendResult' }
@@ -458,6 +493,33 @@ paths:
         '409': { $ref: '#/components/responses/SendConflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/schedule:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    delete:
+      tags: [delivery]
+      operationId: cancelSchedule
+      summary: Cancel the planned send of a scheduled campaign (REQ-SCH-03)
+      description: |
+        The only way to cancel a plan (D62). No request body is defined; a body, if sent, is ignored.
+        Checks: malformed path UUID => 404 `campaign_not_found`; unknown campaign => 404
+        `campaign_not_found`; state is not `scheduled` (e.g. `approved`, or the worker already started
+        the send: `sending`/`completed`) => 409 `invalid_state`, nothing changes.
+        Success, in one transaction under the campaign row lock: state `approved`, `scheduled_at` null,
+        `updated_at` = now; the approval and the approved version are kept, no delivery row exists. A
+        cancel racing with the worker's start is serialized by the row lock: whichever commits first
+        wins (cancel first => the worker skips the campaign; start first => this request gets 409).
+      responses:
+        '200':
+          description: Plan cancelled; the campaign is `approved` again.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CancelScheduleResult' }
+              example: { campaign_id: 3f1c2a4e-0b8d-4c55-9e1a-7d2b6c8f9a01, state: approved, scheduled_at: null }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/CancelScheduleConflict' }
         '500': { $ref: '#/components/responses/InternalError' }
 
   /api/campaigns/{campaign_id}/status:
@@ -707,13 +769,21 @@ components:
               - $ref: '#/components/schemas/ErrorResponse'
               - properties: { error: { properties: { code: { enum: [invalid_state, generation_in_progress] }, fields: { not: {} } } } }
     SendConflict:
-      description: '`invalid_state` (not approved, second send), `stale_content_version` or `generation_in_progress`.'
+      description: '`invalid_state` (neither approved nor scheduled, second send), `stale_content_version` or `generation_in_progress`.'
       content:
         application/json:
           schema:
             allOf:
               - $ref: '#/components/schemas/ErrorResponse'
               - properties: { error: { properties: { code: { enum: [invalid_state, stale_content_version, generation_in_progress] }, fields: { not: {} } } } }
+    CancelScheduleConflict:
+      description: '`invalid_state` — the campaign is not `scheduled` (nothing to cancel, or the send already started).'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { const: invalid_state }, fields: { not: {} } } } }
     PreviewConflict:
       description: '`invalid_state` (no segment or no validated version) or `content_not_validated`.'
       content:
@@ -824,13 +894,20 @@ components:
         limits:
           type: object
           additionalProperties: false
-          required: [sms_max_runes, email_subject_max_runes, email_body_max_runes, brief_max_runes, request_body_max_bytes]
+          required: [sms_max_runes, email_subject_max_runes, email_body_max_runes, brief_max_runes, request_body_max_bytes,
+                     schedule_min_lead_seconds, schedule_max_ahead_seconds]
           properties:
             sms_max_runes: { const: 160 }
             email_subject_max_runes: { const: 80 }
             email_body_max_runes: { const: 5000 }
             brief_max_runes: { const: 2000 }
             request_body_max_bytes: { const: 65536 }
+            schedule_min_lead_seconds:
+              type: integer
+              minimum: 0
+              maximum: 86400
+              description: SCHEDULE_MIN_LEAD of the API process in whole seconds, rounded up (default 60). The UI's client-side check uses it.
+            schedule_max_ahead_seconds: { const: 2592000, description: '30 days (720 h): the latest accepted scheduled_at is now + this' }
         template_variables:
           type: array
           items: { type: string }
@@ -845,7 +922,7 @@ components:
 
     CampaignState:
       type: string
-      enum: [draft, audience_ready, content_ready, approved, sending, completed]
+      enum: [draft, audience_ready, content_ready, approved, scheduled, sending, completed]
 
     Channel:
       type: string
@@ -1060,7 +1137,7 @@ components:
     Campaign:
       type: object
       additionalProperties: false
-      required: [id, brief, state, segment, latest_content_version, approval, sending_started_at, completed_at, created_at, updated_at]
+      required: [id, brief, state, segment, latest_content_version, approval, scheduled_at, sending_started_at, completed_at, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         brief: { type: string }
@@ -1071,8 +1148,9 @@ components:
           description: Highest version_number among VALIDATED versions of the CURRENT segment revision; null if none. Invalid drafts never appear here.
           oneOf: [ { $ref: '#/components/schemas/ContentVersion' }, { type: 'null' } ]
         approval:
-          description: Active (not revoked) approval; non-null iff state is approved, sending or completed.
+          description: Active (not revoked) approval; non-null iff state is approved, scheduled, sending or completed.
           oneOf: [ { $ref: '#/components/schemas/Approval' }, { type: 'null' } ]
+        scheduled_at: { $ref: '#/components/schemas/ScheduledAt' }
         sending_started_at: { type: [string, 'null'], format: date-time }
         completed_at: { type: [string, 'null'], format: date-time }
         created_at: { type: string, format: date-time }
@@ -1097,22 +1175,60 @@ components:
       properties:
         content_version_id: { type: string, format: uuid, description: 'Malformed UUID => 422 invalid_value (path content_version_id)' }
 
+    ScheduledAt:
+      type: [string, 'null']
+      format: date-time
+      description: |
+        Planned send time, UTC with `Z` suffix (microsecond precision). Non-null iff state is
+        `scheduled`, or the campaign is `sending`/`completed` and its send was started by the worker
+        from a plan; null in draft…approved and after an immediate send or a "send now" from
+        `scheduled` (D62).
+
+    SendRequest:
+      type: object
+      additionalProperties: false
+      required: [content_version_id]
+      properties:
+        content_version_id: { type: string, format: uuid, description: 'Must be the approved version. Malformed UUID => 422 invalid_value (path content_version_id)' }
+        scheduled_at:
+          type: string
+          format: date-time
+          description: |
+            Optional. Absent => send now. Present => plan the send for this instant: RFC 3339 with a
+            mandatory offset (`2026-01-15T15:30:00+03:00` or `2026-01-15T12:30:00Z`); no offset or
+            not a date-time => 422 `invalid_value`; `null` or a non-string => 422 `schema_violation`;
+            earlier than now + SCHEDULE_MIN_LEAD => 422 `schedule_too_soon`; later than now + 720 h
+            => 422 `schedule_too_far` (all with path `scheduled_at`).
+
     SendResult:
       type: object
       additionalProperties: false
-      required: [campaign_id, state, content_version_id, deliveries]
+      required: [campaign_id, state, content_version_id, scheduled_at, deliveries]
       properties:
         campaign_id: { type: string, format: uuid }
-        state: { type: string, enum: [sending, completed] }
+        state: { type: string, enum: [sending, completed, scheduled] }
         content_version_id: { type: string, format: uuid }
+        scheduled_at:
+          $ref: '#/components/schemas/ScheduledAt'
+          description: The stored plan (UTC `Z`) when `state` is `scheduled`; null when the send started now.
         deliveries:
           type: object
           additionalProperties: false
           required: [total, sms, email]
+          description: Deliveries created by THIS request; all three are 0 when `state` is `scheduled`.
           properties:
             total: { type: integer }
-            sms: { type: integer, description: Equals segment.audience.sms }
-            email: { type: integer, description: Equals segment.audience.email }
+            sms: { type: integer, description: 'Equals segment.audience.sms (0 when scheduled)' }
+            email: { type: integer, description: 'Equals segment.audience.email (0 when scheduled)' }
+
+    CancelScheduleResult:
+      type: object
+      additionalProperties: false
+      required: [campaign_id, state, scheduled_at]
+      properties:
+        campaign_id: { type: string, format: uuid }
+        state: { const: approved }
+        scheduled_at: { type: 'null' }
 
     StatusCounts:
       type: object
@@ -1128,7 +1244,7 @@ components:
     CampaignStatus:
       type: object
       additionalProperties: false
-      required: [campaign_id, state, counts, by_channel, sending_started_at, completed_at, updated_at]
+      required: [campaign_id, state, counts, by_channel, scheduled_at, sending_started_at, completed_at, updated_at]
       properties:
         campaign_id: { type: string, format: uuid }
         state: { $ref: '#/components/schemas/CampaignState' }
@@ -1140,6 +1256,7 @@ components:
           properties:
             sms: { $ref: '#/components/schemas/StatusCounts' }
             email: { $ref: '#/components/schemas/StatusCounts' }
+        scheduled_at: { $ref: '#/components/schemas/ScheduledAt' }
         sending_started_at: { type: [string, 'null'], format: date-time }
         completed_at: { type: [string, 'null'], format: date-time }
         updated_at: { type: string, format: date-time }
@@ -1239,7 +1356,7 @@ components:
                  no_tool_call, llm_unavailable, internal_error, sms_too_long, subject_too_long, email_body_too_long,
                  sms_too_long_worst_case, subject_too_long_worst_case, unknown_variable, malformed_variable,
                  unknown_field, unknown_operator, operator_not_allowed, type_mismatch, empty_group,
-                 max_depth_exceeded, max_conditions_exceeded]
+                 max_depth_exceeded, max_conditions_exceeded, schedule_too_soon, schedule_too_far]
         message: { type: string }
         limit: { type: integer }
         actual: { type: integer }

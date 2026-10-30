@@ -100,6 +100,53 @@ func TestLoad_WorkerEnvironment(t *testing.T) {
 	}
 }
 
+// REQ-SCH-01 C9, REQ-SCH-02 C11
+// SCHEDULE_MIN_LEAD (config.Config.ScheduleMinLead: default 1m, allowed 0s..24h) and
+// SCHEDULER_INTERVAL (config.Config.SchedulerInterval: default 1s, allowed > 0 and <= 1m); a value
+// outside the range or not a time.ParseDuration string is config.ErrInvalidValue.
+func TestLoad_ScheduleSettings(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		env          map[string]string
+		wantLead     time.Duration
+		wantInterval time.Duration
+		wantErr      error
+	}{
+		{name: "defaults", env: map[string]string{}, wantLead: time.Minute, wantInterval: time.Second},
+		{name: "min lead 0s is allowed", env: map[string]string{"SCHEDULE_MIN_LEAD": "0s"}, wantLead: 0, wantInterval: time.Second},
+		{name: "min lead 24h is allowed", env: map[string]string{"SCHEDULE_MIN_LEAD": "24h"}, wantLead: 24 * time.Hour, wantInterval: time.Second},
+		{name: "min lead 90s", env: map[string]string{"SCHEDULE_MIN_LEAD": "90s"}, wantLead: 90 * time.Second, wantInterval: time.Second},
+		{name: "min lead over 24h is invalid", env: map[string]string{"SCHEDULE_MIN_LEAD": "24h0m1s"}, wantErr: config.ErrInvalidValue},
+		{name: "negative min lead is invalid", env: map[string]string{"SCHEDULE_MIN_LEAD": "-1s"}, wantErr: config.ErrInvalidValue},
+		{name: "min lead that is no duration is invalid", env: map[string]string{"SCHEDULE_MIN_LEAD": "bir dakika"}, wantErr: config.ErrInvalidValue},
+		{name: "interval 1m is allowed", env: map[string]string{"SCHEDULER_INTERVAL": "1m"}, wantLead: time.Minute, wantInterval: time.Minute},
+		{name: "interval 1ms is allowed", env: map[string]string{"SCHEDULER_INTERVAL": "1ms"}, wantLead: time.Minute, wantInterval: time.Millisecond},
+		{name: "interval 0s is invalid", env: map[string]string{"SCHEDULER_INTERVAL": "0s"}, wantErr: config.ErrInvalidValue},
+		{name: "negative interval is invalid", env: map[string]string{"SCHEDULER_INTERVAL": "-1s"}, wantErr: config.ErrInvalidValue},
+		{name: "interval over 1m is invalid", env: map[string]string{"SCHEDULER_INTERVAL": "1m0.001s"}, wantErr: config.ErrInvalidValue},
+		{name: "interval that is no duration is invalid", env: map[string]string{"SCHEDULER_INTERVAL": "10"}, wantErr: config.ErrInvalidValue},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := config.Load(getenv(tc.env))
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Load(%v) error = %v, want %v", tc.env, err, tc.wantErr)
+			}
+			if tc.wantErr != nil {
+				return
+			}
+			if got.ScheduleMinLead != tc.wantLead {
+				t.Fatalf("ScheduleMinLead = %s, want %s", got.ScheduleMinLead, tc.wantLead)
+			}
+			if got.SchedulerInterval != tc.wantInterval {
+				t.Fatalf("SchedulerInterval = %s, want %s", got.SchedulerInterval, tc.wantInterval)
+			}
+		})
+	}
+}
+
 // REQ-AI-05
 // The key is read from the ANTHROPIC_API_KEY environment variable (compose loads it from .env).
 func TestLoad_ReadsAnthropicAPIKeyFromEnvironment(t *testing.T) {

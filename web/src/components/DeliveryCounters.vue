@@ -1,13 +1,20 @@
 <script setup lang="ts">
 // ui.md §3.20 / DESIGN.md §8.5: delivery counters per channel and in total (REQ-TRK-01).
-// data-state: completed (status.state) › stale (connection not open) › live. Raw counts live in
+// data-state: completed (status.state) › scheduled (P7a: the plan lives in SchedulePanel, no
+// counter cards) › stale (connection not open) › live. Raw counts live in
 // data-value; the screen shows them tr-TR formatted. The polite summary is throttled to one
 // announcement per 10 s (DESIGN.md §9), the completion is announced politely, never assertively.
 import { CircleCheck, Flag, Radio, Unplug } from '@lucide/vue'
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { routerKey } from 'vue-router'
 
-import type { CampaignStatus, ChannelKey, ConnectionState, StatusCounts } from '@/api/types'
+import type {
+  CampaignState,
+  CampaignStatus,
+  ChannelKey,
+  ConnectionState,
+  StatusCounts,
+} from '@/api/types'
 import { formatNumber, t } from '@/i18n'
 import { cn } from '@/lib/utils'
 
@@ -17,12 +24,15 @@ const props = defineProps<{
   status: CampaignStatus | null
   connection: ConnectionState
   lastUpdatedAt: string | null
+  /** The page's view state when the stream has not answered yet (campaign.state); optional. */
+  viewState?: CampaignState | null
 }>()
 
 type CountKey = keyof StatusCounts
 
-const state = computed<'completed' | 'stale' | 'live'>(() => {
+const state = computed<'completed' | 'scheduled' | 'stale' | 'live'>(() => {
   if (props.status?.state === 'completed') return 'completed'
+  if ((props.viewState ?? props.status?.state) === 'scheduled') return 'scheduled'
   return props.connection === 'open' ? 'live' : 'stale'
 })
 
@@ -137,207 +147,209 @@ onBeforeUnmount(() => {
   <section
     data-testid="delivery-counters"
     :data-state="state"
-    :aria-busy="status ? undefined : 'true'"
-    aria-labelledby="delivery-counters-title"
-    class="flex flex-col gap-4"
+    :aria-busy="status || state === 'scheduled' ? undefined : 'true'"
+    :aria-labelledby="state === 'scheduled' ? undefined : 'delivery-counters-title'"
+    :class="state === 'scheduled' ? 'contents' : 'flex flex-col gap-4'"
   >
-    <span class="sr-only" role="status" aria-live="polite">{{ announcement }}</span>
+    <template v-if="state !== 'scheduled'">
+      <span class="sr-only" role="status" aria-live="polite">{{ announcement }}</span>
 
-    <!-- Overall: title, live/stale indicator, total progress and the five totals. -->
-    <div
-      :class="
-        cn(
-          'overflow-hidden rounded-card-lg border border-border-default bg-surface-raised shadow-raised transition-opacity',
-          staleNote && 'opacity-80',
-        )
-      "
-    >
-      <div class="h-1 bg-gradient-brand" aria-hidden="true" />
-      <div class="flex flex-col gap-4 p-4 md:p-6">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <h2
-            v-if="state === 'completed'"
-            id="delivery-counters-title"
-            data-testid="delivery-completed-title"
-            class="flex items-center gap-2 text-h3 text-accent-heading"
-          >
-            <Flag class="size-5 text-brand-icon" aria-hidden="true" />
-            {{ t('delivery.completedTitle') }}
-          </h2>
-          <h2
-            v-else
-            id="delivery-counters-title"
-            class="flex items-center gap-2 text-h3 text-accent-heading"
-          >
-            {{ status ? t('delivery.liveTitle') : t('delivery.waiting') }}
-          </h2>
-
-          <p
-            v-if="state === 'live'"
-            class="inline-flex items-center gap-1.5 rounded-pill bg-success-bg px-2.5 py-1 text-caption font-medium text-success"
-          >
-            <Radio class="size-3.5" aria-hidden="true" />
-            {{ t('delivery.live') }}
-          </p>
-          <p
-            v-else-if="state === 'completed'"
-            class="inline-flex items-center gap-1.5 text-body-sm text-ink-600"
-          >
-            <CircleCheck class="size-4 text-success" aria-hidden="true" />
-            {{
-              t('delivery.completedSummary', {
-                sent: formatNumber(totals.sent),
-                failed: formatNumber(totals.failed),
-              })
-            }}
-          </p>
-        </div>
-
-        <p
-          v-if="staleNote"
-          data-testid="delivery-stale-note"
-          class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-card bg-warning-bg px-3 py-2 text-body-sm text-warning"
-        >
-          <Unplug class="size-4 shrink-0" aria-hidden="true" />
-          <span class="font-medium">{{ t('delivery.staleNote') }}</span>
-          <span v-if="updatedText" class="text-ink-600">· {{ updatedText }}</span>
-        </p>
-
-        <div class="flex flex-col gap-2">
-          <div class="flex items-baseline justify-between gap-3">
-            <span class="text-body-sm font-medium text-ink-700">{{
-              t('delivery.totalLabel')
-            }}</span>
-            <span class="text-numeral-sm text-ink-600 tabular-nums">{{
-              t('delivery.done', { p: percent(totals) })
-            }}</span>
-          </div>
-          <ProgressBar
-            data-testid="delivery-bar-total"
-            :value="finished(totals)"
-            :max="totals.total"
-            variant="segmented"
-            :segments="totals"
-            :label="
-              t('delivery.barLabel', {
-                channel: t('delivery.totalLabel'),
-                done: formatNumber(finished(totals)),
-                total: formatNumber(totals.total),
-              })
-            "
-          />
-        </div>
-
-        <dl class="grid grid-cols-2 gap-3 sm:grid-cols-5">
-          <div class="flex flex-col gap-0.5">
-            <dt class="text-caption text-ink-500">{{ t('delivery.count.total') }}</dt>
-            <dd
-              data-testid="delivery-count-total-total"
-              :data-value="dv(totals.total)"
-              class="text-numeral-md text-accent-numeral tabular-nums"
-            >
-              {{ show(totals.total) }}
-            </dd>
-          </div>
-          <div v-for="r in ROWS" :key="r.key" class="flex flex-col gap-0.5">
-            <dt class="flex items-center gap-1.5 text-caption text-ink-500">
-              <span :class="cn('size-2 rounded-full', r.dot)" aria-hidden="true" />
-              {{ t(`status.delivery.${r.key}`) }}
-            </dt>
-            <dd
-              :data-testid="`delivery-count-total-${r.key}`"
-              :data-value="dv(totals[r.key])"
-              :class="cn('text-numeral-md tabular-nums', valueClass(r.key, totals[r.key]))"
-            >
-              {{ show(totals[r.key]) }}
-            </dd>
-          </div>
-        </dl>
-
-        <a
-          v-if="state === 'completed' && totals.failed > 0"
-          data-testid="delivery-failed-link"
-          :href="failedHref"
-          class="inline-flex w-fit items-center gap-1.5 text-body-sm font-medium text-error underline max-lg:min-h-11 underline-offset-4 hover:text-error-strong"
-          @click="openFailed"
-          >{{ t('delivery.failedLink') }} ({{ formatNumber(totals.failed) }})</a
-        >
-      </div>
-    </div>
-
-    <!-- Per channel (DESIGN.md §8.5): side by side ≥768 px, stacked below. -->
-    <div class="grid gap-4 md:grid-cols-2">
-      <article
-        v-for="c in channels"
-        :key="c.key"
-        :data-testid="`delivery-card-${c.key}`"
-        :aria-labelledby="`delivery-card-${c.key}-title`"
+      <!-- Overall: title, live/stale indicator, total progress and the five totals. -->
+      <div
         :class="
           cn(
-            'flex min-w-0 flex-col gap-4 rounded-card border border-border-default bg-surface-card p-4 transition-opacity md:p-6',
+            'overflow-hidden rounded-card-lg border border-border-default bg-surface-raised shadow-raised transition-opacity',
             staleNote && 'opacity-80',
           )
         "
       >
-        <div class="flex items-baseline justify-between gap-3">
-          <h3
-            :id="`delivery-card-${c.key}-title`"
-            class="flex items-center gap-2 text-h4 text-ink-900"
-          >
-            <span :class="cn('size-2.5 rounded-full', c.dot)" aria-hidden="true" />
-            {{ c.label }}
-          </h3>
-          <p class="text-body-sm text-ink-600">
-            <span
-              :data-testid="`delivery-count-${c.key}-total`"
-              :data-value="dv(c.counts.total)"
-              class="text-numeral-md text-accent-numeral tabular-nums"
-              >{{ show(c.counts.total) }}</span
+        <div class="h-1 bg-gradient-brand" aria-hidden="true" />
+        <div class="flex flex-col gap-4 p-4 md:p-6">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2
+              v-if="state === 'completed'"
+              id="delivery-counters-title"
+              data-testid="delivery-completed-title"
+              class="flex items-center gap-2 text-h3 text-accent-heading"
             >
-            {{ t('delivery.recipients') }}
-          </p>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <ProgressBar
-            :data-testid="`delivery-bar-${c.key}`"
-            :value="finished(c.counts)"
-            :max="c.counts.total"
-            variant="segmented"
-            :segments="c.counts"
-            :label="
-              t('delivery.barLabel', {
-                channel: c.label,
-                done: formatNumber(finished(c.counts)),
-                total: formatNumber(c.counts.total),
-              })
-            "
-          />
-          <span class="w-12 shrink-0 text-right text-numeral-sm text-ink-600 tabular-nums"
-            >%{{ percent(c.counts) }}</span
-          >
-        </div>
-
-        <dl class="grid grid-cols-2 gap-x-4 gap-y-2">
-          <div
-            v-for="r in ROWS"
-            :key="r.key"
-            class="flex items-baseline justify-between gap-2 border-b border-border-subtle pb-1.5"
-          >
-            <dt class="flex items-center gap-1.5 text-body-sm text-ink-600">
-              <span :class="cn('size-2 rounded-full', r.dot)" aria-hidden="true" />
-              {{ t(`status.delivery.${r.key}`) }}
-            </dt>
-            <dd
-              :data-testid="`delivery-count-${c.key}-${r.key}`"
-              :data-value="dv(c.counts[r.key])"
-              :class="cn('text-numeral-sm tabular-nums', valueClass(r.key, c.counts[r.key]))"
+              <Flag class="size-5 text-brand-icon" aria-hidden="true" />
+              {{ t('delivery.completedTitle') }}
+            </h2>
+            <h2
+              v-else
+              id="delivery-counters-title"
+              class="flex items-center gap-2 text-h3 text-accent-heading"
             >
-              {{ show(c.counts[r.key]) }}
-            </dd>
+              {{ status ? t('delivery.liveTitle') : t('delivery.waiting') }}
+            </h2>
+
+            <p
+              v-if="state === 'live'"
+              class="inline-flex items-center gap-1.5 rounded-pill bg-success-bg px-2.5 py-1 text-caption font-medium text-success"
+            >
+              <Radio class="size-3.5" aria-hidden="true" />
+              {{ t('delivery.live') }}
+            </p>
+            <p
+              v-else-if="state === 'completed'"
+              class="inline-flex items-center gap-1.5 text-body-sm text-ink-600"
+            >
+              <CircleCheck class="size-4 text-success" aria-hidden="true" />
+              {{
+                t('delivery.completedSummary', {
+                  sent: formatNumber(totals.sent),
+                  failed: formatNumber(totals.failed),
+                })
+              }}
+            </p>
           </div>
-        </dl>
-      </article>
-    </div>
+
+          <p
+            v-if="staleNote"
+            data-testid="delivery-stale-note"
+            class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-card bg-warning-bg px-3 py-2 text-body-sm text-warning"
+          >
+            <Unplug class="size-4 shrink-0" aria-hidden="true" />
+            <span class="font-medium">{{ t('delivery.staleNote') }}</span>
+            <span v-if="updatedText" class="text-ink-600">· {{ updatedText }}</span>
+          </p>
+
+          <div class="flex flex-col gap-2">
+            <div class="flex items-baseline justify-between gap-3">
+              <span class="text-body-sm font-medium text-ink-700">{{
+                t('delivery.totalLabel')
+              }}</span>
+              <span class="text-numeral-sm text-ink-600 tabular-nums">{{
+                t('delivery.done', { p: percent(totals) })
+              }}</span>
+            </div>
+            <ProgressBar
+              data-testid="delivery-bar-total"
+              :value="finished(totals)"
+              :max="totals.total"
+              variant="segmented"
+              :segments="totals"
+              :label="
+                t('delivery.barLabel', {
+                  channel: t('delivery.totalLabel'),
+                  done: formatNumber(finished(totals)),
+                  total: formatNumber(totals.total),
+                })
+              "
+            />
+          </div>
+
+          <dl class="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <div class="flex flex-col gap-0.5">
+              <dt class="text-caption text-ink-500">{{ t('delivery.count.total') }}</dt>
+              <dd
+                data-testid="delivery-count-total-total"
+                :data-value="dv(totals.total)"
+                class="text-numeral-md text-accent-numeral tabular-nums"
+              >
+                {{ show(totals.total) }}
+              </dd>
+            </div>
+            <div v-for="r in ROWS" :key="r.key" class="flex flex-col gap-0.5">
+              <dt class="flex items-center gap-1.5 text-caption text-ink-500">
+                <span :class="cn('size-2 rounded-full', r.dot)" aria-hidden="true" />
+                {{ t(`status.delivery.${r.key}`) }}
+              </dt>
+              <dd
+                :data-testid="`delivery-count-total-${r.key}`"
+                :data-value="dv(totals[r.key])"
+                :class="cn('text-numeral-md tabular-nums', valueClass(r.key, totals[r.key]))"
+              >
+                {{ show(totals[r.key]) }}
+              </dd>
+            </div>
+          </dl>
+
+          <a
+            v-if="state === 'completed' && totals.failed > 0"
+            data-testid="delivery-failed-link"
+            :href="failedHref"
+            class="inline-flex w-fit items-center gap-1.5 text-body-sm font-medium text-error underline max-lg:min-h-11 underline-offset-4 hover:text-error-strong"
+            @click="openFailed"
+            >{{ t('delivery.failedLink') }} ({{ formatNumber(totals.failed) }})</a
+          >
+        </div>
+      </div>
+
+      <!-- Per channel (DESIGN.md §8.5): side by side ≥768 px, stacked below. -->
+      <div class="grid gap-4 md:grid-cols-2">
+        <article
+          v-for="c in channels"
+          :key="c.key"
+          :data-testid="`delivery-card-${c.key}`"
+          :aria-labelledby="`delivery-card-${c.key}-title`"
+          :class="
+            cn(
+              'flex min-w-0 flex-col gap-4 rounded-card border border-border-default bg-surface-card p-4 transition-opacity md:p-6',
+              staleNote && 'opacity-80',
+            )
+          "
+        >
+          <div class="flex items-baseline justify-between gap-3">
+            <h3
+              :id="`delivery-card-${c.key}-title`"
+              class="flex items-center gap-2 text-h4 text-ink-900"
+            >
+              <span :class="cn('size-2.5 rounded-full', c.dot)" aria-hidden="true" />
+              {{ c.label }}
+            </h3>
+            <p class="text-body-sm text-ink-600">
+              <span
+                :data-testid="`delivery-count-${c.key}-total`"
+                :data-value="dv(c.counts.total)"
+                class="text-numeral-md text-accent-numeral tabular-nums"
+                >{{ show(c.counts.total) }}</span
+              >
+              {{ t('delivery.recipients') }}
+            </p>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <ProgressBar
+              :data-testid="`delivery-bar-${c.key}`"
+              :value="finished(c.counts)"
+              :max="c.counts.total"
+              variant="segmented"
+              :segments="c.counts"
+              :label="
+                t('delivery.barLabel', {
+                  channel: c.label,
+                  done: formatNumber(finished(c.counts)),
+                  total: formatNumber(c.counts.total),
+                })
+              "
+            />
+            <span class="w-12 shrink-0 text-right text-numeral-sm text-ink-600 tabular-nums"
+              >%{{ percent(c.counts) }}</span
+            >
+          </div>
+
+          <dl class="grid grid-cols-2 gap-x-4 gap-y-2">
+            <div
+              v-for="r in ROWS"
+              :key="r.key"
+              class="flex items-baseline justify-between gap-2 border-b border-border-subtle pb-1.5"
+            >
+              <dt class="flex items-center gap-1.5 text-body-sm text-ink-600">
+                <span :class="cn('size-2 rounded-full', r.dot)" aria-hidden="true" />
+                {{ t(`status.delivery.${r.key}`) }}
+              </dt>
+              <dd
+                :data-testid="`delivery-count-${c.key}-${r.key}`"
+                :data-value="dv(c.counts[r.key])"
+                :class="cn('text-numeral-sm tabular-nums', valueClass(r.key, c.counts[r.key]))"
+              >
+                {{ show(c.counts[r.key]) }}
+              </dd>
+            </div>
+          </dl>
+        </article>
+      </div>
+    </template>
   </section>
 </template>

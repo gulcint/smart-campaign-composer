@@ -58,6 +58,58 @@ func TestTransition_ContentAndApprovalEvents(t *testing.T) {
 	}
 }
 
+// REQ-SCH-01 C9
+// The scheduled state of the pure state machine: approved|scheduled + EventScheduled => scheduled
+// (rescheduling included), scheduled + EventSendAccepted => sending, scheduled +
+// EventScheduleCanceled => approved; every other event from scheduled, EventScheduleCanceled from
+// any other state and EventScheduled from outside approved/scheduled are ErrInvalidState.
+func TestTransition_ScheduleEvents(t *testing.T) {
+	t.Parallel()
+	if string(campaign.StateScheduled) != "scheduled" {
+		t.Fatalf("StateScheduled = %q, want scheduled", campaign.StateScheduled)
+	}
+	type row struct {
+		from    campaign.State
+		ev      campaign.Event
+		want    campaign.State
+		wantErr error
+	}
+	tests := []row{
+		{from: campaign.StateApproved, ev: campaign.EventScheduled, want: campaign.StateScheduled},
+		{from: campaign.StateScheduled, ev: campaign.EventScheduled, want: campaign.StateScheduled},
+		{from: campaign.StateScheduled, ev: campaign.EventSendAccepted, want: campaign.StateSending},
+		{from: campaign.StateScheduled, ev: campaign.EventScheduleCanceled, want: campaign.StateApproved},
+	}
+	for _, ev := range []campaign.Event{
+		campaign.EventSegmentGenerated, campaign.EventContentValidated, campaign.EventContentInvalid,
+		campaign.EventApproved, campaign.EventDeliveriesFinished,
+	} {
+		tests = append(tests, row{from: campaign.StateScheduled, ev: ev, wantErr: campaign.ErrInvalidState})
+	}
+	others := []campaign.State{
+		campaign.StateDraft, campaign.StateAudienceReady, campaign.StateContentReady,
+		campaign.StateApproved, campaign.StateSending, campaign.StateCompleted,
+	}
+	for _, from := range others {
+		tests = append(tests, row{from: from, ev: campaign.EventScheduleCanceled, wantErr: campaign.ErrInvalidState})
+		if from != campaign.StateApproved {
+			tests = append(tests, row{from: from, ev: campaign.EventScheduled, wantErr: campaign.ErrInvalidState})
+		}
+	}
+	for _, tc := range tests {
+		t.Run(string(tc.from)+" "+string(tc.ev), func(t *testing.T) {
+			t.Parallel()
+			got, err := campaign.Transition(tc.from, tc.ev)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Transition(%s, %s) error = %v, want %v", tc.from, tc.ev, err, tc.wantErr)
+			}
+			if tc.wantErr == nil && got != tc.want {
+				t.Fatalf("Transition(%s, %s) = %s, want %s", tc.from, tc.ev, got, tc.want)
+			}
+		})
+	}
+}
+
 // REQ-APR-03, REQ-CNT-04
 // Event names, the X-Expected-Version literal and the generation bound of the contract.
 func TestCampaign_P4Names(t *testing.T) {

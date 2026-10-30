@@ -2,13 +2,23 @@
 // paths); only the page under test is real, every other route renders StubPage.
 // The tracking route (REQ-TRK-01) is `tracking` at `/campaigns/:campaignId/tracking`; its live stream
 // factory is provided with `EventSourceFactoryKey` from `@/api/client` (docs/requirements.md REQ-TRK-01).
+// With `withToaster`, `@/components/Toaster.vue` is rendered next to the RouterView (as the app shell
+// does), so `toast` elements raised by the page exist in the DOM.
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia } from 'pinia'
-import type { Component } from 'vue'
+import { defineComponent, h, type Component } from 'vue'
 import { RouterView, createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { ApiClientKey, EventSourceFactoryKey, FetchKey } from '@/api/client'
+import Toaster from '@/components/Toaster.vue'
 import { CAMPAIGN_ID } from './p4'
 import Stub from './StubPage'
+
+const RouterViewWithToaster = defineComponent({
+  name: 'RouterViewWithToaster',
+  setup() {
+    return () => h('div', [h(RouterView), h(Toaster)])
+  },
+})
 
 export async function mountPage(
   page: Component,
@@ -19,6 +29,7 @@ export async function mountPage(
     eventSource?: unknown
     query?: Record<string, string>
     campaignId?: string
+    withToaster?: boolean
   },
 ): Promise<{ wrapper: VueWrapper; router: Router }> {
   const pick = (name: string) => (name === routeName ? page : Stub)
@@ -59,7 +70,7 @@ export async function mountPage(
   const provide: Record<symbol, unknown> = { [ApiClientKey as symbol]: deps.api }
   if (deps.fetch) provide[FetchKey as symbol] = deps.fetch
   if (deps.eventSource) provide[EventSourceFactoryKey as symbol] = deps.eventSource
-  const wrapper = mount(RouterView, {
+  const wrapper = mount(deps.withToaster ? RouterViewWithToaster : RouterView, {
     global: { plugins: [router, createPinia()], provide },
     attachTo: document.body,
   })

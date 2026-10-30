@@ -36,8 +36,11 @@ import (
 // t0 is the test reference time of docs/requirements.md.
 var t0 = time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 
-// guard bounds waits on other goroutines (wall clock safety net only).
-const guard = 30 * time.Second
+// guard bounds waits on other goroutines (wall clock safety net only; no assertion depends on it).
+// Every time the tests assert on is fake-clock time, so a slow, loaded machine (-race, parallel
+// packages) only needs a generous net: the shared-limiter test drives about 1600 fake-clock steps
+// and 160 HTTP round trips.
+const guard = 2 * time.Minute
 
 const campaignID = "0b7e4f2a-1c3d-4e5f-8a9b-0c1d2e3f4a5b"
 
@@ -303,10 +306,18 @@ type fakeProvider struct {
 	nextID   int
 }
 
+// newProvider starts the scripted provider with keep-alives off: every request arrives on its own
+// connection. Otherwise whether a request reuses an idle connection depends on goroutine timing
+// (CPU load), and net/http's Transport silently replays a request that carries an Idempotency-Key
+// when a REUSED connection closes without an answer, so a scripted "lost response" could turn into
+// an extra, unscripted replay on a loaded machine. With one connection per request the provider sees
+// exactly the requests the dispatcher made, every run.
 func newProvider(t *testing.T) (*fakeProvider, *httptest.Server) {
 	t.Helper()
 	p := &fakeProvider{scripts: map[string][]step{}, accepted: map[string]string{}}
-	srv := httptest.NewServer(p)
+	srv := httptest.NewUnstartedServer(p)
+	srv.Config.SetKeepAlivesEnabled(false)
+	srv.Start()
 	t.Cleanup(srv.Close)
 	return p, srv
 }

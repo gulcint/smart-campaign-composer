@@ -51,7 +51,10 @@ func TestDispatcher_ProcessOnceOutcomes(t *testing.T) {
 			wantRetry: &wantRetry{u: delivery.RetryUpdate{Count: delivery.CountFailure, HTTPStatus: 0, LastError: "connection_error"}, max: time.Second - 1},
 		},
 		{
-			name: "provider timeout is retried as timeout", steps: []step{{hang: true}}, timeout: 200 * time.Millisecond,
+			// PROVIDER_TIMEOUT is wall-clock time by requirement (not the injected clock), so it must
+			// leave room for the dial and the write on a loaded machine: the request has to reach the
+			// provider (exactly one request is asserted) before the client gives up.
+			name: "provider timeout is retried as timeout", steps: []step{{hang: true}}, timeout: 2 * time.Second,
 			wantRetry: &wantRetry{u: delivery.RetryUpdate{Count: delivery.CountFailure, HTTPStatus: 0, LastError: "timeout"}, max: time.Second - 1},
 		},
 		{

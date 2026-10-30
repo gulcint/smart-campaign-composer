@@ -1,6 +1,6 @@
 # Veritabanı şeması (PostgreSQL 16)
 
-Kapsam: REQ-SND-01, REQ-SND-03, REQ-AUD-04, REQ-APR-03, REQ-SEC-02, REQ-SEED-01/02, REQ-TRK-01/02.
+Kapsam: REQ-SND-01, REQ-SND-03, REQ-AUD-04, REQ-APR-03, REQ-SEC-02, REQ-SEED-01/02, REQ-TRK-01/02, REQ-SCH-01..03.
 Entegrasyon testleri yalnızca burada adı geçen tablo, kolon, constraint, fonksiyon ve rol adlarına dayanabilir. Kolon sırası ve index'lerin fiziksel ayrıntısı sözleşme değildir; **adı verilen constraint'ler sözleşmedir**.
 
 ## 1. Roller ve bağlantılar (REQ-SEC-02)
@@ -19,7 +19,7 @@ Entegrasyon testleri yalnızca burada adı geçen tablo, kolon, constraint, fonk
 - Dizin: `migrations/`. Ad: `NNNN_snake_case_name.up.sql` + `NNNN_snake_case_name.down.sql`; `NNNN` 4 haneli, 0001'den artan, boşluksuz ve çakışmasız.
 - Her `up` için `down` zorunlu; `up → down → up` sonrası şema diff'i boş olmalı (`make db-roundtrip`).
 - Takip tablosu: `schema_migrations(version bigint PRIMARY KEY, dirty boolean NOT NULL)` (golang-migrate biçimi).
-- Planlanan ilk set (VARSAYIM, adlar bağlayıcı değil): `0001_customers_events`, `0002_customer_stats_fn`, `0003_campaigns_content_approvals`, `0004_deliveries`, `0005_seed_runs`.
+- Planlanan ilk set (VARSAYIM, adlar bağlayıcı değil): `0001_customers_events`, `0002_customer_stats_fn`, `0003_campaigns_content_approvals`, `0004_deliveries`, `0005_seed_runs`. Sonradan eklenenler: `0006_revoke_schema_migrations`, `0007_campaign_generation_lease` (D52), `0008_campaign_schedule` (P7a, D62; §3.4.1).
 - `migrations/embed.go` (`package migrations`, `var FS embed.FS`) dosyaları gömer.
 
 ## 3. Tablolar
@@ -84,7 +84,7 @@ Her müşteri için tam bir satır döner (olayı olmayanlar dahil; sayılar 0, 
 |---|---|---|
 | `id` | uuid | PK |
 | `brief` | text | NOT NULL, `campaigns_brief_length_check`: `char_length(brief) BETWEEN 1 AND 2000` |
-| `state` | text | NOT NULL, `campaigns_state_check`: `state IN ('draft','audience_ready','content_ready','approved','sending','completed')` |
+| `state` | text | NOT NULL, `campaigns_state_check`: `state IN ('draft','audience_ready','content_ready','approved','scheduled','sending','completed')` (`scheduled` 0008'de eklendi) |
 | `segment_rule` | jsonb | NULL; `{"all":[...]}` biçiminde **kök grup** (gövdedeki `rule` değeri) |
 | `segment_reference_time` | timestamptz | NULL |
 | `segment_revision` | integer | NOT NULL DEFAULT 0; her başarılı segment üretiminde +1 |
@@ -93,6 +93,7 @@ Her müşteri için tam bir satır döner (olayı olmayanlar dahil; sayılar 0, 
 | `audience_matched`, `audience_sms`, `audience_email` | integer | NULL, ≥ 0 |
 | `longest_first_name`, `longest_last_name`, `longest_city` | integer | NULL, ≥ 0; segment üretiminde `content.Longest` (eşleşen küme, izinden önce; `first_name` yedek metin dahil, boş küme → 18/0/0) |
 | `approved_content_version_id` | uuid | NULL, FK → `content_versions(id)` |
+| `scheduled_at` | timestamptz | NULL; planlanan gönderim anı (0008, D62). Mikrosaniye hassasiyet, UTC yazılır |
 | `sending_started_at` | timestamptz | NULL |
 | `completed_at` | timestamptz | NULL |
 | `generation_token` | uuid | NULL; süren segment/içerik üretiminin kira jetonu (D52) |
@@ -102,10 +103,11 @@ Her müşteri için tam bir satır döner (olayı olmayanlar dahil; sayılar 0, 
 Durum tutarlılık kısıtları:
 
 - `campaigns_segment_present_check`: `state = 'draft' OR (segment_rule IS NOT NULL AND segment_reference_time IS NOT NULL)`
-- `campaigns_approval_present_check`: `(state IN ('approved','sending','completed')) = (approved_content_version_id IS NOT NULL)`
+- `campaigns_approval_present_check`: `(state IN ('approved','scheduled','sending','completed')) = (approved_content_version_id IS NOT NULL)` (`scheduled` 0008'de eklendi)
 - `campaigns_sending_started_check`: `(state IN ('sending','completed')) = (sending_started_at IS NOT NULL)`
 - `campaigns_completed_check`: `(state = 'completed') = (completed_at IS NOT NULL)`
 - `campaigns_generation_lease_check`: `(generation_token IS NULL) = (generation_expires_at IS NULL)`
+- `campaigns_scheduled_at_check` (0008): `(state = 'scheduled' AND scheduled_at IS NOT NULL) OR state IN ('sending','completed') OR (state IN ('draft','audience_ready','content_ready','approved') AND scheduled_at IS NULL)` — `scheduled` ⇒ dolu; `draft`…`approved` ⇒ boş; `sending`/`completed`'da serbest (worker'ın plandan başlattığı gönderimde dolu kalır, anlık gönderimde ve `scheduled`'dan "şimdi gönder"de boştur; bu ayrımı kısıt değil yazma işlemi sağlar, §3.9)
 
 Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state): izinli olmayan geçiş `SQLSTATE 23514` (`check_violation`) ile reddedilir. İzinli geçişler (aynı durumda kalmak her zaman serbest):
 
@@ -114,11 +116,32 @@ Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state):
 | `draft` | `audience_ready` |
 | `audience_ready` | `content_ready` |
 | `content_ready` | `audience_ready`, `approved` |
-| `approved` | `audience_ready`, `content_ready`, `sending` |
+| `approved` | `audience_ready`, `content_ready`, `scheduled`, `sending` |
+| `scheduled` | `approved` (plan iptali), `sending` (zamanı geldi veya "şimdi gönder") |
 | `sending` | `completed` |
 | `completed` | — |
 
-(`approved → completed` doğrudan yok: teslimatsız gönderimde bile aynı işlemde `sending` sonra `completed` yazılır.)
+(`approved → completed` ve `scheduled → completed` doğrudan yok: teslimatsız gönderimde bile aynı işlemde `sending` sonra `completed` yazılır.) `scheduled`'dan `audience_ready` ve `content_ready`'ye geçiş **yoktur** (planlıyken segment/içerik değişmez; D62): örn. `UPDATE campaigns SET state = 'content_ready' WHERE state = 'scheduled'` SQLSTATE `23514` ile reddedilir. Yeniden planlama `scheduled → scheduled`'dır (aynı durum, serbest).
+
+#### 3.4.1 Migration `0008_campaign_schedule` (P7a, D62)
+
+`up`:
+
+1. `ALTER TABLE campaigns ADD COLUMN scheduled_at timestamptz NULL`.
+2. `campaigns_state_check` düşürülüp aynı adla `scheduled` dahil yeniden eklenir; `campaigns_approval_present_check` aynı şekilde `('approved','scheduled','sending','completed')` ile yeniden eklenir.
+3. `campaigns_scheduled_at_check` eklenir (yukarıdaki ifade).
+4. Tetikleyici fonksiyonu `campaigns_state_transition()` `CREATE OR REPLACE` ile yeni geçişleri ekler: `approved → scheduled`, `scheduled → approved`, `scheduled → sending`. Tetikleyici (`campaigns_state_transition_trg`) değişmez; 0003 düzenlenmez (migration değişmezliği).
+5. Kısmi indeks `campaigns_scheduled_due_idx ON campaigns (scheduled_at) WHERE state = 'scheduled'` (zamanlayıcının sorgusu yalnız bunu tarar; fiziksel ayrıntı sözleşme değildir, adı sözleşmedir).
+
+`down` (sırayla):
+
+1. `UPDATE campaigns SET state = 'approved', scheduled_at = NULL WHERE state = 'scheduled'` (tetikleyici henüz 0008 sürümündedir, `scheduled → approved`'a izin verir; onay satırları dokunulmadan kalır).
+2. `campaigns_scheduled_due_idx` ve `campaigns_scheduled_at_check` düşer.
+3. `campaigns_state_transition()` 0003'teki gövdesine `CREATE OR REPLACE` ile döner (0004–0007 fonksiyona dokunmaz).
+4. `campaigns_state_check` ve `campaigns_approval_present_check` 0003 ifadeleriyle yeniden eklenir.
+5. `ALTER TABLE campaigns DROP COLUMN scheduled_at` (`-- allow-destructive`; `sending`/`completed` satırlarındaki plan bilgisi kaybolur — kabul edilen bedel).
+
+`make db-roundtrip`: `up → down → up` sonrası şema diff'i boş. Pre-push ve CI `db-roundtrip` job'ı bunu koşar.
 
 ### 3.5 `content_versions`
 
@@ -224,9 +247,12 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 | Üretim başlangıcı (segment veya içerik) | Durum ve kira aynı kilit altında denetlenir; süresi geçmemiş kira varsa 409 `generation_in_progress`, yoksa `generation_token`/`generation_expires_at` yazılır (süresi geçmiş kiranın üzerine). `updated_at` değişmez |
 | LLM içerik sürümünün kaydı | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (son `invalid` olayı, `llm_unavailable`) |
 | Üretim sonu (başarı, hata, istemci kopması) | `generation_token = NULL, generation_expires_at = NULL WHERE generation_token = <kendi jetonu>` (tek ifade; başkasının kirasına dokunmaz) |
-| Gönderim (P5) | §3.7 / README ve openapi `sendCampaign` |
+| Gönderim (P5; anlık, veya `scheduled`'dan "şimdi gönder") | §3.7 / README ve openapi `sendCampaign`. Durum `approved` veya `scheduled` olmalı; teslimatlar, `state = 'sending'`, `sending_started_at = now`, `scheduled_at = NULL` aynı transaction'da yazılır (kitle boşsa aynı transaction'da `completed`, `completed_at = now`) |
+| Planlama / yeniden planlama (P7a) | Durum `approved` veya `scheduled` olmalı (sürüm ve üretim kirası gönderimdeki sırayla denetlenir); `state = 'scheduled'`, `scheduled_at = <istenen an>`, `updated_at = now`. **Teslimat satırı yazılmaz**; onay satırı ve `approved_content_version_id` değişmez |
+| Plan iptali (P7a, `DELETE …/schedule`) | Durum `scheduled` olmalı (değilse hiçbir yazma yok, 409 `invalid_state`); `state = 'approved'`, `scheduled_at = NULL`, `updated_at = now`; onay korunur |
+| Zamanı gelen planın başlatılması (P7a, `campaign.Scheduler`) | Kampanya başına **ayrı** bir transaction: `SELECT … FROM campaigns WHERE state = 'scheduled' AND scheduled_at <= $now ORDER BY scheduled_at, id LIMIT 1 FOR UPDATE SKIP LOCKED` (bu turda başarısız olan veya atlanan kampanyalar hariç); kilit altında `state = 'scheduled' AND scheduled_at <= $now` yeniden denetlenir (daha ileri bir zamana yeniden planlama yarışı kazanır; koşul tutmuyorsa kampanya atlanır) ve süresi geçmemiş bir üretim kirası varsa kampanya bu turda atlanır (savunma; `scheduled`'da üretim başlatılamaz). Sonra anlık gönderimle **aynı** yazmalar (paylaşılan başlatma fonksiyonu, go-interfaces `startSendingLocked`): teslimatlar, `state = 'sending'`, `sending_started_at = $now` (worker saati); `scheduled_at` **korunur**; kitle boşsa aynı transaction'da `completed`. Commit edilmeden kesilen transaction hiçbir iz bırakmaz (kampanya `scheduled` kalır) |
 
-Düzenleme, onay ve gönderim, kendi transaction'larında satırı kilitledikten sonra, durum denetimlerinden önce süresi geçmemiş bir kira olup olmadığına bakar (`LockedCampaign.CheckNoGeneration`); varsa hiçbir yazma yapmadan 409 `generation_in_progress` döner. Onay ve gönderimde bundan önce yalnız sürümün varlığı (404 `content_version_not_found`) denetlenir; düzenlemede kira denetimi ilk denetimdir. Böylece aynı veritabanını kullanan birden fazla API sürecinde de üretim başlangıcı ile gönderimden yalnız biri kabul edilir (REQ-SND-01).
+Düzenleme, onay, gönderim ve planlama, kendi transaction'larında satırı kilitledikten sonra, durum denetimlerinden önce süresi geçmemiş bir kira olup olmadığına bakar (`LockedCampaign.CheckNoGeneration`); varsa hiçbir yazma yapmadan 409 `generation_in_progress` döner. Onay, gönderim ve planlamada bundan önce yalnız sürümün varlığı (404 `content_version_not_found`) denetlenir; düzenlemede kira denetimi ilk denetimdir. Böylece aynı veritabanını kullanan birden fazla API sürecinde de üretim başlangıcı ile gönderimden yalnız biri kabul edilir (REQ-SND-01).
 
 ## 4. Kuyruk mekanikleri (gözlemlenebilir)
 

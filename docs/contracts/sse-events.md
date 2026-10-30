@@ -151,13 +151,16 @@ Akışın başında bir kez `retry: 3000` satırı gönderilir. Her olay `id: <n
     "sms":   { "total": 1200, "queued": 900, "sending": 5, "sent": 290, "failed": 5 },
     "email": { "total": 1210, "queued": 900, "sending": 5, "sent": 300, "failed": 5 }
   },
+  "scheduled_at": null,
   "sending_started_at": "2026-01-15T12:00:05Z",
   "completed_at": null,
   "updated_at": "2026-01-15T12:00:11Z"
 }
 ```
 
-Değişmezler: `total = queued + sending + sent + failed` (her kanal ve toplam için); `counts.x = by_channel.sms.x + by_channel.email.x`. Teslimat yoksa (`draft`…`approved`) tüm sayaçlar 0.
+Değişmezler: `total = queued + sending + sent + failed` (her kanal ve toplam için); `counts.x = by_channel.sms.x + by_channel.email.x`. Teslimat yoksa (`draft`…`approved`, `scheduled`) tüm sayaçlar 0.
+
+**Planlı kampanya (P7a, D62):** `state` `scheduled` iken akış normal açılır (`snapshot`, sayaçlar 0, `scheduled_at` dolu) ve kapanmaz. `state` veya `scheduled_at` değişince (yeniden planlama, iptal → `approved`, worker başlattı veya "şimdi gönder" → `sending`) bir sonraki yoklamada `status` olayı gelir (fark kuralı aynı: `updated_at` dışındaki her alan). Worker'ın plandan başlattığı kampanyada `scheduled_at` `sending`/`completed` olaylarında dolu kalır; anlık gönderimde ve "şimdi gönder"de `null`'dır. İptal edilen planda akış açık kalır (`approved`, `completed` değil).
 
 ### 2.2 Sıralama kuralları
 

@@ -20,7 +20,7 @@ import (
 // MaxGenerationDuration.
 var errGenerationTimeout = errors.New("campaign: generation exceeded the maximum duration")
 
-// StartContentGeneration: 404 -> invalid_state (draft, sending, completed) -> generation lease,
+// StartContentGeneration: 404 -> invalid_state (draft, scheduled, sending, completed) -> generation lease,
 // all under the campaign row lock (D52) -> LLM attempt 1 connected (llm.ErrUnavailable otherwise).
 // The lease is held by the returned run.
 func (s *service) StartContentGeneration(ctx context.Context, id string) (ContentRun, error) {
@@ -330,10 +330,12 @@ func (s *service) Approve(ctx context.Context, id, versionID string) (Campaign, 
 	})
 }
 
-// Send follows openapi sendCampaign (README §5.4): 404 campaign -> 404 version -> (under the row
-// lock) generation lease -> invalid_state (not approved, second send) -> stale (not the approved
-// version). The checks and the delivery rows share ONE transaction on the locked row (D52), so a
-// send and a generation start never both win and a refused send writes nothing.
+// Send follows openapi sendCampaign without scheduled_at (README §5.4): 404 campaign -> 404
+// version -> (under the row lock) generation lease -> invalid_state (neither approved nor
+// scheduled, second send) -> stale (not the approved version). The checks and the delivery rows
+// share ONE transaction on the locked row (D52), so a send and a generation start never both win
+// and a refused send writes nothing. From scheduled ("send now", D62) the plan is dropped in that
+// same transaction.
 func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, error) {
 	v, err := s.GetContentVersion(ctx, id, versionID)
 	if err != nil {
@@ -341,16 +343,7 @@ func (s *service) Send(ctx context.Context, id, versionID string) (SendResult, e
 	}
 	id, versionID = v.CampaignID, v.ID // canonical (D47a)
 	totals, state, err := s.d.Store.CreateDeliveries(ctx, id, versionID, s.now, func(lc LockedCampaign) error {
-		if err := lc.CheckNoGeneration(s.d.Clock.Now()); err != nil {
-			return err
-		}
-		if _, err := Transition(lc.State, EventSendAccepted); err != nil {
-			return err
-		}
-		if lc.ApprovedVersionID == nil || *lc.ApprovedVersionID != versionID {
-			return ErrStaleContentVersion
-		}
-		return nil
+		return s.checkSendable(lc, versionID, EventSendAccepted)
 	})
 	if err != nil {
 		return SendResult{}, err

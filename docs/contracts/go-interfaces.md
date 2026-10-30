@@ -27,7 +27,7 @@ Requirements'taki adlarla eşleme: `LLMClient` = `llm.Client`; `Clock` = `clock.
 | `internal/content` | Şablon: Parse, Validate, Render, en kötü durum, email HTML | unit |
 | `internal/llm` | `Client` arayüzü, sağlayıcı seçimi, fabrika, sahte LLM | unit |
 | `internal/composer` | LLM + doğrulama + tek düzeltme döngüsü, içerik olayları | unit (sahte LLM) |
-| `internal/campaign` | Durum makinesi + kampanya servisi | unit (`Transition`), entegrasyon (servis) |
+| `internal/campaign` | Durum makinesi + kampanya servisi + zamanlanmış gönderim döngüsü (`Scheduler`, P7a) | unit (`Transition`, `ParseScheduledAt`, `ValidateScheduledAt`), entegrasyon (servis, `Scheduler.RunOnce`) |
 | `internal/delivery` | Retry politikası, hız sınırlayıcı, dispatcher, kuyruk deposu arayüzü | unit (sahte saat/depo/provider), entegrasyon |
 | `internal/provider` | Provider HTTP istemcisi | unit (`httptest`) |
 | `internal/mockprovider` | Mock provider HTTP sunucusu | unit (`httptest`) |
@@ -126,6 +126,10 @@ type Config struct {
 	                                           // RETRY_MAX_RATE_LIMITED(20, 1..20), RETRY_RATE_LIMIT_WINDOW(10m)
 	                                           // upper bounds = deliveries CHECKs; above => ErrInvalidValue
 	WorkerRandSeed        int64         // WORKER_RAND_SEED, default 0 => seeded from crypto/rand
+
+	// P7a scheduled send (D62).
+	ScheduleMinLead   time.Duration // SCHEDULE_MIN_LEAD (api), default 1m; allowed 0s..24h, outside => ErrInvalidValue
+	SchedulerInterval time.Duration // SCHEDULER_INTERVAL (worker), default 1s; allowed (0, 1m], outside => ErrInvalidValue
 }
 
 // Load reads configuration through getenv (tests pass a map lookup; binaries pass os.Getenv).
@@ -144,6 +148,7 @@ func (c Config) LogValue() slog.Value
 
 - `LLM_PROVIDER` geçersiz (ör. `fake`) → `ErrInvalidValue`.
 - `Load`, `LLM_PROVIDER=real` + key yok durumunu **reddetmez**; bu karar `llm.Select`'tedir (tek yer).
+- `SCHEDULE_MIN_LEAD=0s` geçerlidir (test yığını; "şimdi"ye eşit an kabul edilir), `-1s` ve `25h` → `ErrInvalidValue`. `SCHEDULER_INTERVAL=0s` → `ErrInvalidValue`.
 - `DatabaseURL` eksikliği `Load`'da değil, onu kullanan binary'de (`ErrMissing` ile) kontrol edilir; böylece `Load` testleri DB'siz çalışır.
 
 ## `internal/validation`
@@ -186,6 +191,7 @@ const (
 	CodeUnknownField = "unknown_field"; CodeUnknownOperator = "unknown_operator"; CodeOperatorNotAllowed = "operator_not_allowed"
 	CodeTypeMismatch = "type_mismatch"; CodeEmptyGroup = "empty_group"
 	CodeMaxDepthExceeded = "max_depth_exceeded"; CodeMaxConditionsExceeded = "max_conditions_exceeded"
+	CodeScheduleTooSoon = "schedule_too_soon"; CodeScheduleTooFar = "schedule_too_far" // P7a, path "scheduled_at"
 )
 ```
 
@@ -709,6 +715,7 @@ const (
 	StateAudienceReady State = "audience_ready"
 	StateContentReady  State = "content_ready"
 	StateApproved      State = "approved"
+	StateScheduled     State = "scheduled" // P7a (D62): approved + planned send, no delivery yet
 	StateSending       State = "sending"
 	StateCompleted     State = "completed"
 )
@@ -722,6 +729,8 @@ const (
 	EventApproved           Event = "approved"
 	EventSendAccepted       Event = "send_accepted"
 	EventDeliveriesFinished Event = "deliveries_finished" // no queued/sending delivery left
+	EventScheduled          Event = "scheduled"           // plan stored or replaced (P7a)
+	EventScheduleCanceled   Event = "schedule_canceled"   // DELETE …/schedule (P7a)
 )
 
 // Transition is the pure state machine (requirements "Kampanya durum makinesi").
@@ -730,9 +739,13 @@ const (
 //   content_invalid:     audience_ready|content_ready|approved      -> unchanged (same state; VARSAYIM:
 //                        a failed regeneration does not revoke an approval)
 //   approved:            content_ready|approved -> approved
-//   send_accepted:       approved -> sending
+//   scheduled:           approved|scheduled -> scheduled
+//   schedule_canceled:   scheduled -> approved
+//   send_accepted:       approved|scheduled -> sending
 //   deliveries_finished: sending -> completed
-// Any other pair => ErrInvalidState.
+// Any other pair => ErrInvalidState. In particular every event except scheduled, schedule_canceled
+// and send_accepted is ErrInvalidState from scheduled (no segment/content change or approval while
+// a plan exists; cancel first, D62).
 func Transition(from State, ev Event) (State, error)
 
 const BriefMaxRunes = 2000
@@ -743,7 +756,7 @@ const BriefMaxRunes = 2000
 // disconnect) or the generation ends and, at the latest, expires after this duration (so a crashed
 // process cannot block the campaign); a content stream still running then ends with the final
 // invalid event, code "llm_unavailable". While the lease is held, GenerateSegment,
-// StartContentGeneration, EditContent, Approve and Send return ErrGenerationInProgress (Send is included so that a
+// StartContentGeneration, EditContent, Approve, Send and Schedule return ErrGenerationInProgress (Send is included so that a
 // persisting content generation can never meet a campaign already in state `sending`); each
 // checks it under the campaign row lock in the transaction that checks the state.
 const MaxGenerationDuration = 120 * time.Second
@@ -752,6 +765,31 @@ const MaxGenerationDuration = 120 * time.Second
 // empty => code "required" (matches validation.ErrRequired); > 2000 runes => code "too_long"
 // (matches validation.ErrTooLong).
 func NormalizeBrief(s string) (string, error)
+
+// ---- Scheduled send (P7a, D62) ----
+
+// MaxScheduleAhead is the latest accepted plan relative to now (exactly 720 h, not calendar days).
+const MaxScheduleAhead = 30 * 24 * time.Hour
+
+// ParseScheduledAt parses the request value of `scheduled_at`: RFC 3339 with an explicit offset,
+// form YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM), upper-case T and Z. The result is in UTC and
+// truncated to microseconds (the precision stored in PostgreSQL). Any other string (no offset, date
+// only, lower-case t/z, out-of-range fields) => *validation.Error with ONE FieldError {Path
+// "scheduled_at", Code "invalid_value", Err validation.ErrInvalidValue}.
+// Examples: "2026-01-15T15:30:00+03:00" -> 2026-01-15T12:30:00Z; "2026-01-15T12:30:00.1234567Z" ->
+// 2026-01-15T12:30:00.123456Z; "2026-01-15T15:30:00" -> error.
+func ParseScheduledAt(s string) (time.Time, error)
+
+// ValidateScheduledAt is the plan window check (pure; "now" is passed in). Bounds are inclusive:
+// at < now+minLead => *validation.Error {Path "scheduled_at", Code "schedule_too_soon", Err
+// ErrScheduleTooSoon} (past instants included); at > now+MaxScheduleAhead => {Path "scheduled_at",
+// Code "schedule_too_far", Err ErrScheduleTooFar}; otherwise nil. minLead < 0 is treated as 0.
+func ValidateScheduledAt(at, now time.Time, minLead time.Duration) error
+
+var (
+	ErrScheduleTooSoon = errors.New("campaign: scheduled_at too soon") // field code schedule_too_soon (422)
+	ErrScheduleTooFar  = errors.New("campaign: scheduled_at too far")  // field code schedule_too_far (422)
+)
 
 var (
 	ErrCampaignNotFound       = errors.New("campaign: not found")                 // 404 campaign_not_found
@@ -831,6 +869,7 @@ type Campaign struct {
 	Segment              *Segment        `json:"segment"`
 	LatestContentVersion *ContentVersion `json:"latest_content_version"` // latest VALIDATED, current revision
 	Approval             *Approval       `json:"approval"`
+	ScheduledAt          *time.Time      `json:"scheduled_at"` // openapi ScheduledAt: non-nil when scheduled; in sending/completed non-nil if started from a plan
 	SendingStartedAt     *time.Time      `json:"sending_started_at"`
 	CompletedAt          *time.Time      `json:"completed_at"`
 	CreatedAt            time.Time       `json:"created_at"`
@@ -863,9 +902,17 @@ type DeliveryTotals struct {
 
 type SendResult struct {
 	CampaignID       string         `json:"campaign_id"`
-	State            State          `json:"state"` // sending | completed
+	State            State          `json:"state"` // sending | completed | scheduled
 	ContentVersionID string         `json:"content_version_id"`
-	Deliveries       DeliveryTotals `json:"deliveries"`
+	ScheduledAt      *time.Time     `json:"scheduled_at"` // non-nil iff State == scheduled
+	Deliveries       DeliveryTotals `json:"deliveries"`   // all zero iff State == scheduled
+}
+
+// CancelScheduleResult is the 200 body of DELETE /api/campaigns/{campaign_id}/schedule.
+type CancelScheduleResult struct {
+	CampaignID  string     `json:"campaign_id"`
+	State       State      `json:"state"`        // always approved
+	ScheduledAt *time.Time `json:"scheduled_at"` // always nil (JSON null)
 }
 
 type StatusCounts struct {
@@ -886,6 +933,7 @@ type CampaignStatus struct {
 	State            State         `json:"state"`
 	Counts           StatusCounts  `json:"counts"`
 	ByChannel        ChannelCounts `json:"by_channel"`
+	ScheduledAt      *time.Time    `json:"scheduled_at"`
 	SendingStartedAt *time.Time    `json:"sending_started_at"`
 	CompletedAt      *time.Time    `json:"completed_at"`
 	UpdatedAt        time.Time     `json:"updated_at"`
@@ -972,17 +1020,19 @@ type Service interface {
 	Create(ctx context.Context, brief string) (Campaign, error)
 	Get(ctx context.Context, id string) (Campaign, error)
 	List(ctx context.Context, limit, offset int) (CampaignPage, error)
+	// GenerateSegment: ErrCampaignNotFound -> ErrInvalidState (scheduled, sending, completed) ->
+	// ErrGenerationInProgress -> llm.ErrUnavailable / composer.ErrInvalidOutput.
 	GenerateSegment(ctx context.Context, id string) (SegmentResult, error)
 	// StartContentGeneration performs every pre-stream check and connects LLM attempt 1. Errors here
 	// become JSON responses; after it returns a run, the handler writes HTTP 200 + SSE.
-	// Check order (first failure wins): ErrCampaignNotFound -> ErrInvalidState (draft, sending,
-	// completed) -> ErrGenerationInProgress -> llm.ErrUnavailable. (The handler already answered
+	// Check order (first failure wins): ErrCampaignNotFound -> ErrInvalidState (draft, scheduled,
+	// sending, completed) -> ErrGenerationInProgress -> llm.ErrUnavailable. (The handler already answered
 	// 404 for a malformed id, 422 for an unknown X-Mock-LLM-Scenario and 400/413/422 for the body,
 	// in that order, before calling the Service: README §5.4.) Acquires the generation lock, which
 	// the returned run releases when Stream returns (any outcome) or when ctx is cancelled.
 	StartContentGeneration(ctx context.Context, id string) (ContentRun, error)
-	// EditContent: ErrCampaignNotFound -> ErrGenerationInProgress -> ErrInvalidState (draft, sending,
-	// completed) -> *EditConflictError (expectedVersionID, a UUID or ExpectedVersionNone, is not the
+	// EditContent: ErrCampaignNotFound -> ErrGenerationInProgress -> ErrInvalidState (draft, scheduled,
+	// sending, completed) -> *EditConflictError (expectedVersionID, a UUID or ExpectedVersionNone, is not the
 	// id of the CURRENT latest validated version of the current segment revision, or not "none" while
 	// there is none; compared under the row lock) -> content.Parse + content.Validate against the
 	// CURRENT segment's longest values (*validation.Error => 422, nothing stored). The handler
@@ -998,9 +1048,31 @@ type Service interface {
 	// version (returns the unchanged Campaign; no new approvals row, approved_at unchanged, the
 	// worst-case re-check is NOT run again).
 	Approve(ctx context.Context, id, versionID string) (Campaign, error)
-	// Send: ErrCampaignNotFound -> ErrContentVersionNotFound -> ErrGenerationInProgress ->
-	// ErrInvalidState (not approved / second send) -> ErrStaleContentVersion (README §5.4).
+	// Send starts the send NOW: ErrCampaignNotFound -> ErrContentVersionNotFound ->
+	// ErrGenerationInProgress -> ErrInvalidState (neither approved nor scheduled; a second send) ->
+	// ErrStaleContentVersion (README §5.4). Accepted in approved (unchanged since P5) and in scheduled
+	// ("send now", D62: the plan is dropped in the same transaction). Success, in ONE transaction
+	// under the campaign row lock (startSendingLocked, see below): deliveries created, state sending
+	// (EventSendAccepted), sending_started_at = Clock.Now(), scheduled_at = NULL; both audiences
+	// empty => completed in the same transaction. Result: ScheduledAt nil, Deliveries = audiences.
 	Send(ctx context.Context, id, versionID string) (SendResult, error)
+	// Schedule plans (approved) or re-plans (scheduled) the send for `at` (P7a, D62). Check order:
+	// ValidateScheduledAt(at, Clock.Now(), Deps.ScheduleMinLead) — run FIRST, before any database
+	// access, so its *validation.Error (422) wins over ErrCampaignNotFound even for an unknown
+	// campaign — -> ErrCampaignNotFound -> ErrContentVersionNotFound -> ErrGenerationInProgress ->
+	// ErrInvalidState (neither approved nor scheduled) -> ErrStaleContentVersion. `at` is used
+	// truncated to microseconds and in UTC. Success, in one transaction under the campaign row lock:
+	// state scheduled (EventScheduled), scheduled_at = at, updated_at = Clock.Now(); NO delivery row;
+	// approval unchanged. Result: State scheduled, ScheduledAt = &at (UTC), Deliveries all 0. Any
+	// error changes nothing.
+	Schedule(ctx context.Context, id, versionID string, at time.Time) (SendResult, error)
+	// CancelSchedule: ErrCampaignNotFound -> ErrInvalidState (not scheduled, e.g. approved or the
+	// worker already started it). Success, in one transaction under the campaign row lock: state
+	// approved (EventScheduleCanceled), scheduled_at = NULL, updated_at = Clock.Now(); approval and
+	// approved version kept. No generation-lease check (no generation can run in scheduled).
+	// A late LLM generation result can never land on a scheduled campaign: persisting it goes
+	// through Transition, which fails from scheduled with ErrInvalidState, and nothing is written.
+	CancelSchedule(ctx context.Context, id string) (CancelScheduleResult, error)
 	Status(ctx context.Context, id string) (CampaignStatus, error)
 	Preview(ctx context.Context, id string, q PreviewQuery) (Preview, error)
 	ListDeliveries(ctx context.Context, id string, f DeliveryFilter) (DeliveryPage, error)
@@ -1034,11 +1106,70 @@ type Deps struct {
 	Clock    clock.Clock
 	// SegmentReferenceTime overrides Clock.Now() as the segment reference time when non-nil.
 	SegmentReferenceTime *time.Time
-	Logger               *slog.Logger
+	// ScheduleMinLead is the minimum lead of a plan (config.ScheduleMinLead, SCHEDULE_MIN_LEAD).
+	// Used as given: the zero value means "no lead" (scheduled_at = now is accepted); cmd/api passes
+	// the configured value (default 1m).
+	ScheduleMinLead time.Duration
+	Logger          *slog.Logger
 }
 
 func NewService(d Deps) Service
+
+// ---- Scheduler: starts due plans (cmd/worker, P7a, D62) ----
+
+type SchedulerConfig struct {
+	Interval  time.Duration // SCHEDULER_INTERVAL, default 1s; must be > 0
+	BatchSize int           // max campaigns started per pass; default 10; must be >= 1
+}
+
+type SchedulerDeps struct {
+	Store  Store        // postgres.NewCampaignStore(pool), the same store type as NewService
+	Clock  clock.Clock  // "now" for due-ness and sending_started_at; nil => clock.Real()
+	Logger *slog.Logger // nil => slog.Default()
+}
+
+var ErrInvalidSchedulerConfig = errors.New("campaign: invalid scheduler config")
+
+type Scheduler struct{ /* unexported */ }
+
+// NewScheduler validates cfg (Interval <= 0 or BatchSize < 1 => ErrInvalidSchedulerConfig).
+func NewScheduler(cfg SchedulerConfig, deps SchedulerDeps) (*Scheduler, error)
+
+// RunOnce is one pass at now = Clock.Now() (test seam). Up to BatchSize times: ONE transaction
+// claims ONE due campaign (state scheduled AND scheduled_at <= now, ordered by scheduled_at, id,
+// FOR UPDATE SKIP LOCKED, excluding campaigns that failed or were skipped in this pass), re-checks
+// state = scheduled AND scheduled_at <= now under the row lock (a re-plan to a later time wins the
+// race; the campaign is then skipped), skips the campaign for this pass if an unexpired generation lease is
+// present (LockedCampaign.CheckNoGeneration, defensive), then starts it with startSendingLocked:
+// exactly the deliveries, state, sending_started_at = now and empty-audience completion of
+// Service.Send, except that scheduled_at is KEPT. It commits per campaign, so one failing campaign
+// neither blocks nor rolls back the others; a failed start leaves the campaign scheduled (retried by
+// the next pass). Per-campaign failure isolation, a start rolled back mid-transaction and the
+// defensive lease skip are design intent, covered by review only, not by a REQ. A plan that became due while the worker was down is started by the first pass
+// after it is back, however late (no maximum delay, D62). Concurrent RunOnce calls (several worker
+// processes) never start the same campaign twice: SKIP LOCKED plus the re-check, and
+// deliveries_campaign_channel_customer_key as the last guard.
+// Returns the number of campaigns started in this pass. err is non-nil only when the pass could not
+// run (ctx done => ctx.Err(), database unreachable); per-campaign failures are logged, not returned.
+// If ctx is already cancelled, nothing is started and the error matches context.Canceled.
+func (s *Scheduler) RunOnce(ctx context.Context) (int, error)
+
+// Run calls RunOnce immediately (before the first Clock.After) and then every Interval until ctx is done; returns
+// ctx.Err(). A RunOnce error is logged and the loop continues. No in-memory timer per campaign:
+// the campaigns row is the only source of truth (restart safe).
+func (s *Scheduler) Run(ctx context.Context) error
 ```
+
+**Paylaşılan başlatma (`startSendingLocked`, unexported, test dikişi değildir):** `Service.Send` (anlık ve "şimdi gönder") ile `Scheduler.RunOnce` gönderimi **tek** bir paket içi fonksiyonla başlatır; fonksiyon kampanya satırı `FOR UPDATE` ile kilitli bir transaction içinde çağrılır ve şunları yazar: saklı segment referans zamanında derlenen kanal kitlelerinden (segment-dsl §6, izin filtresi aynı) her (kanal, müşteri) için bir `queued` teslimat (`next_attempt_at` = now, `INSERT … UNIQUE(campaign_id, channel, customer_id)`), `state = 'sending'`, `sending_started_at` = now, iki kitle de boşsa aynı transaction'da `completed` ve `completed_at` = now. Çağıran yalnız `scheduled_at`'i belirler (`Send`: NULL, `Scheduler`: korunur). Bu yüzden planlı ve anlık gönderimin teslimat kümesi aynı kurala uyar; testler bunu gözlemlenebilir sonuçla (`SendResult.Deliveries`, `/status`, `/deliveries`) doğrular, fonksiyonun kendisini çağırmaz.
+
+`Scheduler` log kayıtları (JSON handler; PII yok, REQ-SEC-01 kuralı geçerli):
+
+| `msg` | Seviye | Öznitelikler |
+|---|---|---|
+| `scheduled send started` | INFO | `campaign_id`, `scheduled_at` (RFC 3339 UTC), `sending_started_at` (RFC 3339 UTC), `delay_ms` (int64, `sending_started_at − scheduled_at` milisaniye, ≥ 0; D62 geç başlatma gecikmesi), `deliveries` (int, oluşturulan teslimat sayısı) |
+| `scheduled send failed` | ERROR | `campaign_id`, `error` (sabit, DB metni içermez) |
+
+`cmd/worker` `Scheduler.Run`'ı dispatcher'lardan ayrı bir goroutine'de `SchedulerConfig{Interval: cfg.SchedulerInterval, BatchSize: 10}` ile çalıştırır; worker kapanırken (`ctx` iptali) döngü biter. Hassasiyet: planlanan an + ≤ `SCHEDULER_INTERVAL` (varsayılan 1 sn) + ilk partinin claim süresi.
 
 `campaign.Transition` ve `campaign.NormalizeBrief` saf fonksiyon olarak unit test edilir. Servis davranışının kendisi HTTP + gerçek DB üzerinden (entegrasyon/E2E) test edilir; HTTP handler'ları ise sahte `campaign.Service` + sahte `ContentRun` + `clock.Fake` ile unit test edilir (bkz. §httpapi).
 
@@ -1538,6 +1669,9 @@ type Deps struct {
 	DB          health.Pinger
 	Metrics     http.Handler
 	Clock       clock.Clock      // all stream timing (poll, heartbeat) runs on this clock
+	// ScheduleMinLead is reported by GET /api/config (limits.schedule_min_lead_seconds); the window
+	// check itself is campaign.Service.Schedule's. cmd/api passes config.ScheduleMinLead.
+	ScheduleMinLead time.Duration
 	// StatusPollInterval: live-status stream poll period; zero => 1s.
 	StatusPollInterval time.Duration
 	// HeartbeatInterval: ": keepalive" comment period on both SSE streams; zero => 15s.
@@ -1582,6 +1716,9 @@ var OpenAPI embed.FS
 Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clock.Fake`, `httptest.ResponseRecorder`/`httptest.Server`):
 
 - **`GET /api/campaigns/{id}/events`:** önce `Service.Status` çağrılır (hata → JSON 404 vb.); sonra `retry: 3000` ve `snapshot` yazılır. Ardından döngü: `Clock.After(StatusPollInterval)` her tetiklendiğinde `Service.Status` yeniden çağrılır; sonuç son gönderilenden `updated_at` dışında farklıysa `status` olayı yazılır; `state == completed` ise `completed` yazılır ve akış kapanır. `Clock.After(HeartbeatInterval)` ile yorum satırı. İstemci kopunca (`ctx.Done`) veya `Deps.Shutdown` kapanınca döngü biter. `Service.Status` art arda 5 kez hata verirse akış kapanır (D54); hata günlüğe kesinti başına bir kez, toparlanınca bir kez yazılır. Sunucu tarafında `LISTEN/NOTIFY` kullanılmaz (VARSAYIM; tek mekanizma yoklama).
+- **`POST /api/campaigns/{id}/send`:** gövde (`SendRequest`) handler'da okunur (README §5.4 adım 3; alan hataları tek 422'de, openapi `sendCampaign` adım 2). `scheduled_at` **yoksa** `Service.Send(ctx, id, versionID)`, **varsa** `campaign.ParseScheduledAt` sonucu ile `Service.Schedule(ctx, id, versionID, at)` çağrılır; ikisi de 202 + `SendResult`. Pencere denetimi (`schedule_too_soon`/`schedule_too_far`) handler'da değil `Schedule`'dadır (servisin saati ve `Deps.ScheduleMinLead`); `*validation.Error` → 422.
+- **`DELETE /api/campaigns/{id}/schedule`:** gövde okunmaz; `Service.CancelSchedule` → 200 + `CancelScheduleResult`, hatalar README §5.3.
+- **`GET /api/config`:** `limits.schedule_min_lead_seconds` = `Deps.ScheduleMinLead`'in tam saniyeye yukarı yuvarlanmışı, `limits.schedule_max_ahead_seconds` = 2592000.
 - **`POST /api/campaigns/{id}/content`:** `Service.StartContentGeneration` hata dönerse JSON hata; dönmezse HTTP 200 + SSE başlıkları ve `ContentRun.Stream(ctx, emit)`; her `composer.Event` `event: <Name()>` + JSON olarak yazılır. Heartbeat aynı `HeartbeatInterval` ile.
 - `X-Mock-LLM-Scenario` başlığı yalnız `LLMProvider == mock` iken `llm.ParseScenario` ile okunur ve `llm.WithScenario` ile `ctx`'e konur.
 
@@ -1595,7 +1732,7 @@ Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clo
 | `content` | `ErrSMSTooLong`, `ErrSubjectTooLong`, `ErrEmailBodyTooLong`, `ErrUnknownVariable`, `ErrMalformedVariable`, `ErrWorstCaseTooLong` |
 | `llm` | `ErrUnavailable`, `ErrTruncated`, `ErrNoToolCall`, `ErrInvalidMode`, `ErrMissingAPIKey`, `ErrRealClientForbidden`, `ErrUnknownScenario`, `ErrUnknownTool` |
 | `composer` | `ErrInvalidOutput` |
-| `campaign` | `ErrCampaignNotFound`, `ErrContentVersionNotFound`, `ErrCustomerNotFound`, `ErrInvalidState`, `ErrContentNotValidated`, `ErrStaleContentVersion`, `ErrGenerationInProgress`, `ErrContentEditConflict` |
+| `campaign` | `ErrCampaignNotFound`, `ErrContentVersionNotFound`, `ErrCustomerNotFound`, `ErrInvalidState`, `ErrContentNotValidated`, `ErrStaleContentVersion`, `ErrGenerationInProgress`, `ErrContentEditConflict`, `ErrScheduleTooSoon`, `ErrScheduleTooFar`, `ErrInvalidSchedulerConfig` |
 | `delivery` | `ErrLeaseLost`, `ErrInvalidConfig` |
 | `provider` | `ErrTimeout`, `ErrConnection` |
 | `mockprovider` | `ErrInvalidConfig` |

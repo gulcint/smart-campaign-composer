@@ -8,7 +8,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 
 | Dosya | İçerik |
 |---|---|
-| [`openapi.yaml`](openapi.yaml) | HTTP API (OpenAPI 3.1): 19 operasyon, kapalı şemalar, durum kodları, yanıt başına izinli hata kodları; segment kuralı ve içerik gövdeleri `schemas/*.schema.json`'a göreli `$ref` (çok dosyalı, doğruluk kaynağı; §11) |
+| [`openapi.yaml`](openapi.yaml) | HTTP API (OpenAPI 3.1): 20 operasyon (P7a: `cancelSchedule`), kapalı şemalar, durum kodları, yanıt başına izinli hata kodları; segment kuralı ve içerik gövdeleri `schemas/*.schema.json`'a göreli `$ref` (çok dosyalı, doğruluk kaynağı; §11) |
 | [`redocly.yaml`](redocly.yaml) | `api-lint` kapısının Redocly yapılandırması (kapatılan her kural gerekçeli) |
 | [`sse-events.md`](sse-events.md) | İçerik üretimi (`delta`, `invalid`, `validated`) ve canlı durum (`snapshot`, `status`, `completed`) olayları |
 | [`schemas/segment-rule.schema.json`](schemas/segment-rule.schema.json) | Segment kuralı JSON şeması (LLM aracı girdisi + `POST /api/segments/count` gövdesi) |
@@ -21,7 +21,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | [`seed.md`](seed.md) | `cmd/seed` CLI, determinizm, kenar grupları, `manifest.json` şeması |
 | [`mock-provider.md`](mock-provider.md) | Mock provider HTTP API, idempotency, 429, ortam değişkenleri, senaryolu mod |
 | [`metrics.md`](metrics.md) | Prometheus metrik adları, `/healthz`, `/readyz` |
-| [`ui.md`](ui.md) | Rotalar, bileşenler (props/emits/`data-testid`), hata → i18n eşlemesi, SSE istemci davranışı, UI güvenlik iddiaları |
+| [`ui.md`](ui.md) | Rotalar, bileşenler (props/emits/`data-testid`), hata → i18n eşlemesi, SSE istemci davranışı, UI güvenlik iddiaları; zamanlanmış gönderim arayüzü (§3.25–3.26, P7a) |
 
 ## 2. Çalışma topolojisi (compose)
 
@@ -50,7 +50,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 
 ## 4. Durum adları
 
-- Kampanya: `draft`, `audience_ready`, `content_ready`, `approved`, `sending`, `completed` (kampanya düzeyinde `failed` yok). Geçişler: [`go-interfaces.md` §campaign `Transition`](go-interfaces.md#internalcampaign), DB tetikleyicisi [`db-schema.md` §3.4](db-schema.md#34-campaigns).
+- Kampanya: `draft`, `audience_ready`, `content_ready`, `approved`, `scheduled` (P7a, D62: onaylı ve planlı, henüz teslimat yok), `sending`, `completed` (kampanya düzeyinde `failed` yok). Geçişler: [`go-interfaces.md` §campaign `Transition`](go-interfaces.md#internalcampaign), DB tetikleyicisi [`db-schema.md` §3.4](db-schema.md#34-campaigns).
 - Teslimat: `queued`, `sending`, `sent`, `failed`; `failure_reason` ∈ `provider_rejected`, `max_attempts_exceeded`, `rate_limit_budget_exhausted`, `content_too_long`, `recipient_unavailable`.
 - İçerik sürümü: `status` ∈ `validated`, `invalid`; `source` ∈ `llm`, `edit`.
 - Kanal: `sms`, `email`.
@@ -82,24 +82,24 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `campaign_not_found` | 404 | Bilinmeyen kampanya (biçimsiz UUID dahil) |
 | `content_version_not_found` | 404 | Sürüm yok veya başka kampanyaya ait |
 | `customer_not_found` | 404 | Önizlemede verilen müşteri kuralla eşleşmiyor |
-| `invalid_state` | 409 | Kampanya durumu işleme izin vermiyor (onaysız gönderim, `sending`/`completed`'da düzenleme/üretim, ikinci gönderim, …) |
+| `invalid_state` | 409 | Kampanya durumu işleme izin vermiyor (onaysız gönderim, `sending`/`completed`'da düzenleme/üretim, ikinci gönderim, `scheduled`'da düzenleme/üretim/onay, `scheduled` olmayan kampanyada plan iptali, …) |
 | `content_not_validated` | 409 | `validated` olmayan sürümü onaylama/önizleme |
 | `stale_content_version` | 409 | En son sürüm olmayanı onaylama; onaylanandan farklı sürümle gönderim |
 | `content_edit_conflict` | 409 | `editContent`: `X-Expected-Version` güncel en son sürümle eşleşmiyor; gövde `error.current_version {id, version_number}` taşır |
 | `generation_in_progress` | 409 | Aynı kampanyada segment/içerik üretimi sürerken üretim, içerik düzenleme, onay veya gönderim isteği (kilit istemci koptuğunda veya en geç 120 sn sonra bırakılır) |
 | `payload_too_large` | 413 | Gövde > 64 KiB |
-| `validation_failed` | 422 | Brief, içerik, segment kuralı, sorgu parametresi (`invalid_value`, path `query.<ad>`), senaryo başlığı veya onay-anı en kötü durum doğrulaması |
+| `validation_failed` | 422 | Brief, içerik, segment kuralı, sorgu parametresi (`invalid_value`, path `query.<ad>`), senaryo başlığı, onay-anı en kötü durum doğrulaması veya plan zamanı (`scheduled_at`) |
 | `llm_invalid_output` | 502 | Düzeltme denemesinden sonra da geçersiz LLM çıktısı (segment) |
 | `llm_unavailable` | 502 | LLM'e erişilemedi (segment; içerikte stream açılmadan önce) |
 | `internal_error` | 500 | Beklenmeyen hata |
 
-### 5.2 Alan hatası `fields[].code` (kapalı liste, 23)
+### 5.2 Alan hatası `fields[].code` (kapalı liste, 25)
 
 | Kod | Kaynak | Go sentinel (`errors.Is`) |
 |---|---|---|
 | `required` | Alan **var ama boş** (brief, içerik alanları). Eksik anahtar `schema_violation`'dır | `validation.ErrRequired` |
 | `too_long` | brief > 2000 | `validation.ErrTooLong` |
-| `invalid_value` | segment değeri, sorgu parametresi, senaryo başlığı, `content_version_id` biçimi | `validation.ErrInvalidValue` |
+| `invalid_value` | segment değeri, sorgu parametresi, senaryo başlığı, `content_version_id` biçimi, `scheduled_at` biçimi (RFC 3339 değil veya ofsetsiz) | `validation.ErrInvalidValue` |
 | `invalid_json` | LLM çıktısı | `validation.ErrInvalidJSON` |
 | `schema_violation` | LLM çıktısı, istek gövdesi (bilinmeyen/yanlış tipli alan), araç çağrılmadı | `validation.ErrSchemaViolation` |
 | `truncated_output` | LLM çıktısı yarıda kesildi | (`llm.ErrTruncated` kaynaklı) |
@@ -120,6 +120,8 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `empty_group` | Boş `all`/`any` | `segment.ErrEmptyGroup` |
 | `max_depth_exceeded` | Derinlik > 3 | `segment.ErrMaxDepthExceeded` |
 | `max_conditions_exceeded` | Koşul > 10 | `segment.ErrMaxConditionsExceeded` |
+| `schedule_too_soon` | `scheduled_at` < şimdi + `SCHEDULE_MIN_LEAD` (geçmiş dahil); yol `scheduled_at` | `campaign.ErrScheduleTooSoon` |
+| `schedule_too_far` | `scheduled_at` > şimdi + 720 sa (30 gün); yol `scheduled_at` | `campaign.ErrScheduleTooFar` |
 
 ### 5.3 Go → HTTP eşlemesi
 
@@ -144,7 +146,7 @@ P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
 |---|---|---|---|
 | `generateContent` | 400 `malformed_request` | gövde var ama JSON değil | toast |
 | | 404 `campaign_not_found` | bilinmeyen kampanya | sayfa |
-| | 409 `invalid_state` | `draft`, `sending`, `completed` | toast + yeniden çek |
+| | 409 `invalid_state` | `draft`, `scheduled`, `sending`, `completed` | toast + yeniden çek |
 | | 409 `generation_in_progress` | kilit tutuluyor | toast |
 | | 413 `payload_too_large` | gövde > 64 KiB | — |
 | | 422 `validation_failed` | `schema_violation` (gövdede `{}` dışında alan; yol = alan adı); `invalid_value` (`header.X-Mock-LLM-Scenario`) | `ErrorCard` |
@@ -152,13 +154,14 @@ P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
 | | 200 SSE, son `invalid` | `invalid_json`, `schema_violation`, `truncated_output`, `no_tool_call` (yol alan adı veya `""`); `sms_too_long`, `subject_too_long`, `email_body_too_long`, `unknown_variable`, `malformed_variable`, `required`; `llm_unavailable`, `internal_error` (yol `""`) | `StreamingText` `invalid` |
 | `editContent` | 400, 413 | `generateContent` ile aynı | toast / satır içi |
 | | 404 `campaign_not_found` | | sayfa |
-| | 409 `generation_in_progress` › `invalid_state` › `content_edit_conflict` | `invalid_state`: `draft`, `sending`, `completed`; `content_edit_conflict`: `X-Expected-Version` ≠ güncel en son `validated` sürüm (`error.current_version`) | toast / `editor-conflict` |
+| | 409 `generation_in_progress` › `invalid_state` › `content_edit_conflict` | `invalid_state`: `draft`, `scheduled`, `sending`, `completed`; `content_edit_conflict`: `X-Expected-Version` ≠ güncel en son `validated` sürüm (`error.current_version`) | toast / `editor-conflict` |
 | | 422 `validation_failed` | `schema_violation` (yol `header.X-Expected-Version`: başlık eksik), `invalid_value` (aynı yol: biçim bozuk); içerik: `schema_violation` (eksik/fazla/yanlış tipli alan; yol alan veya fazla anahtar adı), `required` (boş/yalnız boşluk), `malformed_variable`, `unknown_variable`, `sms_too_long`, `subject_too_long`, `email_body_too_long` (yollar `sms.body`, `email.subject`, `email.body`) | satır içi |
 | `approveContent` | 400, 413 | | toast |
 | | 404 `campaign_not_found` › `content_version_not_found` | sürüm yok veya başka kampanyanın | sayfa / toast |
 | | 409 `generation_in_progress` › `content_not_validated` › `invalid_state` › `stale_content_version` | sıra openapi `approveContent`; `invalid_state`: `content_ready`/`approved` dışı | toast; `stale` → `ApprovalBar stale` |
 | | 422 `validation_failed` | `schema_violation` (eksik/fazla alan), `invalid_value` (`content_version_id` biçimsiz); `sms_too_long_worst_case` (`sms.body`), `subject_too_long_worst_case` (`email.subject`) | `ConfirmDialog` içinde |
-| `sendCampaign` | 400 (boş gövde dahil), 413; 404 `campaign_not_found` › `content_version_not_found`; 409 `generation_in_progress` › `invalid_state` › `stale_content_version`; 422 `validation_failed`: `schema_violation` (eksik/fazla alan), `invalid_value` (`content_version_id` biçimsiz) | gövde hataları 404/409'dan önce (REQ-SND-01) | toast |
+| `sendCampaign` | 400 (boş gövde dahil), 413; 422 `validation_failed`: `schema_violation` (eksik/fazla alan, `scheduled_at` string değil veya `null`), `invalid_value` (`content_version_id` biçimsiz, `scheduled_at` RFC 3339 değil/ofsetsiz), sonra `schedule_too_soon` / `schedule_too_far` (yol `scheduled_at`); 404 `campaign_not_found` › `content_version_not_found`; 409 `generation_in_progress` › `invalid_state` (`approved` ve `scheduled` dışı) › `stale_content_version` | gövde ve plan penceresi hataları 404/409'dan önce (REQ-SND-01, REQ-SCH-01); `scheduled_at` varsa planlar (202 `state: scheduled`), yoksa şimdi gönderir (`scheduled`'da planı düşürür) | toast; planlama 422'si `ConfirmDialog` içinde |
+| `cancelSchedule` | 404 `campaign_not_found`; 409 `invalid_state` (`scheduled` değil) | gövde okunmaz | toast + yeniden çek |
 | `previewContent` | 404 `campaign_not_found` › `content_version_not_found` › `customer_not_found` | `sample_index` ≥ eşleşen sayı → `customer_not_found` | toast (uyarı) |
 | | 409 `invalid_state` › `content_not_validated` | segment/doğrulanmış sürüm yok; verilen sürüm `invalid` | önizleme `empty` |
 | | 422 `validation_failed` | `invalid_value`: `query.sample_index`, `query.customer_id`, `query.content_version_id` | — |
@@ -184,6 +187,8 @@ Her satırda ayrıca 500 `internal_error` olabilir (toast). `fields[]` yalnız `
 | `PROVIDER_BASE_URL`, `PROVIDER_TIMEOUT` | worker | `http://mockprovider:8090`, `10s` | go-interfaces §config |
 | `DISPATCH_RATE_PER_SECOND`, `DISPATCH_CONCURRENCY`, `DISPATCH_BATCH_SIZE`, `DELIVERY_LEASE` | worker | `100`, `32`, `50`, `60s` | go-interfaces §config |
 | `RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY`, `RETRY_MAX_RATE_LIMITED`, `RETRY_RATE_LIMIT_WINDOW` | worker | `5`, `1s`, `60s`, `20`, `10m` | go-interfaces §delivery |
+| `SCHEDULE_MIN_LEAD` | api | `1m` (`0s`..`24h`; test yığınında `0s`) | go-interfaces §config, §campaign |
+| `SCHEDULER_INTERVAL` | worker | `1s` (`(0, 1m]`) | go-interfaces §config, §campaign `Scheduler` |
 | `WORKER_RAND_SEED` | worker | `0` (rastgele tohum) | go-interfaces §config |
 | `MOCK_PROVIDER_*` (10 adet) | mockprovider | mock-provider §3 | mock-provider §3 |
 
@@ -211,7 +216,7 @@ Test türleri ve konumları `.claude/skills/writing-tests/SKILL.md` §4'tedir. G
 - **"Worker sayısından bağımsız"** özelliği entegrasyon testinde gerçek DB ile sınanır: aynı kanal için iki `Dispatcher.Run` (her biri **kendi** `TokenBucket`'ı ve ayrı kayıt tutan sahte `provider.Client`'ıyla) çalıştırılır; yalnız advisory lock'u tutan (`Dispatcher.Leader() == true`, `Recorder.SetLeader`/`scc_dispatcher_leader{channel}` = 1) dispatcher provider'ı çağırır, diğerinin sahte provider'ı hiç istek almaz; lider durdurulunca diğeri kilidi alıp devam eder.
 - E2E / gerçek mock provider testlerinde varış zamanları ağ titremesi içerir; burada **toleranslı** iddia kullanılır: `/admin/requests` `received_at` değerleri üzerinde her `[t, t+1s)` penceresinde ≤ **110**, ve tüm koşu için (istek sayısı − 1) / (son − ilk varış, sn) ≤ **101**. Katı ≤ 100 E2E'de iddia edilmez.
 
-## 8. REQ → sözleşme eşlemesi (38/38)
+## 8. REQ → sözleşme eşlemesi (42/42)
 
 | REQ | Gözlemlenebilir yüzeyin tanımlandığı yer |
 |---|---|
@@ -253,6 +258,10 @@ Test türleri ve konumları `.claude/skills/writing-tests/SKILL.md` §4'tedir. G
 | REQ-DLV-02 | README §7; go-interfaces §0 (`testenv.Main` → `os.Exit(1)`), `llm.ErrRealClientForbidden` + `SCC_FORBID_REAL_LLM` |
 | REQ-DLV-03 | Çalışma zamanı yüzeyi yok (süreç: `ai-sessions/`, `make sanitize-sessions`, `make check-sessions`) |
 | REQ-DLV-04 | Çalışma zamanı yüzeyi yok (süreç: `README.md`, `DECISIONS.md`) |
+| REQ-SCH-01 | openapi `sendCampaign` (`SendRequest.scheduled_at`, `SendResult` `state: scheduled`, adımlar 1–8), `ScheduledAt`, `Campaign`/`CampaignStatus.scheduled_at`, `AppConfig.limits.schedule_*`; go-interfaces `campaign.ParseScheduledAt`, `ValidateScheduledAt`, `MaxScheduleAhead`, `ErrScheduleTooSoon/Far`, `Service.Schedule`, `Deps.ScheduleMinLead`, `config.ScheduleMinLead`; db-schema §3.4 (`campaigns_scheduled_at_check`, geçişler), §3.9 |
+| REQ-SCH-02 | go-interfaces `campaign.NewScheduler`, `SchedulerConfig`, `SchedulerDeps`, `Scheduler.RunOnce`/`Run`, `startSendingLocked` notu, log kayıtları; db-schema §3.9 başlatma satırı, `campaigns_scheduled_due_idx`; `config.SchedulerInterval` |
+| REQ-SCH-03 | openapi `cancelSchedule` (`CancelScheduleResult`, `CancelScheduleConflict`), `sendCampaign` (yeniden planlama, "şimdi gönder"), `generateSegment`/`generateContent`/`editContent`/`approveContent` (`scheduled` → 409); go-interfaces `Service.CancelSchedule`, `Transition`; db-schema §3.4 tetikleyici (`scheduled → content_ready` 23514), §3.4.1 |
+| REQ-SCH-04 | **ui.md §3.18** (`ConfirmDialog` plan kipi), **§3.25** (`SchedulePanel`), **§3.26** (`@/lib/schedule.ts`), §3.17 `scheduled`, §3.20 `data-state="scheduled"`, §3.24, §1 tablo, §4 i18n |
 
 ## 9. Kararlar (sahip / lider, P1 incelemesi)
 
