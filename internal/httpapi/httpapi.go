@@ -2,8 +2,8 @@
 //
 // It serves the system endpoints (/healthz, /readyz, /metrics, /api/config), the audience slice
 // (campaign create/get/list, segment generation, rule counting), the content + approval slice (SSE content
-// generation, versions, edits, approval, preview; content.go), the send + tracking routes (send,
-// status, deliveries; send.go; the live status SSE stream; events.go) and the cross-cutting
+// generation, versions, edits, approval, preview; content.go), the send + tracking routes (send or
+// plan, plan cancel, status, deliveries; send.go; the live status SSE stream; events.go) and the cross-cutting
 // behaviour every route shares: X-Request-ID, the 64 KiB body limit, JSON 404/405 errors, error
 // mapping, HTTP metrics and panic recovery.
 package httpapi
@@ -36,6 +36,9 @@ type Deps struct {
 	DB          health.Pinger
 	Metrics     http.Handler
 	Clock       clock.Clock // all stream timing (poll, heartbeat) runs on this clock
+	// ScheduleMinLead is reported by GET /api/config (limits.schedule_min_lead_seconds); the window
+	// check itself is campaign.Service.Schedule's. cmd/api passes config.ScheduleMinLead.
+	ScheduleMinLead time.Duration
 	// StatusPollInterval: live-status stream poll period; zero => 1s.
 	StatusPollInterval time.Duration
 	// HeartbeatInterval: ": keepalive" comment period on both SSE streams; zero => 15s.
@@ -109,6 +112,7 @@ var routeTable = []struct {
 
 	// Send + tracking slice (P5; send.go).
 	{Route{http.MethodPost, "/api/campaigns/{campaign_id}/send"}, handlerOf((*api).sendCampaign)},
+	{Route{http.MethodDelete, "/api/campaigns/{campaign_id}/schedule"}, handlerOf((*api).cancelSchedule)},
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/status"}, handlerOf((*api).getCampaignStatus)},
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/deliveries"}, handlerOf((*api).listDeliveries)},
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/events"}, handlerOf((*api).streamCampaignEvents)},
@@ -190,6 +194,9 @@ type limits struct {
 	EmailBodyMaxRunes    int `json:"email_body_max_runes"`
 	BriefMaxRunes        int `json:"brief_max_runes"`
 	RequestBodyMaxBytes  int `json:"request_body_max_bytes"`
+	// P7a (D62): the plan window the UI checks client-side; the API enforces it.
+	ScheduleMinLeadSeconds  int64 `json:"schedule_min_lead_seconds"`
+	ScheduleMaxAheadSeconds int64 `json:"schedule_max_ahead_seconds"`
 }
 
 func (a *api) getConfig(w http.ResponseWriter, _ *http.Request) {
@@ -201,6 +208,9 @@ func (a *api) getConfig(w http.ResponseWriter, _ *http.Request) {
 			EmailBodyMaxRunes:    content.EmailBodyMaxRunes,
 			BriefMaxRunes:        campaign.BriefMaxRunes,
 			RequestBodyMaxBytes:  MaxBodyBytes,
+			// Whole seconds, rounded up: the UI never offers an instant the API would refuse.
+			ScheduleMinLeadSeconds:  int64((max(a.deps.ScheduleMinLead, 0) + time.Second - 1) / time.Second),
+			ScheduleMaxAheadSeconds: int64(campaign.MaxScheduleAhead / time.Second),
 		},
 		TemplateVariables: append([]string(nil), content.AllowedVariables...),
 		FirstNameFallback: content.FirstNameFallback,

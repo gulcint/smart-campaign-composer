@@ -2,7 +2,7 @@
 
 A marketer writes a campaign request in plain language; Claude proposes the audience and the SMS and email text, a human approves, and the messages go through a PostgreSQL queue to a mock provider while you watch the delivery live.
 
-**Status:** the case scope is complete and runs without an API key (a mock LLM takes over). No real message is ever sent: recipients are fake seeded users. Not finished: A/B variants, content in the user's language, and scheduled send, which is in progress ([Bonus](#bonus), [Known limits](#known-limits)).
+**Status:** the case scope is complete and runs without an API key (a mock LLM takes over). No real message is ever sent: recipients are fake seeded users. Scheduled send (bonus) is done. Not done: A/B variants and content in the user's language ([Bonus](#bonus), [Known limits](#known-limits)).
 
 [Run it](#run-it) · [How it works](#user-flow) · [Architecture](#technology-and-architecture) · [Known limits](#known-limits) · [DECISIONS.md](DECISIONS.md) · [AI sessions](ai-sessions/INDEX.md)
 
@@ -150,6 +150,8 @@ flowchart LR
 - **Email body limit** (5000) is checked at validation only, not again at approval (D46).
 - **Brief** cannot be changed after creation; "Brief'i düzenle" starts a new campaign.
 - **De-duplication is per customer:** two customers with the same phone or email each get a message (D3).
+- **Late plans are sent late:** a plan whose time passed while the worker was down is sent as soon as a worker runs again; there is no maximum delay and the delay is only logged (D62).
+- **Plans are entered in Istanbul time:** the UI uses Europe/Istanbul only; the API accepts any RFC 3339 time with an offset. Relative segment windows ("last 30 days") stay tied to the time the audience was prepared, not to the send time (D62).
 - **Scale:** audience rows are loaded into Go and the queue lives in PostgreSQL. Fine for 5000 users, not for millions (D1).
 - **Tests:** they come only from `docs/requirements.md` (D50), so some behaviour written only in the contracts is untested. The real Claude client has no automated test; city spelling and SMS length were checked by hand.
 - **UI:** large touch targets depend on screen width, not on touch input. The content screen's action bar is not sticky on mobile.
@@ -165,14 +167,14 @@ flowchart LR
 | `DECISIONS.md` | ✅ [`DECISIONS.md`](DECISIONS.md) |
 | `ai-sessions/` | ✅ P0-P6, sanitized ([`ai-sessions/INDEX.md`](ai-sessions/INDEX.md)) |
 
-Work was done in phases ([`docs/PLAN.md`](docs/PLAN.md)): P0 setup, P1 contracts, P2 seed and infrastructure, P3 audience, P4 content and approval, P5 send and tracking, P6 hardening and delivery are done. P7 (bonus, scheduled send) is in progress.
+Work was done in phases ([`docs/PLAN.md`](docs/PLAN.md)): P0 setup, P1 contracts, P2 seed and infrastructure, P3 audience, P4 content and approval, P5 send and tracking, P6 hardening and delivery are done. P7 (bonus, scheduled send) is done too.
 
 ## Bonus
 
 | Bonus | Status |
 |---|---|
 | CI pipeline | 🟢 done: GitHub Actions; `main` needs a green `ci-ok` (lint, `make test`, gitleaks, govulncheck, API contract check) |
-| Scheduled send | 🟡 in progress (D62): scheduled with `POST /send` plus an optional `scheduled_at`, cancelled with `DELETE .../schedule`; contracts are written, code is next |
+| Scheduled send | 🟢 done (D62): an approved campaign can be planned for a later time (1 minute to 30 days ahead, entered in Europe/Istanbul time), re-planned, cancelled or sent now; the worker starts it when the time comes |
 | A/B variants | ⬜ not done |
 | Content in the user's language | ⬜ not done (the seed already has a `language` field) |
 

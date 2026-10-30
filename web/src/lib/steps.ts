@@ -8,6 +8,7 @@ const ACCESSIBLE: Record<CampaignState, readonly StepId[]> = {
   audience_ready: ['brief', 'audience', 'content'],
   content_ready: ['brief', 'audience', 'content', 'approval'],
   approved: ['brief', 'audience', 'content', 'approval'],
+  scheduled: STEPS,
   sending: STEPS,
   completed: STEPS,
 }
@@ -17,6 +18,7 @@ const REDIRECT: Record<CampaignState, StepId> = {
   audience_ready: 'audience',
   content_ready: 'content',
   approved: 'approval',
+  scheduled: 'tracking',
   sending: 'tracking',
   completed: 'tracking',
 }
@@ -43,7 +45,7 @@ export function stepStatus(state: CampaignState | null, current: StepId, step: S
   return STEPS.indexOf(step) < STEPS.indexOf(current) ? 'completed' : 'upcoming'
 }
 
-/** Steps 1–4 are read-only once sending has started. */
+/** Steps 1–4 are read-only while a send is planned (cancel the plan first) and once it has started. */
 export function isLockedForEditing(state: CampaignState | null): boolean {
-  return state === 'sending' || state === 'completed'
+  return state === 'scheduled' || state === 'sending' || state === 'completed'
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 
@@ -225,9 +226,21 @@ func readVersionRef(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	vid, fields := versionRefFields(obj)
+	if len(fields) > 0 {
+		writeFieldError(w, r, http.StatusUnprocessableEntity, "validation_failed", "request validation failed", fields)
+		return "", false
+	}
+	return vid, true
+}
+
+// versionRefFields checks a decoded body that carries content_version_id and the optional
+// properties in more: unknown properties (keys in byte order), then content_version_id. It returns
+// the canonical version id and the field errors in that order.
+func versionRefFields(obj map[string]json.RawMessage, more ...string) (string, []validation.FieldError) {
 	var fields []validation.FieldError
 	for _, k := range sortedKeys(obj) {
-		if k != "content_version_id" {
+		if k != "content_version_id" && !slices.Contains(more, k) {
 			fields = append(fields, schemaViolation(k, "unknown property"))
 		}
 	}
@@ -244,11 +257,7 @@ func readVersionRef(w http.ResponseWriter, r *http.Request) (string, bool) {
 				Message: "content_version_id must be a UUID"})
 		}
 	}
-	if len(fields) > 0 {
-		writeFieldError(w, r, http.StatusUnprocessableEntity, "validation_failed", "request validation failed", fields)
-		return "", false
-	}
-	return vid, true
+	return vid, fields
 }
 
 // ---- GET /api/campaigns/{campaign_id}/preview ----

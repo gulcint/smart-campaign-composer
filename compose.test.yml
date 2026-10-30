@@ -68,6 +68,8 @@ services:
       LLM_PROVIDER: mock
       SCC_FORBID_REAL_LLM: "1"
       SEGMENT_REFERENCE_TIME: "2026-01-15T12:00:00Z"
+      # No minimum lead: E2E plans a send a few seconds ahead (REQ-SCH-02, D62).
+      SCHEDULE_MIN_LEAD: "0s"
     depends_on:
       seed:
         condition: service_completed_successfully

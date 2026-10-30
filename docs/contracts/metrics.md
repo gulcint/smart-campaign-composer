@@ -14,7 +14,7 @@ REQ-TRK-02'nin test edildiği uç nokta budur. Teslimat serileri **her scrape'te
 | `scc_delivery_retries_total` | counter | `channel` | `sum(deliveries.retry_count)`; her planlanan yeniden denemede (5xx/408/timeout/bağlantı **ve** 429) +1 |
 | `scc_deliveries_queued` | gauge | `channel` | `status='queued'` teslimat sayısı (retry bekleyenler dahil); gönderim isteğiyle artar, claim ile azalır |
 | `scc_deliveries_in_flight` | gauge | `channel` | `status='sending'` teslimat sayısı |
-| `scc_campaigns` | gauge | `state` (6 durum) | Durum başına kampanya sayısı |
+| `scc_campaigns` | gauge | `state` (7 durum; `scheduled` P7a'da eklendi) | Durum başına kampanya sayısı |
 | `scc_http_requests_total` | counter | `method`, `route` (şablon, ör. `/api/campaigns/{campaign_id}/send`), `status` | Her HTTP yanıtında +1 |
 | `scc_http_request_duration_seconds` | histogram | `method`, `route` | Yanıt süresi (SSE uç noktaları hariç) |
 | `scc_llm_requests_total` | counter | `operation` (`segment`,`content`), `provider` (`mock`,`claude`), `outcome` (`valid`,`invalid`,`unavailable`) | Her LLM **denemesinde** +1 |

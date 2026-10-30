@@ -16,7 +16,8 @@ import (
 // Send acceptance and the API's read side of the delivery queue (db-schema.md §3.7, §3.9, §4).
 // The worker's side of the queue (claim, lease, Mark*) is delivery.Store.
 
-// CreateDeliveries accepts a send under the campaign row lock (campaign.Store).
+// CreateDeliveries accepts a send under the campaign row lock (campaign.Store). From scheduled
+// ("send now", D62) the plan is dropped: scheduled_at = NULL.
 func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID string, now func() time.Time, check func(campaign.LockedCampaign) error) (campaign.DeliveryTotals, campaign.State, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -31,7 +32,83 @@ func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID stri
 	if err := check(lc.LockedCampaign); err != nil {
 		return campaign.DeliveryTotals{}, "", err
 	}
-	// Defensive: approved (checked above) implies a stored segment (campaigns_segment_present_check).
+	// Read the clock only now that the row lock is held: a concurrent write to this campaign has
+	// committed with an earlier time, so updated_at never moves backwards.
+	t, state, err := startSendingLocked(ctx, tx, id, versionID, lc, now(), nil)
+	if err != nil {
+		return campaign.DeliveryTotals{}, "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return campaign.DeliveryTotals{}, "", fmt.Errorf("postgres: send: %w", err)
+	}
+	return t, state, nil
+}
+
+// StartDueCampaign claims and starts one due plan in its own transaction (campaign.Store;
+// db-schema.md §3.9). SKIP LOCKED lets concurrent schedulers (several worker processes) take
+// different campaigns; the caller's check re-tests due-ness on the row re-read under the lock, so
+// a campaign re-planned, cancelled or started by another transaction meanwhile is skipped. The
+// UNIQUE (campaign_id, channel, customer_id) key stays the last guard against a second start.
+func (s *CampaignStore) StartDueCampaign(ctx context.Context, now time.Time, exclude []string, check func(campaign.LockedCampaign) error) (campaign.ScheduledStart, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return campaign.ScheduledStart{}, fmt.Errorf("postgres: start scheduled send: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
+
+	if exclude == nil {
+		exclude = []string{} // NULL would make the ANY() filter drop every row
+	}
+	var id string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text FROM campaigns
+		WHERE state = 'scheduled' AND scheduled_at <= $1 AND NOT (id::text = ANY($2::text[]))
+		ORDER BY scheduled_at, id
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED`, now, exclude).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return campaign.ScheduledStart{}, nil
+	}
+	if err != nil {
+		return campaign.ScheduledStart{}, fmt.Errorf("postgres: claim scheduled campaign: %w", err)
+	}
+	st := campaign.ScheduledStart{CampaignID: id}
+	// The row is locked; this re-read (a new statement, a fresh snapshot) sees every write that
+	// committed before the lock was granted.
+	lc, err := lockCampaign(ctx, tx, id)
+	if err != nil {
+		return st, err
+	}
+	if err := check(lc.LockedCampaign); err != nil {
+		return st, err
+	}
+	// Defensive: scheduled implies an approved version (campaigns_approval_present_check).
+	if lc.ApprovedVersionID == nil || lc.ScheduledAt == nil {
+		return st, fmt.Errorf("%w: scheduled campaign without approval or plan", campaign.ErrInvalidState)
+	}
+	t, state, err := startSendingLocked(ctx, tx, id, *lc.ApprovedVersionID, lc, now, lc.ScheduledAt)
+	if err != nil {
+		return st, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return st, fmt.Errorf("postgres: start scheduled send: %w", err)
+	}
+	st.ScheduledAt, st.StartedAt, st.State, st.Deliveries = *lc.ScheduledAt, now, state, t
+	return st, nil
+}
+
+// startSendingLocked is the one send start shared by the immediate send (CreateDeliveries) and
+// the Scheduler (StartDueCampaign), so both follow the same rule (go-interfaces
+// startSendingLocked). It runs inside the caller's transaction on the campaign row it holds locked
+// (lc, already checked by the caller) and writes: one queued delivery (next_attempt_at = at) per
+// (channel, customer) of the channel audiences of the stored rule at the stored reference time
+// with the CURRENT consent and contact data (segment-dsl.md §6, REQ-AUD-04), state sending,
+// sending_started_at = at, scheduled_at = scheduledAt (the caller decides: NULL for Send, the kept
+// plan for the Scheduler) and, when no delivery was created, completed. It returns the created
+// counts and the resulting state.
+func startSendingLocked(ctx context.Context, tx pgx.Tx, id, versionID string, lc lockedCampaign, at time.Time, scheduledAt *time.Time) (campaign.DeliveryTotals, campaign.State, error) {
+	// Defensive: approved/scheduled (checked by the caller) implies a stored segment
+	// (campaigns_segment_present_check).
 	if !lc.HasSegment {
 		return campaign.DeliveryTotals{}, "", fmt.Errorf("%w: campaign has no segment", campaign.ErrInvalidState)
 	}
@@ -47,9 +124,6 @@ func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID stri
 	// current consent and contact columns. The compiled predicate holds only constant SQL and $n
 	// placeholders; this query's own parameters follow the rule's. The row id is the provider
 	// Idempotency-Key (REQ-SND-03).
-	// Read the clock only now that the row lock is held: a concurrent write to this campaign has
-	// committed with an earlier time, so updated_at never moves backwards.
-	at := now()
 	n := len(comp.Args)
 	p := func(i int) string { return "$" + strconv.Itoa(n+i) }
 	q := `WITH ins AS (
@@ -72,13 +146,14 @@ func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID stri
 	t.Total = t.SMS + t.Email
 
 	if _, err := tx.Exec(ctx, `
-		UPDATE campaigns SET state = 'sending', sending_started_at = $2, updated_at = $2 WHERE id = $1`,
-		id, at); err != nil {
+		UPDATE campaigns SET state = 'sending', sending_started_at = $2, scheduled_at = $3, updated_at = $2
+		WHERE id = $1`,
+		id, at, scheduledAt); err != nil {
 		return campaign.DeliveryTotals{}, "", fmt.Errorf("postgres: start sending: %w", err)
 	}
 	state := campaign.StateSending
-	// Both audiences empty: the campaign is complete in the same transaction (approved -> sending
-	// -> completed; the state trigger has no direct approved -> completed).
+	// Both audiences empty: the campaign is complete in the same transaction (approved|scheduled ->
+	// sending -> completed; the state trigger has no direct way to completed).
 	done, err := completeCampaignIfDone(ctx, tx, id, at)
 	if err != nil {
 		return campaign.DeliveryTotals{}, "", err
@@ -86,10 +161,44 @@ func (s *CampaignStore) CreateDeliveries(ctx context.Context, id, versionID stri
 	if done {
 		state = campaign.StateCompleted
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return campaign.DeliveryTotals{}, "", fmt.Errorf("postgres: send: %w", err)
-	}
 	return t, state, nil
+}
+
+// ScheduleSend plans (or re-plans) the send under the campaign row lock (campaign.Store).
+func (s *CampaignStore) ScheduleSend(ctx context.Context, id string, at time.Time, now func() time.Time, check func(campaign.LockedCampaign) error) error {
+	return s.writeSchedule(ctx, id, campaign.StateScheduled, &at, now, check)
+}
+
+// CancelSchedule drops the plan under the campaign row lock (campaign.Store).
+func (s *CampaignStore) CancelSchedule(ctx context.Context, id string, now func() time.Time, check func(campaign.LockedCampaign) error) error {
+	return s.writeSchedule(ctx, id, campaign.StateApproved, nil, now, check)
+}
+
+// writeSchedule moves a checked, locked campaign to state with scheduled_at. Only the campaign row
+// changes: the approval, the approved version and the deliveries are untouched.
+func (s *CampaignStore) writeSchedule(ctx context.Context, id string, state campaign.State, scheduledAt *time.Time, now func() time.Time, check func(campaign.LockedCampaign) error) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: write schedule: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
+
+	lc, err := lockCampaign(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if err := check(lc.LockedCampaign); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE campaigns SET state = $2, scheduled_at = $3, updated_at = $4 WHERE id = $1`,
+		id, string(state), scheduledAt, now()); err != nil {
+		return fmt.Errorf("postgres: write schedule: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres: write schedule: %w", err)
+	}
+	return nil
 }
 
 // completeCampaignIfDone moves a sending campaign to completed when none of its deliveries is
@@ -128,6 +237,7 @@ func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign
 	var (
 		st                   campaign.CampaignStatus
 		state                string
+		scheduledAt          *time.Time
 		sendingAt, completed *time.Time
 	)
 	// One snapshot for the campaign row and the counters: a response never pairs a state with
@@ -139,9 +249,9 @@ func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign
 	defer func() { _ = tx.Rollback(ctx) }() // read-only: nothing to commit
 
 	err = tx.QueryRow(ctx, `
-		SELECT state, sending_started_at, completed_at,
+		SELECT state, scheduled_at, sending_started_at, completed_at,
 			greatest(updated_at, (SELECT max(updated_at) FROM deliveries WHERE campaign_id = $1))
-		FROM campaigns WHERE id = $1`, id).Scan(&state, &sendingAt, &completed, &st.UpdatedAt)
+		FROM campaigns WHERE id = $1`, id).Scan(&state, &scheduledAt, &sendingAt, &completed, &st.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return campaign.CampaignStatus{}, campaign.ErrCampaignNotFound
 	}
@@ -149,6 +259,7 @@ func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign
 		return campaign.CampaignStatus{}, fmt.Errorf("postgres: campaign status: %w", err)
 	}
 	st.CampaignID, st.State = id, campaign.State(state)
+	st.ScheduledAt = utcPtr(scheduledAt)
 	st.SendingStartedAt, st.CompletedAt, st.UpdatedAt = utcPtr(sendingAt), utcPtr(completed), st.UpdatedAt.UTC()
 
 	rows, err := tx.Query(ctx, `

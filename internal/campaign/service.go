@@ -79,8 +79,25 @@ type Store interface {
 	// the stored reference time with the CURRENT consent and contact data (segment-dsl.md §6,
 	// REQ-AUD-04), moves the campaign to sending (sending_started_at = at) and, when no delivery was
 	// created, on to completed. It returns the created counts and the resulting state. Errors:
-	// ErrCampaignNotFound, check's error; nothing is written on any error.
+	// ErrCampaignNotFound, check's error; nothing is written on any error. A scheduled campaign
+	// ("send now") loses its plan in the same transaction (scheduled_at = NULL).
 	CreateDeliveries(ctx context.Context, id, versionID string, now func() time.Time, check func(LockedCampaign) error) (DeliveryTotals, State, error)
+	// ScheduleSend plans the send in ONE transaction under the campaign row lock: when check accepts
+	// the locked campaign it sets state scheduled, scheduled_at = at and updated_at = now() (read
+	// after the lock is held). No delivery row is written. Errors: ErrCampaignNotFound, check's error.
+	ScheduleSend(ctx context.Context, id string, at time.Time, now func() time.Time, check func(LockedCampaign) error) error
+	// CancelSchedule drops the plan in ONE transaction under the campaign row lock: when check
+	// accepts the locked campaign it sets state approved, scheduled_at = NULL and updated_at = now().
+	// Errors: ErrCampaignNotFound, check's error.
+	CancelSchedule(ctx context.Context, id string, now func() time.Time, check func(LockedCampaign) error) error
+	// StartDueCampaign claims ONE campaign with state scheduled and scheduled_at <= now, ordered by
+	// scheduled_at, id, not in exclude (FOR UPDATE SKIP LOCKED), in its own transaction; it re-reads
+	// the row under the lock, passes it to check and, when check accepts it, starts the send with
+	// the same writes as CreateDeliveries at now (the approved version, sending_started_at = now),
+	// except that scheduled_at is kept. Result.CampaignID is "" when nothing was claimed (no due
+	// campaign, or the claim failed: err); once a campaign is claimed it is set, also on error
+	// (check's error or a failed start), and nothing is written on any error.
+	StartDueCampaign(ctx context.Context, now time.Time, exclude []string, check func(LockedCampaign) error) (ScheduledStart, error)
 	// DeliveryStatus returns the campaign's state, timestamps and delivery counters per channel and
 	// status, all read in one snapshot. Unknown campaign => ErrCampaignNotFound.
 	DeliveryStatus(ctx context.Context, id string) (CampaignStatus, error)
@@ -111,12 +128,22 @@ type LockedCampaign struct {
 	Longest           content.Longest
 	Latest            *VersionRef // latest VALIDATED version of the current segment revision
 	ApprovedVersionID *string
+	ScheduledAt       *time.Time       // the plan (P7a); nil unless scheduled or started from a plan
 	Generation        *GenerationLease // nil: no lease on the row
+}
+
+// ScheduledStart is the outcome of one Store.StartDueCampaign call.
+type ScheduledStart struct {
+	CampaignID  string // "" when no campaign was claimed
+	ScheduledAt time.Time
+	StartedAt   time.Time // sending_started_at
+	State       State     // sending, or completed when no delivery was created
+	Deliveries  DeliveryTotals
 }
 
 // CheckNoGeneration returns ErrGenerationInProgress while the row carries a lease that has not
 // expired at now. Every write that must not overlap a generation (segment/content generation
-// start, edit, approve, send) calls it on the row it holds locked, inside its own transaction, so
+// start, edit, approve, send, schedule) calls it on the row it holds locked, inside its own transaction, so
 // the check and the write are atomic across API processes (D47 b, D52).
 func (lc LockedCampaign) CheckNoGeneration(now time.Time) error {
 	if lc.Generation != nil && now.Before(lc.Generation.ExpiresAt) {
@@ -195,7 +222,10 @@ type Deps struct {
 	Clock    clock.Clock
 	// SegmentReferenceTime overrides Clock.Now() as the segment reference time when non-nil.
 	SegmentReferenceTime *time.Time
-	Logger               *slog.Logger
+	// ScheduleMinLead is the minimum lead of a plan (config.ScheduleMinLead, SCHEDULE_MIN_LEAD).
+	// Used as given: the zero value means "no lead" (scheduled_at = now is accepted).
+	ScheduleMinLead time.Duration
+	Logger          *slog.Logger
 }
 
 // List page limits (openapi Limit/Offset parameters).

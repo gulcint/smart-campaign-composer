@@ -1,9 +1,10 @@
 // Command worker sends queued deliveries to the provider: one dispatcher per channel, and only the
-// holder of the channel's advisory lock sends (db-schema.md §4). It serves /healthz, /readyz and
-// /metrics on WORKER_HTTP_ADDR.
+// holder of the channel's advisory lock sends (db-schema.md §4). Next to them the campaign
+// scheduler starts the sends of due plans every SCHEDULER_INTERVAL (P7a, D62). It serves /healthz,
+// /readyz and /metrics on WORKER_HTTP_ADDR.
 //
 // On SIGINT/SIGTERM the dispatchers stop claiming, requests already started are finished and
-// recorded, the locks are released and the HTTP server shuts down. The process exits with code 1
+// recorded, the locks are released, the scheduler finishes its pass and the HTTP server shuts down. The process exits with code 1
 // if the configuration is invalid or DATABASE_URL is missing.
 package main
 
@@ -22,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gulcint/smart-campaign-composer/internal/campaign"
 	"github.com/gulcint/smart-campaign-composer/internal/clock"
 	"github.com/gulcint/smart-campaign-composer/internal/config"
 	"github.com/gulcint/smart-campaign-composer/internal/delivery"
@@ -102,6 +104,14 @@ func run() error {
 		dispatchers = append(dispatchers, d)
 	}
 
+	// Separate from the dispatchers: it only writes deliveries (the same transaction as an
+	// immediate send), it never calls the provider, so the per-channel rate limit is untouched.
+	scheduler, err := campaign.NewScheduler(campaign.SchedulerConfig{Interval: cfg.SchedulerInterval, BatchSize: 10},
+		campaign.SchedulerDeps{Store: postgres.NewCampaignStore(pool), Clock: clk, Logger: logger})
+	if err != nil {
+		return err
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", health.Healthz())
 	mux.Handle("GET /readyz", health.Readyz(pool))
@@ -122,6 +132,11 @@ func run() error {
 			}
 		})
 	}
+	wg.Go(func() {
+		if err := scheduler.Run(ctx); !errors.Is(err, context.Canceled) {
+			logger.Error("scheduler stopped", slog.String("error", err.Error()))
+		}
+	})
 
 	var serveErr error
 	select {

@@ -41,7 +41,7 @@ func (s *CampaignStore) CreateCampaign(ctx context.Context, c campaign.Campaign)
 const campaignSelect = `
 	SELECT c.id::text, c.brief, c.state, c.segment_rule, c.segment_reference_time, c.segment_revision,
 		c.segment_llm_attempts, c.segment_generated_at, c.audience_matched, c.audience_sms, c.audience_email,
-		c.longest_first_name, c.longest_last_name, c.longest_city, c.sending_started_at, c.completed_at,
+		c.longest_first_name, c.longest_last_name, c.longest_city, c.scheduled_at, c.sending_started_at, c.completed_at,
 		c.created_at, c.updated_at,
 		cv.id::text, cv.version_number, cv.segment_revision, cv.status, cv.source, cv.sms_body, cv.email_subject,
 		cv.email_body, cv.validation_errors, cv.llm_attempts, cv.worst_case_sms_runes, cv.worst_case_subject_runes,
@@ -166,6 +166,7 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 		state                                       string
 		rule                                        []byte
 		refTime, generatedAt, sendingAt, completeAt *time.Time
+		scheduledAt                                 *time.Time
 		revision                                    int
 		llmAttempts                                 *int
 		matched, sms, email                         *int
@@ -181,7 +182,7 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 	)
 	err := row.Scan(&c.ID, &c.Brief, &state, &rule, &refTime, &revision,
 		&llmAttempts, &generatedAt, &matched, &sms, &email,
-		&longFirst, &longLast, &longCity, &sendingAt, &completeAt,
+		&longFirst, &longLast, &longCity, &scheduledAt, &sendingAt, &completeAt,
 		&c.CreatedAt, &c.UpdatedAt,
 		&cvID, &cvNumber, &cvRevision, &cvStatus, &cvSource, &cvSMS, &cvSubject,
 		&cvBody, &cvErrors, &cvAttempts, &cvWCSMS, &cvWCSub,
@@ -193,6 +194,7 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 	c.State = campaign.State(state)
 	c.CreatedAt = c.CreatedAt.UTC()
 	c.UpdatedAt = c.UpdatedAt.UTC()
+	c.ScheduledAt = utcPtr(scheduledAt)
 	c.SendingStartedAt = utcPtr(sendingAt)
 	c.CompletedAt = utcPtr(completeAt)
 

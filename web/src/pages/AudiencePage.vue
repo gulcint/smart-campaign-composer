@@ -12,7 +12,6 @@ import EmptyState from '@/components/EmptyState.vue'
 import SegmentRuleSkeleton from '@/components/SegmentRuleSkeleton.vue'
 import SegmentRuleView from '@/components/SegmentRuleView.vue'
 import { t } from '@/i18n'
-import { isLockedForEditing } from '@/lib/steps'
 import { campaignIdOf } from '@/router'
 import { useCampaignStore } from '@/stores/campaign'
 import { useConfigStore } from '@/stores/config'
@@ -48,7 +47,10 @@ const canGenerate = computed(() => {
     c.state === 'audience_ready' || c.state === 'content_ready' || c.state === 'approved'
   return stateOk && c.segment.audience.matched > 0 && !store.segmentGenerating
 })
-const canEditBrief = computed(() => !isLockedForEditing(campaign.value?.state ?? null))
+// "Edit brief" starts a new campaign (ui.md §1.1), so a planned send does not block it.
+const canEditBrief = computed(
+  () => campaign.value?.state !== 'sending' && campaign.value?.state !== 'completed',
+)
 
 onMounted(() => {
   if (campaignId.value) void store.ensure(campaignId.value)

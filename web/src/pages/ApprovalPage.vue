@@ -18,12 +18,14 @@ import Skeleton from '@/components/Skeleton.vue'
 import StepHeader from '@/components/StepHeader.vue'
 import { useNotify } from '@/composables/useNotify'
 import { formatNumber, t } from '@/i18n'
+import { formatTsi } from '@/lib/schedule'
 import { isLockedForEditing } from '@/lib/steps'
 import { runeCount } from '@/lib/text-cap'
 import { cn } from '@/lib/utils'
 import { campaignIdOf } from '@/router'
 import { injectApiClient, reportError } from '@/stores/api'
 import { useCampaignStore } from '@/stores/campaign'
+import { useConfigStore } from '@/stores/config'
 
 const SMS_LIMIT = 160
 const SUBJECT_LIMIT = 80
@@ -31,6 +33,7 @@ const SUBJECT_LIMIT = 80
 const route = useRoute()
 const router = useRouter()
 const store = useCampaignStore()
+const config = useConfigStore()
 const client = injectApiClient()
 const { notify } = useNotify()
 
@@ -96,6 +99,10 @@ const dialogError = ref<ApiError | null>(null)
 const submitting = ref(false)
 const stale = ref(false)
 
+// Window for the planning dialog; the API enforces it (GET /api/config limits, ui.md §3.24).
+const scheduleMinLead = computed(() => config.config?.limits.schedule_min_lead_seconds ?? 60)
+const scheduleMaxAhead = computed(() => config.config?.limits.schedule_max_ahead_seconds ?? 2592000)
+
 const sendCounts = computed(() =>
   audience.value ? { sms: audience.value.sms, email: audience.value.email } : null,
 )
@@ -146,23 +153,83 @@ async function onConfirm() {
       dialogOpen.value = false
       notify({ variant: 'success', messageId: 'toast.approved' })
     } else {
-      const versionId = c.approval?.content_version_id ?? latest.value?.id
-      if (!versionId) return
-      const sent = await api.sendCampaign(client, id, { content_version_id: versionId })
-      dialogOpen.value = false
-      await refetch()
-      notify({
-        variant: 'success',
-        messageId: 'toast.sendStarted',
-        params: { total: sent.deliveries.total },
-      })
-      void router.push({ name: 'tracking', params: { campaignId: id } })
+      await send(id, c.approval?.content_version_id ?? latest.value?.id)
     }
   } catch (e) {
     await onRequestError(toApiError(e))
   } finally {
     submitting.value = false
   }
+}
+
+/** POST /send, immediate or (with `scheduledAt`, UTC ISO) planned; both end on the tracking page. */
+async function send(id: string, versionId: string | undefined, scheduledAt?: string) {
+  if (!versionId) return
+  const res = await api.sendCampaign(client, id, {
+    content_version_id: versionId,
+    ...(scheduledAt ? { scheduled_at: scheduledAt } : {}),
+  })
+  dialogOpen.value = false
+  await refetch()
+  if (res.state === 'scheduled') {
+    notify({
+      variant: 'success',
+      messageId: 'toast.scheduled',
+      params: { time: formatTsi(res.scheduled_at ?? scheduledAt ?? '') },
+    })
+  } else {
+    notify({
+      variant: 'success',
+      messageId: 'toast.sendStarted',
+      params: { total: res.deliveries.total },
+    })
+  }
+  void router.push({ name: 'tracking', params: { campaignId: id } })
+}
+
+async function onSchedule(scheduledAt: string) {
+  const id = campaignId.value
+  const c = campaign.value
+  if (!id || !c || submitting.value) return
+  submitting.value = true
+  dialogError.value = null
+  try {
+    await send(id, c.approval?.content_version_id ?? latest.value?.id, scheduledAt)
+  } catch (e) {
+    await onRequestError(toApiError(e))
+  } finally {
+    submitting.value = false
+  }
+}
+
+/** DELETE …/schedule: no confirmation (a plan is easy to remake); the bar flips back to `approved`. */
+async function onCancelSchedule() {
+  const id = campaignId.value
+  if (!id || submitting.value) return
+  submitting.value = true
+  try {
+    await api.cancelSchedule(client, id)
+    await refetch()
+    notify({ variant: 'info', messageId: 'toast.scheduleCanceled' })
+  } catch (e) {
+    const err = toApiError(e)
+    reportError(err, 'approval')
+    if (err.status === 409 || err.status === 404) {
+      await refetch()
+      // The worker started the send meanwhile: the plan is gone, tracking is the right place.
+      const state = store.campaign?.state
+      if (state === 'sending' || state === 'completed') {
+        void router.push({ name: 'tracking', params: { campaignId: id } })
+      }
+    }
+  } finally {
+    submitting.value = false
+  }
+}
+
+function goToTracking() {
+  const id = campaignId.value
+  if (id) void router.push({ name: 'tracking', params: { campaignId: id } })
 }
 
 const nextText = computed<string | null>(() =>
@@ -404,8 +471,11 @@ onMounted(async () => {
             :dirty="false"
             :submitting="submitting"
             :stale="stale"
+            :scheduled-at="campaign.scheduled_at"
             @approve="openDialog('approve')"
             @send="openDialog('send')"
+            @cancel-schedule="onCancelSchedule"
+            @to-tracking="goToTracking"
           >
             <Button
               v-if="!locked"
@@ -427,7 +497,11 @@ onMounted(async () => {
         :counts="dialogKind === 'send' ? sendCounts : null"
         :submitting="submitting"
         :error="dialogError"
+        :allow-schedule="dialogKind === 'send'"
+        :schedule-min-lead-seconds="scheduleMinLead"
+        :schedule-max-ahead-seconds="scheduleMaxAhead"
         @confirm="onConfirm"
+        @schedule="onSchedule"
         @cancel="closeDialog"
         @update:open="(v) => !v && closeDialog()"
       />

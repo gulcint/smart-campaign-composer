@@ -32,9 +32,10 @@ import (
 )
 
 var (
-	sndAcceptedKeys   = []string{"campaign_id", "content_version_id", "deliveries", "state"}
+	// scheduled_at is part of the send response and of CampaignStatus (REQ-SCH-01 C2, C4).
+	sndAcceptedKeys   = []string{"campaign_id", "content_version_id", "deliveries", "scheduled_at", "state"}
 	sndDeliveriesKeys = []string{"email", "sms", "total"}
-	sndStatusKeys     = []string{"by_channel", "campaign_id", "completed_at", "counts", "sending_started_at", "state", "updated_at"}
+	sndStatusKeys     = []string{"by_channel", "campaign_id", "completed_at", "counts", "scheduled_at", "sending_started_at", "state", "updated_at"}
 	sndCountKeys      = []string{"failed", "queued", "sending", "sent", "total"}
 	sndChannels       = []string{"email", "sms"}
 	sndPageKeys       = []string{"items", "limit", "offset", "total"}
@@ -168,6 +169,10 @@ func sndMustSend(t *testing.T, api, id, vid string) sndAccepted {
 	}
 	if diff := cmp.Diff(sndDeliveriesKeys, sortedKeys(asObject(t, obj["deliveries"]))); diff != "" {
 		t.Fatalf("send 202 deliveries keys mismatch (-want +got):\n%s", diff)
+	}
+	// REQ-SCH-01 C4: an instant send answers scheduled_at = null.
+	if obj["scheduled_at"] != nil {
+		t.Fatalf("send 202 scheduled_at = %v, want null for an instant send", obj["scheduled_at"])
 	}
 	var a sndAccepted
 	mustUnmarshal(t, string(body), &a)

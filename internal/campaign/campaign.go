@@ -3,8 +3,8 @@
 // It holds the domain types, the pure state machine, the Service port that internal/httpapi
 // depends on and its implementation (service.go, content.go). P3 implements campaign creation,
 // reading and segment generation (draft -> audience_ready); P4 the content generation, human
-// edits, approval and preview; the delivery use cases (accepting a send, status, deliveries)
-// arrive with the P5 slice.
+// edits, approval and preview; P5 the delivery use cases (accepting a send, status, deliveries);
+// P7a the scheduled send (schedule.go, scheduler.go; D62).
 package campaign
 
 import (
@@ -34,6 +34,7 @@ const (
 	StateAudienceReady State = "audience_ready"
 	StateContentReady  State = "content_ready"
 	StateApproved      State = "approved"
+	StateScheduled     State = "scheduled" // P7a (D62): approved + planned send, no delivery yet
 	StateSending       State = "sending"
 	StateCompleted     State = "completed"
 )
@@ -80,6 +81,8 @@ const (
 	EventApproved           Event = "approved"            // a validated version was approved
 	EventSendAccepted       Event = "send_accepted"       // deliveries created
 	EventDeliveriesFinished Event = "deliveries_finished" // no queued/sending delivery left
+	EventScheduled          Event = "scheduled"           // plan stored or replaced (P7a)
+	EventScheduleCanceled   Event = "schedule_canceled"   // DELETE …/schedule (P7a)
 )
 
 // Transition is the pure state machine (requirements "Kampanya durum makinesi").
@@ -88,10 +91,14 @@ const (
 //	content_validated:   audience_ready|content_ready|approved      -> content_ready
 //	content_invalid:     audience_ready|content_ready|approved      -> unchanged
 //	approved:            content_ready|approved -> approved
-//	send_accepted:       approved -> sending
+//	scheduled:           approved|scheduled -> scheduled
+//	schedule_canceled:   scheduled -> approved
+//	send_accepted:       approved|scheduled -> sending
 //	deliveries_finished: sending -> completed
 //
-// Any other pair => ErrInvalidState.
+// Any other pair => ErrInvalidState. In particular every event except scheduled,
+// schedule_canceled and send_accepted is ErrInvalidState from scheduled (no segment/content change
+// or approval while a plan exists; cancel first, D62).
 func Transition(from State, ev Event) (State, error) {
 	in := func(states ...State) bool { return slices.Contains(states, from) }
 	switch ev {
@@ -111,8 +118,16 @@ func Transition(from State, ev Event) (State, error) {
 		if in(StateContentReady, StateApproved) {
 			return StateApproved, nil
 		}
+	case EventScheduled:
+		if in(StateApproved, StateScheduled) {
+			return StateScheduled, nil
+		}
+	case EventScheduleCanceled:
+		if from == StateScheduled {
+			return StateApproved, nil
+		}
 	case EventSendAccepted:
-		if from == StateApproved {
+		if in(StateApproved, StateScheduled) {
 			return StateSending, nil
 		}
 	case EventDeliveriesFinished:
@@ -132,7 +147,7 @@ const BriefMaxRunes = 2000
 // disconnect) or the generation ends and, at the latest, expires after this duration (so a crashed
 // process cannot block the campaign); a content stream still running then ends with the final
 // invalid event, code "llm_unavailable". While the lease is held, GenerateSegment,
-// StartContentGeneration, EditContent, Approve and Send return ErrGenerationInProgress; each
+// StartContentGeneration, EditContent, Approve, Send and Schedule return ErrGenerationInProgress; each
 // checks it under the campaign row lock in the transaction that checks the state.
 const MaxGenerationDuration = 120 * time.Second
 
@@ -209,6 +224,7 @@ type Campaign struct {
 	Segment              *Segment        `json:"segment"`
 	LatestContentVersion *ContentVersion `json:"latest_content_version"` // latest VALIDATED, current revision
 	Approval             *Approval       `json:"approval"`
+	ScheduledAt          *time.Time      `json:"scheduled_at"` // non-nil when scheduled; in sending/completed non-nil if started from a plan
 	SendingStartedAt     *time.Time      `json:"sending_started_at"`
 	CompletedAt          *time.Time      `json:"completed_at"`
 	CreatedAt            time.Time       `json:"created_at"`
@@ -241,9 +257,17 @@ type DeliveryTotals struct {
 
 type SendResult struct {
 	CampaignID       string         `json:"campaign_id"`
-	State            State          `json:"state"` // sending | completed
+	State            State          `json:"state"` // sending | completed | scheduled
 	ContentVersionID string         `json:"content_version_id"`
-	Deliveries       DeliveryTotals `json:"deliveries"`
+	ScheduledAt      *time.Time     `json:"scheduled_at"` // non-nil iff State == scheduled
+	Deliveries       DeliveryTotals `json:"deliveries"`   // all zero iff State == scheduled
+}
+
+// CancelScheduleResult is the 200 body of DELETE /api/campaigns/{campaign_id}/schedule.
+type CancelScheduleResult struct {
+	CampaignID  string     `json:"campaign_id"`
+	State       State      `json:"state"`        // always approved
+	ScheduledAt *time.Time `json:"scheduled_at"` // always nil (JSON null)
 }
 
 type StatusCounts struct {
@@ -264,6 +288,7 @@ type CampaignStatus struct {
 	State            State         `json:"state"`
 	Counts           StatusCounts  `json:"counts"`
 	ByChannel        ChannelCounts `json:"by_channel"`
+	ScheduledAt      *time.Time    `json:"scheduled_at"`
 	SendingStartedAt *time.Time    `json:"sending_started_at"`
 	CompletedAt      *time.Time    `json:"completed_at"`
 	UpdatedAt        time.Time     `json:"updated_at"`
@@ -353,15 +378,17 @@ type Service interface {
 	Create(ctx context.Context, brief string) (Campaign, error)
 	Get(ctx context.Context, id string) (Campaign, error)
 	List(ctx context.Context, limit, offset int) (CampaignPage, error)
+	// GenerateSegment: ErrCampaignNotFound -> ErrInvalidState (scheduled, sending, completed) ->
+	// ErrGenerationInProgress -> llm.ErrUnavailable / composer.ErrInvalidOutput.
 	GenerateSegment(ctx context.Context, id string) (SegmentResult, error)
 	// StartContentGeneration performs every pre-stream check and connects LLM attempt 1. Errors here
 	// become JSON responses; after it returns a run, the handler writes HTTP 200 + SSE.
-	// Check order: ErrCampaignNotFound -> ErrInvalidState (draft, sending, completed) ->
+	// Check order: ErrCampaignNotFound -> ErrInvalidState (draft, scheduled, sending, completed) ->
 	// ErrGenerationInProgress -> llm.ErrUnavailable. Acquires the generation lock, which the returned
 	// run releases when Stream returns (any outcome) or when ctx is cancelled.
 	StartContentGeneration(ctx context.Context, id string) (ContentRun, error)
-	// EditContent: ErrCampaignNotFound -> ErrGenerationInProgress -> ErrInvalidState (draft, sending,
-	// completed) -> *EditConflictError (expectedVersionID, a UUID or ExpectedVersionNone, is not the
+	// EditContent: ErrCampaignNotFound -> ErrGenerationInProgress -> ErrInvalidState (draft,
+	// scheduled, sending, completed) -> *EditConflictError (expectedVersionID, a UUID or ExpectedVersionNone, is not the
 	// current latest validated version, compared under the row lock) -> content.Parse +
 	// content.Validate against the CURRENT segment's longest values (*validation.Error, nothing
 	// stored). Success, in one transaction under the campaign row lock: next version_number, status
@@ -372,9 +399,20 @@ type Service interface {
 	// Approve: openapi approveContent "Checks, in this order". Idempotent for the already approved
 	// version (unchanged Campaign, no new approvals row, the worst-case re-check is not run again).
 	Approve(ctx context.Context, id, versionID string) (Campaign, error)
-	// Send: ErrCampaignNotFound -> ErrContentVersionNotFound -> ErrGenerationInProgress ->
-	// ErrInvalidState (not approved / second send) -> ErrStaleContentVersion (README §5.4).
+	// Send starts the send NOW: ErrCampaignNotFound -> ErrContentVersionNotFound ->
+	// ErrGenerationInProgress -> ErrInvalidState (neither approved nor scheduled; a second send) ->
+	// ErrStaleContentVersion (README §5.4). Accepted in approved and in scheduled ("send now", D62:
+	// the plan is dropped in the same transaction). Result: ScheduledAt nil, Deliveries = audiences.
 	Send(ctx context.Context, id, versionID string) (SendResult, error)
+	// Schedule plans (approved) or re-plans (scheduled) the send for at (P7a, D62): the window check
+	// ValidateScheduledAt runs FIRST, before any database access, then ErrCampaignNotFound ->
+	// ErrContentVersionNotFound -> ErrGenerationInProgress -> ErrInvalidState (neither approved nor
+	// scheduled) -> ErrStaleContentVersion. No delivery row is written; the approval is unchanged.
+	Schedule(ctx context.Context, id, versionID string, at time.Time) (SendResult, error)
+	// CancelSchedule: ErrCampaignNotFound -> ErrInvalidState (not scheduled). Success: state
+	// approved, scheduled_at NULL, approval kept. No generation-lease check (none can run in
+	// scheduled).
+	CancelSchedule(ctx context.Context, id string) (CancelScheduleResult, error)
 	Status(ctx context.Context, id string) (CampaignStatus, error)
 	Preview(ctx context.Context, id string, q PreviewQuery) (Preview, error)
 	ListDeliveries(ctx context.Context, id string, f DeliveryFilter) (DeliveryPage, error)

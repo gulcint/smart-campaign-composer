@@ -126,10 +126,10 @@ func lockCampaign(ctx context.Context, tx pgx.Tx, id string) (lockedCampaign, er
 	err := tx.QueryRow(ctx, `
 		SELECT state, segment_rule, segment_reference_time, segment_revision,
 			longest_first_name, longest_last_name, longest_city, approved_content_version_id::text,
-			generation_token::text, generation_expires_at
+			scheduled_at, generation_token::text, generation_expires_at
 		FROM campaigns WHERE id = $1 FOR UPDATE`, id).
 		Scan(&state, &lc.rule, &lc.refTime, &lc.SegmentRevision, &longFirst, &longLast, &longCity, &lc.ApprovedVersionID,
-			&genToken, &genExpires)
+			&lc.ScheduledAt, &genToken, &genExpires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return lockedCampaign{}, campaign.ErrCampaignNotFound
 	}
@@ -139,6 +139,7 @@ func lockCampaign(ctx context.Context, tx pgx.Tx, id string) (lockedCampaign, er
 	lc.State = campaign.State(state)
 	lc.HasSegment = lc.rule != nil && lc.refTime != nil
 	lc.Longest = content.Longest{FirstName: deref(longFirst), LastName: deref(longLast), City: deref(longCity)}
+	lc.ScheduledAt = utcPtr(lc.ScheduledAt)
 	if genToken != nil && genExpires != nil {
 		lc.Generation = &campaign.GenerationLease{Token: *genToken, ExpiresAt: genExpires.UTC()}
 	}
