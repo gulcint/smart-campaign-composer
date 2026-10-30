@@ -215,13 +215,14 @@ Phases and their scope ([`docs/PLAN.md`](docs/PLAN.md)):
 | P4 Content + Approval | ✅ done | SMS/email generation (SSE), character limits, personalization, versioned editing, approval, preview |
 | P5 Send + Tracking | ✅ done | Send API, queue and worker, live status stream and tracking screen, generation lease in the database, responsive layout |
 | P6 Hardening + Delivery | ✅ done | Browser end-to-end tests, security scan, personal-data cleanup, final README and DECISIONS |
+| P7 Scheduled send (bonus) | ✅ done | Plan, re-plan, cancel and send-now API, scheduler in the worker, countdown and cancel on the tracking screen |
 
 ## Bonus
 
 | Bonus | Status |
 |---|---|
 | CI pipeline | 🟢 done: GitHub Actions; required `ci-ok` for `main`: lint, `make test`, gitleaks, govulncheck, OpenAPI drift check (build/test is skipped on docs-only PRs, D51) |
-| Scheduled send | ⬜ not done |
+| Scheduled send | 🟢 done: an approved campaign can be planned for a later time (1 minute to 30 days ahead, entered in Europe/Istanbul time), re-planned, cancelled or sent now; the worker starts it when the time comes (D62) |
 | A/B variants | ⬜ not done |
 | Content in the user's language | ⬜ not done (the seed has a `language` field) |
 
@@ -259,6 +260,8 @@ Session exports are added to [`ai-sessions/`](ai-sessions/INDEX.md) after being 
 - The email body limit of 5000 is not re-checked at approval time, only at validation (D46).
 - The brief cannot be changed after the campaign is created; "Brief'i düzenle" ("Edit brief") starts a new campaign.
 - De-duplication is per customer: two customer records that share the same phone number or email address each receive a delivery (D3).
+- A plan whose time passed while the worker was down is sent late, as soon as a worker runs again; there is no maximum delay and the delay is only logged (D62).
+- A plan can only be entered in Europe/Istanbul time in the UI; the API accepts any RFC 3339 time with an offset. Relative segment windows ("last 30 days") stay tied to the time the audience was prepared, not to the send time (D62).
 - The audience query pulls the matching rows into Go; this is sufficient at seed scale (5000), not at millions of records. The queue was also chosen for this scale; the path forward is the `Queue` interface (D1).
 - Automated tests are derived only from `docs/requirements.md` (D50); many behaviors that are written only in the contracts are untested. There is no automated test of the real Claude client; behaviors such as city spelling and SMS length must be verified by hand.
 - Touch target sizes (44 px) are applied by screen width (<1024 px), not by `pointer: coarse`; a desktop with a narrow window also gets large targets.
