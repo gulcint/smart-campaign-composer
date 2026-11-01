@@ -290,7 +290,7 @@ export const tr = {
 
   // --- Connection / toasts ---
   'connection.lost': 'Bağlantı koptu, yeniden bağlanılıyor…',
-  'schedule.tz': 'TSİ',
+  'schedule.tz': '(Türkiye saati, UTC+3)',
   'schedule.title': 'Gönderim planlandı',
   'schedule.timeLabel': 'Planlanan zaman',
   'schedule.remainingLabel': 'Kalan süre',
