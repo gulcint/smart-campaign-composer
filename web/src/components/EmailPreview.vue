@@ -34,6 +34,7 @@ const shown = computed(() =>
     data-testid="email-preview"
     :data-state="state"
     :data-language="preview?.language"
+    :data-variant="preview?.variant"
     :aria-busy="state === 'loading' ? 'true' : undefined"
     class="flex flex-col gap-3"
   >
