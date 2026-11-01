@@ -38,10 +38,30 @@ export const api = {
       headers: { 'X-Expected-Version': expectedVersion },
     }),
 
-  /** previewContent — GET /api/campaigns/{campaign_id}/preview (REQ-APR-01, REQ-CNT-03) */
-  previewContent: (c: ApiClient, id: string, sampleIndex = 0, language?: 'tr' | 'en') =>
+  /** getContentVersion — GET /api/campaigns/{campaign_id}/content-versions/{version_id} */
+  getContentVersion: (c: ApiClient, id: string, versionId: string) =>
+    c.request<Ok<'getContentVersion', 200>>(
+      'GET',
+      `${campaignPath(id)}/content-versions/${encodeURIComponent(versionId)}`,
+    ),
+
+  /**
+   * previewContent — GET /api/campaigns/{campaign_id}/preview (REQ-APR-01, REQ-CNT-03). `language`
+   * (P8) and `variant` (P9) are sent only when the page shows the matching tabs.
+   */
+  previewContent: (
+    c: ApiClient,
+    id: string,
+    sampleIndex = 0,
+    language?: 'tr' | 'en',
+    variant?: 'a' | 'b',
+  ) =>
     c.request<Ok<'previewContent', 200>>('GET', `${campaignPath(id)}/preview`, {
-      query: language ? { sample_index: sampleIndex, language } : { sample_index: sampleIndex },
+      query: {
+        sample_index: sampleIndex,
+        ...(language ? { language } : {}),
+        ...(variant ? { variant } : {}),
+      },
     }),
 
   /** approveContent — POST /api/campaigns/{campaign_id}/approve (REQ-APR-01) */

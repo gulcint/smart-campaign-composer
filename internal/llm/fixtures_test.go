@@ -28,6 +28,19 @@ const (
 	cntBadJSONSMS = "Merhaba {{first_name}}"
 )
 
+// Variant B and angles of CNT_OK_AB / CNT_OK_AB_EN (REQ-ABT-02 C6, verbatim from docs/requirements.md;
+// "\n" is a real line break).
+const (
+	cntABSMS       = "{{first_name}}, %30 indirim bugün gece yarısı bitiyor! Sepetindeki ürünleri kaçırma: example.com/sepet"
+	cntABSubject   = "Son gün: sepetindeki ürünlerde %30 indirim"
+	cntABBody      = "Merhaba {{first_name}},\n\nSepetindeki ürünler için tanımladığımız %30 indirim bugün gece yarısı sona eriyor. {{city}} için bu fırsat yalnız bugün geçerli.\n\nKaçırmadan example.com/sepet adresinden siparişini tamamla.\n\nSevgiler,\nSmart Campaign Composer"
+	cntABENSMS     = "{{first_name}}, your 30% discount ends at midnight! Don't miss the items in your cart: example.com/cart"
+	cntABENSubject = "Last day: 30% off the items in your cart"
+	cntABENBody    = "Hi {{first_name}},\n\nThe special 30% discount for {{city}} ends at midnight today, and the items in your cart are still waiting.\n\nComplete your order at example.com/cart before it ends.\n\nHappy shopping!"
+	cntABAngleA    = "İndirim oranı öne çıkar"
+	cntABAngleB    = "Aciliyet: indirim bugün bitiyor"
+)
+
 // contentFixture is one emit_campaign_content tool input. extra holds root keys that exist only in
 // the raw JSON (CNT_EXTRA_PROP, CNT_INJECTION); they are never streamed as deltas.
 type contentFixture struct {

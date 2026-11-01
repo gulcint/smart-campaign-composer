@@ -9,6 +9,8 @@ package content
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +35,10 @@ const (
 	FirstNameFallbackEN = "Dear customer" // 13 runes
 	LangTR              = "tr"
 	LangEN              = "en"
+	// P9 (D64)
+	VariantA      = "a"
+	VariantB      = "b"
+	AngleMaxRunes = 60
 )
 
 // AllowedVariables are the only template placeholders (REQ-CNT-03).
@@ -40,10 +46,27 @@ var AllowedVariables = []string{"first_name", "last_name", "city"}
 
 // Content is one SMS + email copy (content.schema.json). SMS and Email are the Turkish main copy;
 // EN is the optional English version (nil = no English version; P8, D63).
+// P9 (D64): SMS/Email/EN are variant A. B is the optional variant B of an A/B test and Angles labels
+// what each variant tries; both nil (no A/B) or both non-nil. B.EN != nil iff EN != nil (Parse).
 type Content struct {
+	SMS    SMS      `json:"sms"`
+	Email  Email    `json:"email"`
+	EN     *English `json:"en,omitempty"`
+	B      *Variant `json:"b,omitempty"`
+	Angles *Angles  `json:"angles,omitempty"`
+}
+
+// Variant is variant B's copy: Turkish SMS/Email and the optional English version (P9).
+type Variant struct {
 	SMS   SMS      `json:"sms"`
 	Email Email    `json:"email"`
 	EN    *English `json:"en,omitempty"`
+}
+
+// Angles are plain labels (not templates, never sent to customers), at most AngleMaxRunes each (P9).
+type Angles struct {
+	A string `json:"a"`
+	B string `json:"b"`
 }
 
 // English is the English version of a Content (P8, D63).
@@ -66,9 +89,17 @@ type Email struct {
 // WorstCase are the post-substitution lengths reported on every content version whose template
 // syntax is valid (API field ContentVersion.worst_case).
 type WorstCase struct {
+	SMSRunes     int               `json:"sms_runes"`
+	SubjectRunes int               `json:"subject_runes"`
+	EN           *WorstCaseLang    `json:"en,omitempty"` // P8: nil iff Content.EN == nil
+	B            *WorstCaseVariant `json:"b,omitempty"`  // P9: nil iff Content.B == nil
+}
+
+// WorstCaseVariant are the worst-case lengths of variant B (P9).
+type WorstCaseVariant struct {
 	SMSRunes     int            `json:"sms_runes"`
 	SubjectRunes int            `json:"subject_runes"`
-	EN           *WorstCaseLang `json:"en,omitempty"` // P8: nil iff Content.EN == nil
+	EN           *WorstCaseLang `json:"en,omitempty"` // nil iff Content.B.EN == nil
 }
 
 // WorstCaseLang are the worst-case lengths of one extra language version (P8).
@@ -90,6 +121,8 @@ type Recipient struct {
 	FirstName, LastName, City string
 	// Language is customers.language ("tr" | "en"; "" is treated as "tr"). P8 (D63).
 	Language string
+	// Variant is deliveries.variant ("a" | "b"; "" is treated as "a"). P9 (D64).
+	Variant string
 }
 
 // Rendered is a Content with every variable substituted for one recipient.
@@ -101,6 +134,8 @@ type Rendered struct {
 	// no English version (the Turkish main copy was used). P8 (D63).
 	Language string
 	Fallback bool
+	// Variant of the rendered text ("a" | "b"). P9 (D64).
+	Variant string
 }
 
 // Field errors of the content validator match these sentinels (empty fields match validation.ErrRequired).
@@ -111,6 +146,7 @@ var (
 	ErrUnknownVariable   = errors.New("content: unknown variable")    // "unknown_variable"
 	ErrMalformedVariable = errors.New("content: malformed variable")  // "malformed_variable"
 	ErrWorstCaseTooLong  = errors.New("content: worst case too long") // additionally matched by *_worst_case codes
+	ErrVariantsIdentical = errors.New("content: variants identical")  // "variants_identical" (P9, path "b")
 )
 
 // Field paths in the order Validate reports them.
@@ -161,6 +197,8 @@ var identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // path; an empty string is structurally valid (Validate reports it as required). Strings are
 // NFC-normalized and otherwise kept as given. Errors: *validation.Error matching
 // validation.ErrInvalidJSON / validation.ErrSchemaViolation.
+// P9: every structural error is returned; per level unknown keys first, then the known keys in
+// schema order (sms, email, en, b, angles), then the co-presence rules (b <=> angles, en <=> b.en).
 func Parse(raw []byte) (Content, error) {
 	if !json.Valid(raw) {
 		return Content{}, &validation.Error{Fields: []validation.FieldError{{
@@ -172,22 +210,74 @@ func Parse(raw []byte) (Content, error) {
 	if !ok {
 		return Content{}, &validation.Error{Fields: []validation.FieldError{violation("", "content must be a JSON object")}}
 	}
-	errs = append(errs, unknownKeys(root, "", "sms", "email", "en")...)
+	errs = append(errs, unknownKeys(root, "", "sms", "email", "en", "b", "angles")...)
 
 	var c Content
 	c.SMS, c.Email = parseCopy(root, "", &errs)
 	if _, present := root["en"]; present {
-		if en, ok := member(root, "", "en", &errs); ok {
-			errs = append(errs, unknownKeys(en, "en", "sms", "email")...)
-			var e English
-			e.SMS, e.Email = parseCopy(en, "en", &errs)
-			c.EN = &e
+		c.EN = parseEnglish(root, "", &errs)
+	}
+	// P9 (D64): variant B and the angles. Co-presence rules are reported last; a key that is
+	// present but not an object (null included) already has its own error and does not trigger them.
+	var bObj map[string]json.RawMessage
+	if _, present := root["b"]; present {
+		if obj, ok := member(root, "", "b", &errs); ok {
+			bObj = obj
+			errs = append(errs, unknownKeys(obj, "b", "sms", "email", "en")...)
+			var v Variant
+			v.SMS, v.Email = parseCopy(obj, "b", &errs)
+			if _, enPresent := root["en"]; enPresent {
+				if _, present := obj["en"]; present {
+					v.EN = parseEnglish(obj, "b", &errs)
+				}
+			}
+			c.B = &v
+		}
+	}
+	var anglesOK bool
+	if _, present := root["angles"]; present {
+		if obj, ok := member(root, "", "angles", &errs); ok {
+			anglesOK = true
+			errs = append(errs, unknownKeys(obj, "angles", "a", "b")...)
+			var a Angles
+			a.A, _ = stringMember(obj, "angles", "a", &errs)
+			a.B, _ = stringMember(obj, "angles", "b", &errs)
+			c.Angles = &a
+		}
+	}
+	if _, present := root["angles"]; bObj != nil && !present {
+		errs = append(errs, violation("angles", "angles is required when b is present"))
+	}
+	if _, present := root["b"]; anglesOK && !present {
+		errs = append(errs, violation("b", "b is required when angles is present"))
+	}
+	if bObj != nil {
+		_, bEN := bObj["en"]
+		_, topEN := root["en"]
+		switch {
+		case c.EN != nil && !bEN:
+			errs = append(errs, violation("b.en", "b.en is required when en is present"))
+		case !topEN && bEN:
+			errs = append(errs, violation("b.en", "b.en is only allowed when en is present"))
 		}
 	}
 	if len(errs) > 0 {
 		return Content{}, &validation.Error{Fields: errs}
 	}
 	return c, nil
+}
+
+// parseEnglish decodes the "en" object under parent; nil when it is not an object.
+func parseEnglish(m map[string]json.RawMessage, parent string, errs *[]validation.FieldError) *English {
+	en, ok := member(m, parent, "en", errs)
+	if !ok {
+		return nil
+	}
+	path := join(parent, "en")
+	*errs = append(*errs, unknownKeys(en, path, "sms", "email")...)
+	var e English
+	e.SMS, e.Email = parseCopy(en, path, errs)
+	return &e
 }
 
 // parseCopy decodes the sms and email objects of one language version under parent.
@@ -403,13 +493,49 @@ type fieldSpec struct {
 }
 
 // fieldsOf lists the checked fields: the three Turkish ones, then (P8) the English ones with the
-// "en." path prefix.
+// "en." path prefix, then (P9) variant B's with the "b." and "b.en." prefixes.
 func fieldsOf(c Content) []fieldSpec {
 	fields := langFields("", "", c.SMS, c.Email)
 	if c.EN != nil {
 		fields = append(fields, langFields("en.", "English ", c.EN.SMS, c.EN.Email)...)
 	}
+	if c.B != nil {
+		fields = append(fields, langFields("b.", "Variant B ", c.B.SMS, c.B.Email)...)
+		if c.B.EN != nil {
+			fields = append(fields, langFields("b.en.", "Variant B English ", c.B.EN.SMS, c.B.EN.Email)...)
+		}
+	}
 	return fields
+}
+
+// variantsIdentical reports whether variant B's three Turkish texts all equal A's (NFC, exact).
+func variantsIdentical(c Content) bool {
+	same := func(a, b string) bool { return norm.NFC.String(a) == norm.NFC.String(b) }
+	return c.B != nil && same(c.B.SMS.Body, c.SMS.Body) && same(c.B.Email.Subject, c.Email.Subject) &&
+		same(c.B.Email.Body, c.Email.Body)
+}
+
+// angleErrors checks the angle labels (P9): required, then at most AngleMaxRunes runes.
+func angleErrors(a *Angles) []validation.FieldError {
+	if a == nil {
+		return nil
+	}
+	var errs []validation.FieldError
+	for _, f := range []struct{ path, label, value string }{
+		{"angles.a", "Angle of variant A", a.A},
+		{"angles.b", "Angle of variant B", a.B},
+	} {
+		if strings.TrimSpace(f.value) == "" {
+			errs = append(errs, validation.FieldError{Path: f.path, Code: validation.CodeRequired,
+				Message: f.label + " must not be empty", Err: validation.ErrRequired})
+			continue
+		}
+		if n := RuneCount(f.value); n > AngleMaxRunes {
+			errs = append(errs, lengthError(f.path, validation.CodeTooLong,
+				f.label+" exceeds "+strconv.Itoa(AngleMaxRunes)+" characters", AngleMaxRunes, n, validation.ErrTooLong))
+		}
+	}
+	return errs
 }
 
 func langFields(prefix, labelPrefix string, sms SMS, email Email) []fieldSpec {
@@ -441,6 +567,8 @@ func lengthError(path, code, message string, limit, actual int, err error) valid
 // l = longest values of the campaign's CURRENT segment. Per field, in order sms.body,
 // email.subject, email.body: required -> malformed_variable -> unknown_variable -> length (after
 // substituting every placeholder with a value of the Longest length); at most one error per field.
+// P8/P9: the en.*, b.* and b.en.* fields follow with the same checks and Longest; then "b"
+// (variants_identical, independent of the field errors), then angles.a and angles.b.
 // Returns nil or *validation.Error.
 func Validate(c Content, l Longest) error {
 	var errs []validation.FieldError
@@ -459,6 +587,12 @@ func Validate(c Content, l Longest) error {
 			errs = append(errs, lengthError(f.path, f.code, f.label+" exceeds "+strconv.Itoa(f.limit)+" characters", f.limit, n, f.err))
 		}
 	}
+	// P9: independent of the per-field errors above.
+	if variantsIdentical(c) {
+		errs = append(errs, validation.FieldError{Path: "b", Code: validation.CodeVariantsIdentical,
+			Message: "variant B repeats variant A's SMS and email texts", Err: ErrVariantsIdentical})
+	}
+	errs = append(errs, angleErrors(c.Angles)...)
 	if len(errs) > 0 {
 		return &validation.Error{Fields: errs}
 	}
@@ -468,20 +602,28 @@ func Validate(c Content, l Longest) error {
 // MeasureWorstCase computes WorstCase with the same substitution as Validate.
 // Errors: ErrMalformedVariable, ErrUnknownVariable (any of the three Turkish fields or, when
 // c.EN != nil, any of the three English ones; the wrapped message names the en.-prefixed path).
+// P9: variant B (and B.EN) are measured too (prefixes "b.", "b.en.").
 func MeasureWorstCase(c Content, l Longest) (WorstCase, error) {
-	// fieldsOf order: sms, subject, body per language version.
-	fs := fieldsOf(c)
-	lengths := make([]int, len(fs))
-	for i, f := range fs {
+	lengths := make(map[string]int)
+	for _, f := range fieldsOf(c) {
 		parts, err := checkedParts(f.value)
 		if err != nil {
 			return WorstCase{}, fmt.Errorf("%s: %w", f.path, err)
 		}
-		lengths[i] = worstLength(parts, l)
+		lengths[f.path] = worstLength(parts, l)
 	}
-	wc := WorstCase{SMSRunes: lengths[0], SubjectRunes: lengths[1]}
+	lang := func(prefix string) *WorstCaseLang {
+		return &WorstCaseLang{SMSRunes: lengths[prefix+pathSMSBody], SubjectRunes: lengths[prefix+pathEmailSubject]}
+	}
+	wc := WorstCase{SMSRunes: lengths[pathSMSBody], SubjectRunes: lengths[pathEmailSubject]}
 	if c.EN != nil {
-		wc.EN = &WorstCaseLang{SMSRunes: lengths[3], SubjectRunes: lengths[4]}
+		wc.EN = lang("en.")
+	}
+	if c.B != nil {
+		wc.B = &WorstCaseVariant{SMSRunes: lengths["b."+pathSMSBody], SubjectRunes: lengths["b."+pathEmailSubject]}
+		if c.B.EN != nil {
+			wc.B.EN = lang("b.en.")
+		}
 	}
 	return wc, nil
 }
@@ -541,11 +683,17 @@ func Render(tmpl string, r Recipient) (string, error) {
 // c.EN != nil => the English version (Language "en"); otherwise the Turkish main copy (Language
 // "tr"), with Fallback = true when English was wanted but c has no English version. The fallback
 // first name follows the language of the text used.
+// P9 (D64): the variant is picked first (r.Variant == "b" and c.B != nil => variant B, Variant "b";
+// otherwise variant A, Variant "a"), then the language inside it by the same rule.
 func RenderContent(c Content, r Recipient) (Rendered, error) {
-	lang, prefix, sms0, email0, fallback := LangTR, "", c.SMS, c.Email, false
+	variant, vprefix, sms0, email0, en := VariantA, "", c.SMS, c.Email, c.EN
+	if r.Variant == VariantB && c.B != nil {
+		variant, vprefix, sms0, email0, en = VariantB, "b.", c.B.SMS, c.B.Email, c.B.EN
+	}
+	lang, prefix, fallback := LangTR, vprefix, false
 	if r.Language == LangEN {
-		if c.EN != nil {
-			lang, prefix, sms0, email0 = LangEN, "en.", c.EN.SMS, c.EN.Email
+		if en != nil {
+			lang, prefix, sms0, email0 = LangEN, vprefix+"en.", en.SMS, en.Email
 		} else {
 			fallback = true
 		}
@@ -563,7 +711,38 @@ func RenderContent(c Content, r Recipient) (Rendered, error) {
 	if err != nil {
 		return Rendered{}, fmt.Errorf("%s: %w", prefix+pathEmailBody, err)
 	}
-	return Rendered{SMSText: sms, EmailSubject: subject, EmailText: body, Language: lang, Fallback: fallback}, nil
+	return Rendered{SMSText: sms, EmailSubject: subject, EmailText: body, Language: lang, Fallback: fallback,
+		Variant: variant}, nil
+}
+
+// VariantFor is the deterministic A/B split (REQ-ABT-03), the Go twin of the SQL expression that
+// writes deliveries.variant: sha256(16-byte campaign UUID || 16-byte customer UUID); first byte
+// < 128 => VariantA, otherwise VariantB. Inputs are canonical UUID strings (upper case accepted);
+// a malformed UUID is an error. Used by the preview and tests; the send path uses the SQL.
+func VariantFor(campaignID, customerID string) (string, error) {
+	a, err := uuidBytes(campaignID)
+	if err != nil {
+		return "", fmt.Errorf("content: campaign id: %w", err)
+	}
+	b, err := uuidBytes(customerID)
+	if err != nil {
+		return "", fmt.Errorf("content: customer id: %w", err)
+	}
+	sum := sha256.Sum256(append(a, b...))
+	if sum[0] < 128 {
+		return VariantA, nil
+	}
+	return VariantB, nil
+}
+
+var uuidText = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
+
+// uuidBytes returns the 16 bytes of a canonical (8-4-4-4-12) UUID string.
+func uuidBytes(s string) ([]byte, error) {
+	if !uuidText.MatchString(s) {
+		return nil, errors.New("malformed uuid")
+	}
+	return hex.DecodeString(strings.ReplaceAll(s, "-", ""))
 }
 
 // CheckRendered is the per-recipient send-time check (REQ-CNT-05): sms_too_long /

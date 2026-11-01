@@ -101,14 +101,15 @@ func (s deliveryStore) Claim(ctx context.Context, ch delivery.Channel, now time.
 				last_attempt_at = $2, first_attempt_at = COALESCE(d.first_attempt_at, $2), updated_at = $2
 			FROM picked WHERE d.id = picked.id
 			RETURNING d.id, d.campaign_id, d.customer_id, d.content_version_id, d.next_attempt_at,
-				d.attempts, d.failed_attempts, d.rate_limited_count, d.first_attempt_at
+				d.attempts, d.failed_attempts, d.rate_limited_count, d.first_attempt_at, d.variant
 		)
 		SELECT c.id::text, c.campaign_id::text, c.customer_id::text,
 			CASE WHEN $1 = 'sms' THEN cu.phone ELSE cu.email END,
 			CASE WHEN $1 = 'sms' THEN cu.sms_opt_in ELSE cu.email_opt_in END,
-			cu.first_name, cu.last_name, cu.city, cu.language,
+			cu.first_name, cu.last_name, cu.city, cu.language, c.variant,
 			cv.sms_body, cv.email_subject, cv.email_body,
 			cv.en_sms_body, cv.en_email_subject, cv.en_email_body,
+			`+variantColumns("cv")+`,
 			c.attempts, c.failed_attempts, c.rate_limited_count, c.first_attempt_at
 		FROM claimed c
 		JOIN customers cu ON cu.id = c.customer_id
@@ -122,18 +123,23 @@ func (s deliveryStore) Claim(ctx context.Context, ch delivery.Channel, now time.
 	var jobs []delivery.Job
 	for rows.Next() {
 		j := delivery.Job{Channel: ch}
-		var to, enSMS, enSubject, enBody *string
-		if err := rows.Scan(&j.ID, &j.CampaignID, &j.CustomerID, &to, &j.Consent,
-			&j.Recipient.FirstName, &j.Recipient.LastName, &j.Recipient.City, &j.Recipient.Language,
+		var (
+			to, enSMS, enSubject, enBody *string
+			b                            variantCols
+		)
+		dest := []any{&j.ID, &j.CampaignID, &j.CustomerID, &to, &j.Consent,
+			&j.Recipient.FirstName, &j.Recipient.LastName, &j.Recipient.City, &j.Recipient.Language, &j.Recipient.Variant,
 			&j.Content.SMS.Body, &j.Content.Email.Subject, &j.Content.Email.Body,
-			&enSMS, &enSubject, &enBody,
-			&j.Attempts, &j.FailedAttempts, &j.RateLimited, &j.FirstAttemptAt); err != nil {
+			&enSMS, &enSubject, &enBody}
+		dest = append(append(dest, b.dest()...), &j.Attempts, &j.FailedAttempts, &j.RateLimited, &j.FirstAttemptAt)
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("postgres: claim deliveries: %w", err)
 		}
 		if to != nil {
 			j.To = *to
 		}
 		j.Content.EN = englishOf(enSMS, enSubject, enBody) // P8: the language version is picked at render time
+		b.apply(&j.Content, nil)                           // P9: the variant is picked at render time, before the language
 		j.FirstAttemptAt = j.FirstAttemptAt.UTC()
 		jobs = append(jobs, j)
 	}
