@@ -53,10 +53,10 @@ export const tr = {
   'brief.readonlyTitle': 'Kampanya brief’i',
   'brief.inputLabel': 'Kampanya brief’i',
   'brief.placeholder':
-    'Örn. Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul’daki kullanıcılara %30 indirim hatırlatması gönder.',
+    'Örn. Son 30 günde sepetine ürün ekleyip alışveriş yapmayan Ankara’daki gold ve platinum üyelere %20 indirim hatırlatması gönder.',
   'brief.example': 'Örnek brief’i kullan',
   'brief.exampleText':
-    'Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul’daki kullanıcılara %30 indirim hatırlatması gönder. Samimi ama kısa olsun.',
+    'Son 30 günde sepetine ürün ekleyip alışveriş yapmayan Ankara’daki gold ve platinum üyelere %20 indirim hatırlatması gönder. Samimi ama kısa olsun.',
   'brief.submit': 'Kitleyi çıkar',
   'brief.shortcut': 'Göndermek için Ctrl/⌘ + Enter',
   'brief.counterLabel': '{n} / {max} karakter',
@@ -311,7 +311,7 @@ export const tr = {
 
   // --- Connection / toasts ---
   'connection.lost': 'Bağlantı koptu, yeniden bağlanılıyor…',
-  'schedule.tz': 'TSİ',
+  'schedule.tz': '(Türkiye saati, UTC+3)',
   'schedule.title': 'Gönderim planlandı',
   'schedule.timeLabel': 'Planlanan zaman',
   'schedule.remainingLabel': 'Kalan süre',
