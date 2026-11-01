@@ -144,10 +144,20 @@ func TestService_EditChangingVariantRevokesApproval(t *testing.T) {
 		if c := h.get(t, id); c.State != campaign.StateContentReady || c.Approval != nil {
 			t.Fatalf("%s: after the edit state %s approval %+v, want content_ready and no approval", tc.name, c.State, c.Approval)
 		}
-		rows := h.approvalRows(t, id)
-		last := rows[len(rows)-1]
-		if last.VersionID != base.ID || last.RevokedAt == nil || last.Reason == nil || *last.Reason != "content_changed" {
-			t.Fatalf("%s: approval row = %+v (reason %s), want version %s revoked with content_changed", tc.name, last, ptrS(last.Reason), base.ID)
+		// The fixed harness clock gives every approval the same approved_at, so the row is picked by
+		// version: each round approves a fresh version, hence exactly one row per base.
+		var found int
+		for _, r := range h.approvalRows(t, id) {
+			if r.VersionID != base.ID {
+				continue
+			}
+			found++
+			if r.RevokedAt == nil || r.Reason == nil || *r.Reason != "content_changed" {
+				t.Fatalf("%s: approval row = %+v (reason %s), want version %s revoked with content_changed", tc.name, r, ptrS(r.Reason), base.ID)
+			}
+		}
+		if found != 1 {
+			t.Fatalf("%s: %d approval rows for version %s, want 1", tc.name, found, base.ID)
 		}
 		// The next round edits on top of a fresh A/B version.
 		base = h.edit(t, id, next.ID, abVersionContent(false))
