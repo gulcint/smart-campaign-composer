@@ -166,6 +166,7 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 - Onaylanmamış kampanyada gönderim isteği **409** döner ve hiçbir teslimat kaydı oluşmaz.
 - Pazarlamacı SMS gövdesini ve email konusu/gövdesini düzenleyebilir; her düzenleme yeni bir içerik sürümü üretir.
 - **Düzenleme iyimser eşzamanlıdır (sahip kararı):** düzenleme isteği, düzenlemenin dayandığı sürümü `X-Expected-Version` başlığıyla bildirmek **zorundadır** (kampanyanın en son `validated` sürümünün kimliği, yoksa `none`; `invalid` taslak sürüm sayılmaz). Başlık eksikse 422, biçimi bozuksa 422; güncel en son sürümden farklıysa **409 `content_edit_conflict`** döner, hiçbir sürüm saklanmaz ve gövde güncel sürümün kimliğini ve numarasını (`error.current_version`) taşır. Aynı isteği başarıdan sonra tekrarlamak da 409'dur (sunucu tekilleştirmez).
+- `ApprovalPage` özet kartı (`approval-summary`) sürüm numarası göstermez: `approval-version` DOM'da yoktur (sahip kararı, 2026-11-01). Onaylanan sürüm yine `campaign.latest_content_version`'dır; onay isteğinin gövdesi değişmez.
 - Önizleme, bir örnek alıcı için render edilmiş içeriği gösterir. Örnek alıcı deterministiktir: kuralla eşleşen kümenin müşteri kimliğine (UUID metin sırası) göre `sample_index`'inci üyesi (varsayılan 0); aynı istek her zaman aynı alıcıyı ve aynı çıktıyı verir. Çıktı düz metindir; email gövdesinin HTML karşılığı yalnız backend'in kaçışlayarak ürettiği `email.html`'dir (REQ-UI-01).
 
 ### REQ-APR-02 — Düzenlenen içerik yeniden doğrulanır · Faz P4 · [DOK çıkarımı]
