@@ -35,7 +35,7 @@ import { formatTsi } from '@/lib/schedule'
 import { isLockedForEditing } from '@/lib/steps'
 import { runeCount } from '@/lib/text-cap'
 import { cn } from '@/lib/utils'
-import { type ContentVariant, variantFromQuery, worstOf } from '@/lib/variant'
+import { type ContentVariant, copyOf, variantFromQuery, worstOf } from '@/lib/variant'
 import { campaignIdOf } from '@/router'
 import { injectApiClient, reportError } from '@/stores/api'
 import { useCampaignStore } from '@/stores/campaign'
@@ -100,17 +100,20 @@ const limitCheck = computed(() => {
   if (!v) return null
   const wc = v.worst_case
   const fits = (s: number, j: number) => s <= SMS_LIMIT && j <= SUBJECT_LIMIT
-  // Pass covers every variant × language copy the version has (A, A-en, B, B-en).
+  // Each variant × language copy the version has (A, A-en, B, B-en): its worst case, or its
+  // template length when worst_case is null.
+  const measure = (vr: ContentVariant, l: 'tr' | 'en') => {
+    if (wc) return worstOf(wc, vr, l)
+    const c = copyOf(v.content, vr, l)
+    return c && { sms_runes: runeCount(c.sms.body), subject_runes: runeCount(c.email.subject) }
+  }
   const copies = (['a', 'b'] as const).flatMap((vr) =>
-    (['tr', 'en'] as const).map((l) => worstOf(wc, vr, l)),
+    (['tr', 'en'] as const).map((l) => measure(vr, l)),
   )
-  const sms = wc?.sms_runes ?? runeCount(v.content.sms.body)
-  const subject = wc?.subject_runes ?? runeCount(v.content.email.subject)
-  const pass = fits(sms, subject) && copies.every((c) => !c || fits(c.sms_runes, c.subject_runes))
-  // The detail line shows the selected copy (template length when worst_case is null).
-  const shown = worstOf(wc, activeVariant.value, activeLanguage.value)
-  if (shown) return { sms: shown.sms_runes, subject: shown.subject_runes, pass }
-  return { sms, subject, pass }
+  const pass = copies.every((c) => !c || fits(c.sms_runes, c.subject_runes))
+  // The detail line shows the selected copy (A Turkish when the version lacks it).
+  const shown = measure(activeVariant.value, activeLanguage.value) ?? measure('a', 'tr')
+  return { sms: shown?.sms_runes ?? 0, subject: shown?.subject_runes ?? 0, pass }
 })
 
 // ---- preview of one sample recipient (ui.md §1.1, REQ-APR-01) ----
