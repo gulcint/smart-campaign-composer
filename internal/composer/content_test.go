@@ -600,9 +600,10 @@ func TestEvent_Names(t *testing.T) {
 	}
 }
 
-// REQ-CNT-04
+// REQ-CNT-04, REQ-ABT-02 C7, REQ-ABT-01 C7
 // The JSON of the three events has exactly the sse-events.md §1.1 keys; content_version_id is
-// present (null) on a non-final invalid.
+// present (null) on a non-final invalid. A variant B delta adds "variant":"b" (an A delta has no
+// variant key); validated A/B content carries b, angles and worst_case.b.
 func TestEvent_JSONShape(t *testing.T) {
 	t.Parallel()
 	id := "0b8f6c2e-6d0a-4a47-9c39-0f2d3b8e1a11"
@@ -619,6 +620,14 @@ func TestEvent_JSONShape(t *testing.T) {
 			want: `{"attempt":2,"final":true,"errors":[{"path":"sms.body","code":"sms_too_long","message":"m","limit":160,"actual":161}],"content_version_id":"` + id + `"}`},
 		{name: "validated", ev: composer.ValidatedEvent{Attempt: 1, ContentVersionID: id, VersionNumber: 3, Content: cContent("a", "b", "c"), WorstCase: content.WorstCase{SMSRunes: 1, SubjectRunes: 1}},
 			want: `{"attempt":1,"content_version_id":"` + id + `","version_number":3,"content":{"sms":{"body":"a"},"email":{"subject":"b","body":"c"}},"worst_case":{"sms_runes":1,"subject_runes":1}}`},
+		// REQ-ABT-02 C7: a B delta carries variant "b"; an A delta (above) has no variant key.
+		{name: "variant B delta", ev: composer.DeltaEvent{Attempt: 1, Channel: "sms", Field: "body", Text: "Son gün", Variant: "b"},
+			want: `{"attempt":1,"variant":"b","channel":"sms","field":"body","text":"Son gün"}`},
+		// REQ-ABT-01 C1, C7: validated A/B content carries b, angles and worst_case.b.
+		{name: "validated A/B", ev: composer.ValidatedEvent{Attempt: 1, ContentVersionID: id, VersionNumber: 3,
+			Content:   content.Content{SMS: content.SMS{Body: "a"}, Email: content.Email{Subject: "b", Body: "c"}, B: &content.Variant{SMS: content.SMS{Body: "x"}, Email: content.Email{Subject: "y", Body: "z"}}, Angles: &content.Angles{A: "p", B: "q"}},
+			WorstCase: content.WorstCase{SMSRunes: 1, SubjectRunes: 1, B: &content.WorstCaseVariant{SMSRunes: 2, SubjectRunes: 3}}},
+			want: `{"attempt":1,"content_version_id":"` + id + `","version_number":3,"content":{"sms":{"body":"a"},"email":{"subject":"b","body":"c"},"b":{"sms":{"body":"x"},"email":{"subject":"y","body":"z"}},"angles":{"a":"p","b":"q"}},"worst_case":{"sms_runes":1,"subject_runes":1,"b":{"sms_runes":2,"subject_runes":3}}}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -780,6 +789,234 @@ func TestContentSession_EnglishErrorTriggersRepair(t *testing.T) {
 	}
 }
 
+// ---- A/B variants (P9) ----
+
+// Variant B and angles of CNT_OK_AB / CNT_OK_AB_EN (docs/requirements.md REQ-ABT-02 C6).
+const (
+	cABSMS       = "{{first_name}}, %30 indirim bugün gece yarısı bitiyor! Sepetindeki ürünleri kaçırma: example.com/sepet"
+	cABSubject   = "Son gün: sepetindeki ürünlerde %30 indirim"
+	cABBody      = "Merhaba {{first_name}},\n\nSepetindeki ürünler için tanımladığımız %30 indirim bugün gece yarısı sona eriyor. {{city}} için bu fırsat yalnız bugün geçerli.\n\nKaçırmadan example.com/sepet adresinden siparişini tamamla.\n\nSevgiler,\nSmart Campaign Composer"
+	cABENSMS     = "{{first_name}}, your 30% discount ends at midnight! Don't miss the items in your cart: example.com/cart"
+	cABENSubject = "Last day: 30% off the items in your cart"
+	cABENBody    = "Hi {{first_name}},\n\nThe special 30% discount for {{city}} ends at midnight today, and the items in your cart are still waiting.\n\nComplete your order at example.com/cart before it ends.\n\nHappy shopping!"
+	cABAngleA    = "İndirim oranı öne çıkar"
+	cABAngleB    = "Aciliyet: indirim bugün bitiyor"
+)
+
+// abContent is CNT_OK plus a variant B whose SMS is bSMS, and both angles.
+func abContent(bSMS string) content.Content {
+	c := cOK()
+	c.B = &content.Variant{SMS: content.SMS{Body: bSMS}, Email: content.Email{Subject: "Son gün: %30 indirim", Body: "Merhaba {{first_name}},\n\nİndirim bugün bitiyor."}}
+	c.Angles = &content.Angles{A: cABAngleA, B: cABAngleB}
+	return c
+}
+
+// variantDeltaJSON is the wire form of a delta with the optional language and variant keys.
+type variantDeltaJSON struct {
+	Channel  string  `json:"channel"`
+	Field    string  `json:"field"`
+	Text     string  `json:"text"`
+	Language *string `json:"language"`
+	Variant  *string `json:"variant"`
+}
+
+// REQ-ABT-02 C1, C5, C7
+// With IncludeVariantB the mock returns CNT_OK_AB (CNT_OK_AB_EN with IncludeEnglish) and the session
+// streams B too: every A delta first (no variant key; A Turkish then A English), then the B deltas
+// with variant "b" (B Turkish then B English, language "en" on B English). The B deltas concatenate to
+// the outcome's B; angles never stream but are in the outcome; B is measured (138 / 42, English
+// 139 / 40 with the example longest values). Without IncludeVariantB no delta carries a variant and
+// the outcome has no B and no angles.
+func TestContentSession_VariantBDeltas(t *testing.T) {
+	t.Parallel()
+	for _, includeVariantB := range []bool{true, false} {
+		for _, includeEnglish := range []bool{false, true} {
+			t.Run("IncludeVariantB="+strconv.FormatBool(includeVariantB)+" IncludeEnglish="+strconv.FormatBool(includeEnglish), func(t *testing.T) {
+				t.Parallel()
+				req := contentRequest()
+				req.IncludeEnglish = includeEnglish
+				req.IncludeVariantB = includeVariantB
+				out, rec, err := runSession(t, context.Background(), llm.NewMock(llm.MockOptions{}), req)
+				if err != nil {
+					t.Fatalf("Run() error = %v", err)
+				}
+				if !out.Valid || out.Attempts != 1 {
+					t.Fatalf("outcome Valid/Attempts = %v/%d, want true/1 (errors %+v)", out.Valid, out.Attempts, out.Errors)
+				}
+				assertDeltaShape(t, rec)
+				texts := map[string]string{} // "<variant>/<language>/<channel>.<field>"
+				last := 0
+				for i, d := range rec.deltas {
+					b, err := json.Marshal(d)
+					if err != nil {
+						t.Fatalf("marshal delta: %v", err)
+					}
+					var w variantDeltaJSON
+					if err := json.Unmarshal(b, &w); err != nil {
+						t.Fatalf("decode delta %s: %v", b, err)
+					}
+					variant, lang := "a", "tr"
+					if w.Variant != nil {
+						if *w.Variant != "b" {
+							t.Fatalf("delta %d variant = %q, want \"b\" or no key", i, *w.Variant)
+						}
+						variant = "b"
+					}
+					if d.Variant != "" && d.Variant != "b" {
+						t.Fatalf("delta %d DeltaEvent.Variant = %q, want \"\" or \"b\"", i, d.Variant)
+					}
+					if w.Language != nil {
+						lang = *w.Language
+					}
+					rank := map[string]int{"a/tr": 0, "a/en": 1, "b/tr": 2, "b/en": 3}[variant+"/"+lang]
+					if rank < last {
+						t.Fatalf("delta %d (%s/%s) arrives after a later group; order is A tr, A en, B tr, B en", i, variant, lang)
+					}
+					last = rank
+					texts[variant+"/"+lang+"/"+w.Channel+"."+w.Field] += w.Text
+				}
+				if !includeVariantB {
+					for k := range texts {
+						if strings.HasPrefix(k, "b/") {
+							t.Fatalf("a delta carries variant b without IncludeVariantB (%s)", k)
+						}
+					}
+					if out.Content.B != nil || out.Content.Angles != nil || (out.WorstCase != nil && out.WorstCase.B != nil) {
+						t.Fatalf("outcome without IncludeVariantB has B %+v / Angles %+v", out.Content.B, out.Content.Angles)
+					}
+					return
+				}
+				if out.Content.SMS != cOK().SMS || out.Content.Email != cOK().Email {
+					t.Fatalf("variant A of CNT_OK_AB = %+v/%+v, want CNT_OK", out.Content.SMS, out.Content.Email)
+				}
+				if out.Content.B == nil || out.Content.Angles == nil {
+					t.Fatalf("outcome B/Angles = %+v/%+v, want both", out.Content.B, out.Content.Angles)
+				}
+				wantB := content.Variant{SMS: content.SMS{Body: cABSMS}, Email: content.Email{Subject: cABSubject, Body: cABBody}}
+				if includeEnglish {
+					wantB.EN = &content.English{SMS: content.SMS{Body: cABENSMS}, Email: content.Email{Subject: cABENSubject, Body: cABENBody}}
+				}
+				if diff := cmp.Diff(wantB, *out.Content.B); diff != "" {
+					t.Fatalf("outcome B mismatch with the fixture (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(content.Angles{A: cABAngleA, B: cABAngleB}, *out.Content.Angles); diff != "" {
+					t.Fatalf("outcome angles mismatch (-want +got):\n%s", diff)
+				}
+				gotB := map[string]string{
+					"sms.body": texts["b/tr/sms.body"], "email.subject": texts["b/tr/email.subject"], "email.body": texts["b/tr/email.body"],
+				}
+				wantBText := map[string]string{"sms.body": cABSMS, "email.subject": cABSubject, "email.body": cABBody}
+				if diff := cmp.Diff(wantBText, gotB); diff != "" {
+					t.Fatalf("B delta concatenation mismatch (-want +got):\n%s", diff)
+				}
+				if includeEnglish {
+					gotBEN := map[string]string{
+						"sms.body": texts["b/en/sms.body"], "email.subject": texts["b/en/email.subject"], "email.body": texts["b/en/email.body"],
+					}
+					wantBEN := map[string]string{"sms.body": cABENSMS, "email.subject": cABENSubject, "email.body": cABENBody}
+					if diff := cmp.Diff(wantBEN, gotBEN); diff != "" {
+						t.Fatalf("B English delta concatenation mismatch (-want +got):\n%s", diff)
+					}
+				}
+				if diff := cmp.Diff(cOK().SMS.Body, texts["a/tr/sms.body"]); diff != "" {
+					t.Fatalf("A SMS delta concatenation mismatch (-want +got):\n%s", diff)
+				}
+				wantWC := &content.WorstCaseVariant{SMSRunes: 138, SubjectRunes: 42}
+				if includeEnglish {
+					wantWC.EN = &content.WorstCaseLang{SMSRunes: 139, SubjectRunes: 40}
+				}
+				if out.WorstCase == nil {
+					t.Fatalf("outcome WorstCase = nil")
+				}
+				if diff := cmp.Diff(wantWC, out.WorstCase.B); diff != "" {
+					t.Fatalf("outcome WorstCase.B mismatch (-want +got):\n%s", diff)
+				}
+				if out.WorstCase.SMSRunes != 160 || out.WorstCase.SubjectRunes != 42 {
+					t.Fatalf("outcome WorstCase A = %d/%d, want 160/42 (unchanged by B)", out.WorstCase.SMSRunes, out.WorstCase.SubjectRunes)
+				}
+			})
+		}
+	}
+}
+
+// REQ-ABT-02 C8
+// An error in variant B (a 161-char b.sms.body, variants_identical, an angle error) triggers the single
+// repair like an A error: the non-final invalid carries the b-prefixed / angles path, attempt 2
+// regenerates everything with the same IncludeVariantB, at most 2 attempts. A draft ending with
+// variants_identical or an angle error is storable. A model that leaves out b and angles together
+// returns valid content without B (not an error).
+func TestContentSession_VariantBErrorTriggersRepair(t *testing.T) {
+	t.Parallel()
+	good := abContent("Son gün {{first_name}}! %30 indirim bugün bitiyor.")
+	bad161 := abContent(strings.Repeat("b", 161))
+	same := abContent("")
+	same.B.SMS, same.B.Email = same.SMS, same.Email
+	longAngle := abContent("Son gün!")
+	longAngle.Angles.A = strings.Repeat("a", 61)
+	emptyAngle := abContent("Son gün!")
+	emptyAngle.Angles.B = " "
+	tests := []struct {
+		name     string
+		steps    []contentStep
+		valid    bool
+		storable bool
+		attempts int
+		content  content.Content
+		errPC    *pathCode // expected in the non-final invalid (and in the outcome when not valid)
+	}{
+		{name: "161-char b.sms.body then valid A/B content", steps: []contentStep{{raw: mustJSON(t, bad161)}, {raw: mustJSON(t, good)}}, valid: true, attempts: 2, content: good, errPC: &pathCode{"b.sms.body", "sms_too_long"}},
+		{name: "variants_identical then valid A/B content", steps: []contentStep{{raw: mustJSON(t, same)}, {raw: mustJSON(t, good)}}, valid: true, attempts: 2, content: good, errPC: &pathCode{"b", "variants_identical"}},
+		{name: "161-char b.sms.body twice is a storable draft", steps: []contentStep{{raw: mustJSON(t, bad161)}, {raw: mustJSON(t, bad161)}}, storable: true, attempts: 2, content: bad161, errPC: &pathCode{"b.sms.body", "sms_too_long"}},
+		{name: "variants_identical twice is a storable draft", steps: []contentStep{{raw: mustJSON(t, same)}, {raw: mustJSON(t, same)}}, storable: true, attempts: 2, content: same, errPC: &pathCode{"b", "variants_identical"}},
+		{name: "a 61-char angle twice is a storable draft", steps: []contentStep{{raw: mustJSON(t, longAngle)}, {raw: mustJSON(t, longAngle)}}, storable: true, attempts: 2, content: longAngle, errPC: &pathCode{"angles.a", "too_long"}},
+		{name: "an empty angle twice is a storable draft", steps: []contentStep{{raw: mustJSON(t, emptyAngle)}, {raw: mustJSON(t, emptyAngle)}}, storable: true, attempts: 2, content: emptyAngle, errPC: &pathCode{"angles.b", "required"}},
+		{name: "b and angles left out together is valid content without B", steps: []contentStep{{raw: mustJSON(t, cOK())}}, valid: true, attempts: 1, content: cOK()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			sc := &scriptedContentClient{steps: tc.steps}
+			req := contentRequest()
+			req.IncludeVariantB = true
+			out, rec, err := runSession(t, context.Background(), sc, req)
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			assertNoTerminal(t, rec)
+			if out.Valid != tc.valid || out.Storable != tc.storable || out.Attempts != tc.attempts {
+				t.Fatalf("outcome Valid/Storable/Attempts = %v/%v/%d, want %v/%v/%d (errors %+v)", out.Valid, out.Storable, out.Attempts, tc.valid, tc.storable, tc.attempts, out.Errors)
+			}
+			if diff := cmp.Diff(tc.content, out.Content); diff != "" {
+				t.Fatalf("outcome Content mismatch (-want +got):\n%s", diff)
+			}
+			reqs := sc.requests()
+			if len(reqs) != tc.attempts {
+				t.Fatalf("StreamContent calls = %d, want %d (at most one repair)", len(reqs), tc.attempts)
+			}
+			for i, r := range reqs {
+				if !r.IncludeVariantB {
+					t.Fatalf("request %d IncludeVariantB = false; the decision is made once and kept for the repair", i+1)
+				}
+			}
+			if tc.errPC == nil {
+				if len(rec.invalids) != 0 {
+					t.Fatalf("invalid events = %+v, want none", rec.invalids)
+				}
+				return
+			}
+			if len(rec.invalids) != 1 || !containsPathCode(projection(rec.invalids[0].Errors), *tc.errPC) {
+				t.Fatalf("non-final invalid events = %+v, want one with %+v", rec.invalids, *tc.errPC)
+			}
+			if reqs[1].Previous == nil || !containsPathCode(projection(reqs[1].Previous.Errors), *tc.errPC) {
+				t.Fatalf("repair feedback = %+v, want %+v", reqs[1].Previous, *tc.errPC)
+			}
+			if !tc.valid && !containsPathCode(projection(out.Errors), *tc.errPC) {
+				t.Fatalf("outcome errors = %+v, want %+v", projection(out.Errors), *tc.errPC)
+			}
+		})
+	}
+}
+
 func ip(n int) *int { return &n }
 
 // ---- scripted content client ----
@@ -823,6 +1060,12 @@ func (s *scriptedContentClient) StreamContent(ctx context.Context, req llm.Conte
 			parts := []llm.ContentChunk{{Path: "sms.body", Text: c.SMS.Body}, {Path: "email.subject", Text: c.Email.Subject}, {Path: "email.body", Text: c.Email.Body}}
 			if c.EN != nil { // REQ-LNG-02 C5: English chunks use the en.* paths, after the Turkish ones
 				parts = append(parts, llm.ContentChunk{Path: "en.sms.body", Text: c.EN.SMS.Body}, llm.ContentChunk{Path: "en.email.subject", Text: c.EN.Email.Subject}, llm.ContentChunk{Path: "en.email.body", Text: c.EN.Email.Body})
+			}
+			if c.B != nil { // REQ-ABT-02 C7: B chunks use the b.* paths, after every A chunk
+				parts = append(parts, llm.ContentChunk{Path: "b.sms.body", Text: c.B.SMS.Body}, llm.ContentChunk{Path: "b.email.subject", Text: c.B.Email.Subject}, llm.ContentChunk{Path: "b.email.body", Text: c.B.Email.Body})
+				if c.B.EN != nil {
+					parts = append(parts, llm.ContentChunk{Path: "b.en.sms.body", Text: c.B.EN.SMS.Body}, llm.ContentChunk{Path: "b.en.email.subject", Text: c.B.EN.Email.Subject}, llm.ContentChunk{Path: "b.en.email.body", Text: c.B.EN.Email.Body})
+				}
 			}
 			for _, p := range parts {
 				if p.Text != "" {

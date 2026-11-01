@@ -132,6 +132,8 @@ func trkCheckStatus(t *testing.T, where, data, id string) trkStatus {
 	if diff := cmp.Diff(sum, s.Counts); diff != "" {
 		t.Fatalf("%s counts != by_channel.sms + by_channel.email (-sum +counts):\n%s", where, diff)
 	}
+	// REQ-ABT-03 C7, C10: every status document carries by_variant: null, or a + b = by_channel.
+	abCheckByVariant(t, where, decodeObject(t, []byte(data)))
 	return s
 }
 
@@ -622,12 +624,13 @@ func TestE2E_TrackingUnknownCampaignIs404(t *testing.T) {
 }
 
 // trkStatusKeys is the key set of CampaignStatus named in REQ-TRK-01, plus scheduled_at, which the
-// status body always carries (REQ-SCH-01 C4).
-var trkStatusKeys = []string{"by_channel", "campaign_id", "completed_at", "counts", "scheduled_at", "sending_started_at", "state", "updated_at"}
+// status body always carries (REQ-SCH-01 C4), and by_variant (REQ-ABT-03 C10, null without A/B).
+var trkStatusKeys = []string{"by_channel", "by_variant", "campaign_id", "completed_at", "counts", "scheduled_at", "sending_started_at", "state", "updated_at"}
 
-// REQ-TRK-01
+// REQ-TRK-01, REQ-ABT-03 C7, C10
 // GET status of a campaign without deliveries (draft, audience_ready, approved): 200 CampaignStatus
-// with exactly the documented keys, every counter 0, both channels present, null times.
+// with exactly the documented keys (by_variant included), every counter 0, both channels present, null
+// times, by_variant null (no A/B version approved).
 func TestE2E_StatusBeforeSend(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -660,6 +663,10 @@ func TestE2E_StatusBeforeSend(t *testing.T) {
 			// REQ-SCH-01 C4: draft…approved carry scheduled_at = null.
 			if raw["scheduled_at"] != nil {
 				t.Fatalf("GET status scheduled_at = %v, want null for %s", raw["scheduled_at"], tc.state)
+			}
+			// REQ-ABT-03 C7, C10: without an approved A/B version by_variant is present and null.
+			if raw["by_variant"] != nil {
+				t.Fatalf("GET status by_variant = %v, want null for %s", raw["by_variant"], tc.state)
 			}
 		})
 	}

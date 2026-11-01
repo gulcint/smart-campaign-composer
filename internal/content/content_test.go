@@ -1,9 +1,11 @@
 package content_test
 
 import (
+	"encoding/json"
 	"errors"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -554,6 +556,7 @@ func TestRenderContentAndCheckRendered(t *testing.T) {
 		EmailSubject: cntOKSubject,
 		EmailText:    strings.ReplaceAll(strings.ReplaceAll(cntOKBody, "{{first_name}}", "Değerli müşterimiz"), "{{city}}", "İstanbul"),
 		Language:     "tr", // REQ-LNG-03 C3: a recipient without a language gets the Turkish main text
+		Variant:      "a",  // REQ-ABT-03 C8: content without b always renders variant A
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("RenderContent() mismatch (-want +got):\n%s", diff)
@@ -861,18 +864,19 @@ func TestRenderContent_Language(t *testing.T) {
 		r    content.Recipient
 		want content.Rendered
 	}{
+		// REQ-ABT-03 C8: content without b renders variant A, so every row carries Variant "a".
 		{name: "en recipient with an English version gets English", c: bilingual, r: content.Recipient{FirstName: " Ayşe ", City: "İzmir", Language: "en"},
-			want: content.Rendered{SMSText: fill(enSMS, "Ayşe", "İzmir"), EmailSubject: fill(enSubj, "Ayşe", "İzmir"), EmailText: fill(enBody, "Ayşe", "İzmir"), Language: "en"}},
+			want: content.Rendered{SMSText: fill(enSMS, "Ayşe", "İzmir"), EmailSubject: fill(enSubj, "Ayşe", "İzmir"), EmailText: fill(enBody, "Ayşe", "İzmir"), Language: "en", Variant: "a"}},
 		{name: "en recipient with an empty first name gets Dear customer", c: bilingual, r: content.Recipient{City: "Bursa", Language: "en"},
-			want: content.Rendered{SMSText: fill(enSMS, "Dear customer", "Bursa"), EmailSubject: fill(enSubj, "Dear customer", "Bursa"), EmailText: fill(enBody, "Dear customer", "Bursa"), Language: "en"}},
+			want: content.Rendered{SMSText: fill(enSMS, "Dear customer", "Bursa"), EmailSubject: fill(enSubj, "Dear customer", "Bursa"), EmailText: fill(enBody, "Dear customer", "Bursa"), Language: "en", Variant: "a"}},
 		{name: "tr recipient gets Turkish", c: bilingual, r: content.Recipient{FirstName: "Ayşe", City: "İzmir", Language: "tr"},
-			want: content.Rendered{SMSText: fill(cntOKSMS, "Ayşe", "İzmir"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Ayşe", "İzmir"), Language: "tr"}},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Ayşe", "İzmir"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Ayşe", "İzmir"), Language: "tr", Variant: "a"}},
 		{name: "unset language gets Turkish", c: bilingual, r: content.Recipient{FirstName: "Ayşe", City: "İzmir"},
-			want: content.Rendered{SMSText: fill(cntOKSMS, "Ayşe", "İzmir"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Ayşe", "İzmir"), Language: "tr"}},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Ayşe", "İzmir"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Ayşe", "İzmir"), Language: "tr", Variant: "a"}},
 		{name: "en recipient without an English version falls back to Turkish", c: cntOK(), r: content.Recipient{FirstName: "", City: "İzmir", Language: "en"},
-			want: content.Rendered{SMSText: fill(cntOKSMS, "Değerli müşterimiz", "İzmir"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Değerli müşterimiz", "İzmir"), Language: "tr", Fallback: true}},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Değerli müşterimiz", "İzmir"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Değerli müşterimiz", "İzmir"), Language: "tr", Fallback: true, Variant: "a"}},
 		{name: "tr recipient of a Turkish-only version is no fallback", c: cntOK(), r: content.Recipient{FirstName: "Ali", City: "Konya", Language: "tr"},
-			want: content.Rendered{SMSText: fill(cntOKSMS, "Ali", "Konya"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Ali", "Konya"), Language: "tr"}},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Ali", "Konya"), EmailSubject: cntOKSubject, EmailText: fill(cntOKBody, "Ali", "Konya"), Language: "tr", Variant: "a"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -932,6 +936,543 @@ func TestRenderEmailHTMLLang(t *testing.T) {
 			t.Fatalf("RenderEmailHTML() lacks <html lang=\"tr\">: %s", out)
 		}
 	})
+}
+
+// ---- A/B variants (P9) ----
+
+// Variant B and angle texts of the A/B tests: every B text differs from the CNT_OK text of variant A.
+const (
+	abBSMS     = "Son gün {{first_name}}! %30 indirim bugün bitiyor."
+	abBSubject = "Son gün: %30 indirim"
+	abBBody    = "Merhaba {{first_name}},\n\nİndirim bugün bitiyor."
+	abAngleA   = "İndirim oranı öne çıkar"
+	abAngleB   = "Aciliyet: indirim bugün bitiyor"
+)
+
+// abContent is CNT_OK (variant A) plus a valid variant B and both angles (REQ-ABT-01 C1 shape).
+func abContent() content.Content {
+	c := cntOK()
+	c.B = &content.Variant{SMS: content.SMS{Body: abBSMS}, Email: content.Email{Subject: abBSubject, Body: abBBody}}
+	c.Angles = &content.Angles{A: abAngleA, B: abAngleB}
+	return c
+}
+
+// abWith is abContent changed by f.
+func abWith(f func(c *content.Content)) content.Content {
+	c := abContent()
+	f(&c)
+	return c
+}
+
+// abBilingual is abContent with an English version of A (en) and of B (b.en).
+func abBilingual() content.Content {
+	c := abContent()
+	c.EN = &content.English{SMS: content.SMS{Body: "Hi {{first_name}}, your cart is waiting."}, Email: content.Email{Subject: "Your cart is waiting", Body: "Hi {{first_name}},\n\nYour cart is waiting."}}
+	c.B.EN = &content.English{SMS: content.SMS{Body: "Last day {{first_name}}! 30% off ends today."}, Email: content.Email{Subject: "Last day: 30% off", Body: "Hi {{first_name}},\n\nThe discount ends today."}}
+	return c
+}
+
+// JSON fragments of the A/B structure tests (completed after trDoc).
+const (
+	abBDoc      = `"b":{"sms":{"body":"x"},"email":{"subject":"y","body":"z"}}`
+	abBENDoc    = `"b":{"sms":{"body":"x"},"email":{"subject":"y","body":"z"},"en":{"sms":{"body":"e"},"email":{"subject":"f","body":"g"}}}`
+	abENDoc     = `"en":{"sms":{"body":"e"},"email":{"subject":"f","body":"g"}}`
+	abAnglesDoc = `"angles":{"a":"A","b":"B"}`
+)
+
+// REQ-ABT-01 C10
+// The variant constants and the angle limit.
+func TestVariantConstants(t *testing.T) {
+	t.Parallel()
+	if diff := cmp.Diff([]string{"a", "b"}, []string{content.VariantA, content.VariantB}); diff != "" {
+		t.Fatalf("variant constants mismatch (-want +got):\n%s", diff)
+	}
+	if content.AngleMaxRunes != 60 {
+		t.Fatalf("AngleMaxRunes = %d, want 60", content.AngleMaxRunes)
+	}
+}
+
+// REQ-ABT-01 C1, C2
+// Parse checks the structure of the optional b and angles blocks: they come together, have the strict
+// shape of the top level, and en / b.en come together. Every structural error is schema_violation at the
+// key's path; Parse returns ALL of them (none hides another) in the order: unknown keys first, then the
+// known keys in schema order (sms, email, en, b, angles), then the pairing rules (b ⇔ angles, en ⇔ b.en).
+func TestParse_VariantStructure(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		raw   string
+		paths []string
+		exact bool // paths is the whole list in order; otherwise each path must be present
+	}{
+		{name: "b without angles is reported at angles", raw: trDoc + `,` + abBDoc + `}`, paths: []string{"angles"}, exact: true},
+		{name: "angles without b is reported at b", raw: trDoc + `,` + abAnglesDoc + `}`, paths: []string{"b"}, exact: true},
+		{name: "b null is reported at b", raw: trDoc + `,"b":null,` + abAnglesDoc + `}`, paths: []string{"b"}},
+		{name: "angles null is reported at angles", raw: trDoc + `,` + abBDoc + `,"angles":null}`, paths: []string{"angles"}},
+		{name: "b empty object is reported at b.sms", raw: trDoc + `,"b":{},` + abAnglesDoc + `}`, paths: []string{"b.sms"}},
+		{name: "missing b.sms is reported at b.sms", raw: trDoc + `,"b":{"email":{"subject":"y","body":"z"}},` + abAnglesDoc + `}`, paths: []string{"b.sms"}, exact: true},
+		{name: "missing b.email.subject is reported at b.email.subject", raw: trDoc + `,"b":{"sms":{"body":"x"},"email":{"body":"z"}},` + abAnglesDoc + `}`, paths: []string{"b.email.subject"}, exact: true},
+		{name: "html inside b is reported at b.html", raw: trDoc + `,"b":{"sms":{"body":"x"},"email":{"subject":"y","body":"z"},"html":"<b>x</b>"},` + abAnglesDoc + `}`, paths: []string{"b.html"}, exact: true},
+		{name: "a third angle is reported at angles.c", raw: trDoc + `,` + abBDoc + `,"angles":{"a":"A","b":"B","c":"C"}}`, paths: []string{"angles.c"}, exact: true},
+		{name: "missing angles.a is reported at angles.a", raw: trDoc + `,` + abBDoc + `,"angles":{"b":"B"}}`, paths: []string{"angles.a"}, exact: true},
+		{name: "en without b.en is reported at b.en", raw: trDoc + `,` + abENDoc + `,` + abBDoc + `,` + abAnglesDoc + `}`, paths: []string{"b.en"}, exact: true},
+		{name: "b.en without en is reported at b.en", raw: trDoc + `,` + abBENDoc + `,` + abAnglesDoc + `}`, paths: []string{"b.en"}, exact: true},
+		{name: "the criterion's example reports b.email.body then angles",
+			raw:   `{"sms":{"body":"x"},"email":{"subject":"y","body":"z"},"b":{"sms":{"body":"x"},"email":{"subject":"y"}}}`,
+			paths: []string{"b.email.body", "angles"}, exact: true},
+		{name: "unknown keys first, then known keys in schema order, then the pairing rules",
+			raw:   `{"x":1,"sms":{"body":"a"},"email":{"subject":"b","body":"c"},` + abENDoc + `,"b":{"sms":{"body":"x"},"email":{"body":"z"}},"angles":{"a":"A","b":"B","c":"C"}}`,
+			paths: []string{"x", "b.email.subject", "angles.c", "b.en"}, exact: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := content.Parse([]byte(tc.raw))
+			if !errors.Is(err, validation.ErrSchemaViolation) {
+				t.Fatalf("Parse() error = %v, want %v", err, validation.ErrSchemaViolation)
+			}
+			fs := fieldsOf(t, err)
+			var got []string
+			for _, f := range fs {
+				if f.Code != "schema_violation" {
+					t.Fatalf("Parse reported %+v; every structural error is schema_violation", f)
+				}
+				got = append(got, f.Path)
+			}
+			if tc.exact {
+				if diff := cmp.Diff(tc.paths, got); diff != "" {
+					t.Fatalf("schema_violation paths mismatch (-want +got):\n%s", diff)
+				}
+				return
+			}
+			for _, p := range tc.paths {
+				if !slices.Contains(got, p) {
+					t.Fatalf("schema_violation paths = %v, want %q among them", got, p)
+				}
+			}
+		})
+	}
+
+	t.Run("a document with b, b.en and angles decodes into B and Angles", func(t *testing.T) {
+		t.Parallel()
+		got, err := content.Parse([]byte(trDoc + `,` + abENDoc + `,` + abBENDoc + `,` + abAnglesDoc + `}`))
+		if err != nil {
+			t.Fatalf("Parse() error = %v", err)
+		}
+		en := &content.English{SMS: content.SMS{Body: "e"}, Email: content.Email{Subject: "f", Body: "g"}}
+		want := content.Content{
+			SMS: content.SMS{Body: "a"}, Email: content.Email{Subject: "b", Body: "c"}, EN: en,
+			B:      &content.Variant{SMS: content.SMS{Body: "x"}, Email: content.Email{Subject: "y", Body: "z"}, EN: en},
+			Angles: &content.Angles{A: "A", B: "B"},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("Parse() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("without b and angles B and Angles stay nil", func(t *testing.T) {
+		t.Parallel()
+		got, err := content.Parse([]byte(trDoc + `}`))
+		if err != nil {
+			t.Fatalf("Parse() error = %v", err)
+		}
+		if got.B != nil || got.Angles != nil {
+			t.Fatalf("Parse() B/Angles = %+v/%+v, want nil/nil", got.B, got.Angles)
+		}
+	})
+
+	t.Run("empty b strings and angles are structurally valid", func(t *testing.T) {
+		t.Parallel()
+		got, err := content.Parse([]byte(trDoc + `,"b":{"sms":{"body":""},"email":{"subject":"","body":""}},"angles":{"a":"","b":""}}`))
+		if err != nil {
+			t.Fatalf("Parse() error = %v, want nil (empty values are Validate's required)", err)
+		}
+		if got.B == nil || got.Angles == nil {
+			t.Fatalf("Parse() B/Angles = %+v/%+v, want both set", got.B, got.Angles)
+		}
+	})
+}
+
+// REQ-ABT-01 C3, C4, C5, C6
+// Validate checks variant B with the rules of variant A at the paths b.sms.body, b.email.subject,
+// b.email.body, b.en.sms.body, b.en.email.subject, b.en.email.body (same codes, limits, priority,
+// substitution with the campaign's single set of longest values); angles are plain labels (required,
+// too_long over 60 runes, no variable check); B equal to A in all three Turkish fields (after NFC) is
+// variants_identical at path b, reported in addition to and independently of the field errors. Error
+// order: A fields, en fields, b fields, b.en fields, b, angles.a, angles.b.
+func TestValidate_VariantB(t *testing.T) {
+	t.Parallel()
+	identical := func(c *content.Content) { c.B.SMS, c.B.Email = c.SMS, c.Email }
+	tests := []struct {
+		name     string
+		c        content.Content
+		want     []fieldWant // nil => valid
+		lengths  bool        // compare limit / actual too (nil means "absent")
+		sentinel error
+	}{
+		{name: "valid A/B content is accepted", c: abContent()},
+		{name: "valid bilingual A/B content is accepted", c: abBilingual()},
+		{name: "160-char b.sms.body is accepted", c: abWith(func(c *content.Content) { c.B.SMS.Body = strings.Repeat("b", 160) })},
+		{name: "161-char b.sms.body is rejected", c: abWith(func(c *content.Content) { c.B.SMS.Body = strings.Repeat("b", 161) }),
+			want: []fieldWant{{"b.sms.body", "sms_too_long", ip(160), ip(161)}}, lengths: true, sentinel: content.ErrSMSTooLong},
+		{name: "b first_name placeholder at 160 after substitution", c: abWith(func(c *content.Content) { c.B.SMS.Body = "{{first_name}}" + strings.Repeat("b", 110) })},
+		{name: "b first_name placeholder one over after substitution", c: abWith(func(c *content.Content) { c.B.SMS.Body = "{{first_name}}" + strings.Repeat("b", 111) }),
+			want: []fieldWant{{"b.sms.body", "sms_too_long", ip(160), ip(161)}}, lengths: true, sentinel: content.ErrSMSTooLong},
+		{name: "80-char b.email.subject is accepted", c: abWith(func(c *content.Content) { c.B.Email.Subject = strings.Repeat("ğ", 80) })},
+		{name: "81-char b.email.subject is rejected", c: abWith(func(c *content.Content) { c.B.Email.Subject = strings.Repeat("ğ", 81) }),
+			want: []fieldWant{{"b.email.subject", "subject_too_long", ip(80), ip(81)}}, lengths: true, sentinel: content.ErrSubjectTooLong},
+		{name: "5001-char b.email.body is rejected", c: abWith(func(c *content.Content) { c.B.Email.Body = strings.Repeat("ü", 5001) }),
+			want: []fieldWant{{"b.email.body", "email_body_too_long", ip(5000), ip(5001)}}, lengths: true, sentinel: content.ErrEmailBodyTooLong},
+		{name: "empty b.sms.body is required", c: abWith(func(c *content.Content) { c.B.SMS.Body = "" }),
+			want: []fieldWant{{Path: "b.sms.body", Code: "required"}}, sentinel: validation.ErrRequired},
+		{name: "whitespace-only b.email.subject is required", c: abWith(func(c *content.Content) { c.B.Email.Subject = " \t " }),
+			want: []fieldWant{{Path: "b.email.subject", Code: "required"}}, sentinel: validation.ErrRequired},
+		{name: "unknown variable in b.sms.body", c: abWith(func(c *content.Content) { c.B.SMS.Body = "şifren {{password}}" }),
+			want: []fieldWant{{Path: "b.sms.body", Code: "unknown_variable"}}, sentinel: content.ErrUnknownVariable},
+		{name: "malformed variable in b.email.body", c: abWith(func(c *content.Content) { c.B.Email.Body = "Merhaba {{first_name" }),
+			want: []fieldWant{{Path: "b.email.body", Code: "malformed_variable"}}, sentinel: content.ErrMalformedVariable},
+		{name: "unknown variable in a 200-char b.sms.body reports only unknown_variable", c: abWith(func(c *content.Content) { c.B.SMS.Body = "{{password}}" + strings.Repeat("a", 200) }),
+			want: []fieldWant{{Path: "b.sms.body", Code: "unknown_variable"}}, sentinel: content.ErrUnknownVariable},
+		{name: "161-char b.en.sms.body is rejected", c: func() content.Content { c := abBilingual(); c.B.EN.SMS.Body = strings.Repeat("e", 161); return c }(),
+			want: []fieldWant{{"b.en.sms.body", "sms_too_long", ip(160), ip(161)}}, lengths: true, sentinel: content.ErrSMSTooLong},
+		{name: "81-char b.en.email.subject is rejected", c: func() content.Content { c := abBilingual(); c.B.EN.Email.Subject = strings.Repeat("s", 81); return c }(),
+			want: []fieldWant{{"b.en.email.subject", "subject_too_long", ip(80), ip(81)}}, lengths: true, sentinel: content.ErrSubjectTooLong},
+		{name: "empty b.en.email.body is required", c: func() content.Content { c := abBilingual(); c.B.EN.Email.Body = ""; return c }(),
+			want: []fieldWant{{Path: "b.en.email.body", Code: "required"}}, sentinel: validation.ErrRequired},
+		// Angles (C4).
+		{name: "60-char angle is accepted", c: abWith(func(c *content.Content) { c.Angles.B = strings.Repeat("a", 60) })},
+		{name: "60 Turkish letters angle is accepted", c: abWith(func(c *content.Content) { c.Angles.A = strings.Repeat("ş", 60) })},
+		{name: "61-char angles.a is too_long", c: abWith(func(c *content.Content) { c.Angles.A = strings.Repeat("a", 61) }),
+			want: []fieldWant{{"angles.a", "too_long", ip(60), ip(61)}}, lengths: true},
+		{name: "61-char angles.b is too_long", c: abWith(func(c *content.Content) { c.Angles.B = strings.Repeat("ç", 61) }),
+			want: []fieldWant{{"angles.b", "too_long", ip(60), ip(61)}}, lengths: true},
+		{name: "empty angles.a is required", c: abWith(func(c *content.Content) { c.Angles.A = "" }),
+			want: []fieldWant{{Path: "angles.a", Code: "required"}}, sentinel: validation.ErrRequired},
+		{name: "whitespace-only angles.b is required", c: abWith(func(c *content.Content) { c.Angles.B = "   " }),
+			want: []fieldWant{{Path: "angles.b", Code: "required"}}, sentinel: validation.ErrRequired},
+		{name: "an angle is not a template: variables are not checked", c: abWith(func(c *content.Content) { c.Angles.A = "{{password}} ve {{first_name" })},
+		// Difference check (C5).
+		{name: "B equal to A in all three fields is variants_identical at b", c: abWith(identical),
+			want: []fieldWant{{Path: "b", Code: "variants_identical"}}, lengths: true, sentinel: content.ErrVariantsIdentical},
+		{name: "B equal to A after NFC is variants_identical", c: abWith(func(c *content.Content) {
+			identical(c)
+			c.B.SMS.Body = strings.ReplaceAll(cntOKSMS, "ü", "ü")
+		}), want: []fieldWant{{Path: "b", Code: "variants_identical"}}, lengths: true, sentinel: content.ErrVariantsIdentical},
+		{name: "one differing field is enough", c: abWith(func(c *content.Content) {
+			identical(c)
+			c.B.Email.Body = "Merhaba {{first_name}}, farklı gövde."
+		})},
+		{name: "en texts do not enter the difference check", c: func() content.Content {
+			c := abBilingual()
+			identical(&c)
+			return c
+		}(), want: []fieldWant{{Path: "b", Code: "variants_identical"}}, lengths: true, sentinel: content.ErrVariantsIdentical},
+		{name: "identical B with an invalid A field reports both field errors and variants_identical", c: abWith(func(c *content.Content) {
+			c.SMS.Body = cntSMS161
+			identical(c)
+		}), want: []fieldWant{
+			{"sms.body", "sms_too_long", ip(160), ip(161)},
+			{"b.sms.body", "sms_too_long", ip(160), ip(161)},
+			{Path: "b", Code: "variants_identical"},
+		}, lengths: true, sentinel: content.ErrVariantsIdentical},
+		// Order (C6).
+		{name: "errors come in the order A, en, b, b.en, b, angles.a, angles.b", c: func() content.Content {
+			c := abBilingual()
+			c.SMS.Body = cntSMS161
+			c.EN.SMS.Body = strings.Repeat("e", 161)
+			identical(&c)
+			c.B.EN.Email.Body = ""
+			c.Angles = &content.Angles{A: "", B: strings.Repeat("a", 61)}
+			return c
+		}(), want: []fieldWant{
+			{Path: "sms.body", Code: "sms_too_long"}, {Path: "en.sms.body", Code: "sms_too_long"},
+			{Path: "b.sms.body", Code: "sms_too_long"}, {Path: "b.en.email.body", Code: "required"},
+			{Path: "b", Code: "variants_identical"}, {Path: "angles.a", Code: "required"}, {Path: "angles.b", Code: "too_long"},
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := content.Validate(tc.c, exampleLongest)
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if tc.sentinel != nil && !errors.Is(err, tc.sentinel) {
+				t.Fatalf("Validate() error = %v, want %v", err, tc.sentinel)
+			}
+			if diff := cmp.Diff(tc.want, project(fieldsOf(t, err), tc.lengths)); diff != "" {
+				t.Fatalf("field errors mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// REQ-ABT-01 C7
+// MeasureWorstCase measures every variant × language version with the SAME longest values: A in the
+// existing fields, B in WorstCase.B and b.en in WorstCase.B.EN; without b there is no B.
+func TestMeasureWorstCase_VariantB(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		c    content.Content
+		l    content.Longest
+		want content.WorstCase
+		err  error
+	}{
+		{name: "B is measured with the same longest values", c: abWith(func(c *content.Content) {
+			c.B.SMS.Body = "{{first_name}}" + strings.Repeat("b", 100)
+			c.B.Email.Subject = "{{city}} için son gün"
+		}), l: exampleLongest, want: content.WorstCase{SMSRunes: 160, SubjectRunes: 42, B: &content.WorstCaseVariant{SMSRunes: 150, SubjectRunes: 21}}},
+		{name: "over-limit B is still measured", c: abWith(func(c *content.Content) { c.B.SMS.Body = "{{first_name}}" + strings.Repeat("b", 111) }), l: exampleLongest,
+			want: content.WorstCase{SMSRunes: 160, SubjectRunes: 42, B: &content.WorstCaseVariant{SMSRunes: 161, SubjectRunes: 20}}},
+		{name: "b.en is measured in B.EN, en in EN", c: func() content.Content {
+			c := abBilingual()
+			c.EN.SMS.Body, c.EN.Email.Subject = "Hi {{first_name}}", "Subject"
+			c.B.EN.SMS.Body, c.B.EN.Email.Subject = "{{first_name}}"+strings.Repeat("e", 10), "{{last_name}} x"
+			return c
+		}(), l: exampleLongest, want: content.WorstCase{SMSRunes: 160, SubjectRunes: 42,
+			EN: &content.WorstCaseLang{SMSRunes: 53, SubjectRunes: 7},
+			B:  &content.WorstCaseVariant{SMSRunes: 86, SubjectRunes: 20, EN: &content.WorstCaseLang{SMSRunes: 60, SubjectRunes: 10}}}},
+		{name: "the empty-audience fallback applies to B too", c: abWith(func(c *content.Content) { c.B.SMS.Body = "{{first_name}}" }), l: emptyLongest,
+			want: content.WorstCase{SMSRunes: 128, SubjectRunes: 42, B: &content.WorstCaseVariant{SMSRunes: 18, SubjectRunes: 20}}},
+		{name: "without b there is no B", c: cntOK(), l: exampleLongest, want: content.WorstCase{SMSRunes: 160, SubjectRunes: 42}},
+		{name: "malformed variable in b.sms.body", c: abWith(func(c *content.Content) { c.B.SMS.Body = "{{first_name" }), l: exampleLongest, err: content.ErrMalformedVariable},
+		{name: "unknown variable in b.en.email.subject", c: func() content.Content { c := abBilingual(); c.B.EN.Email.Subject = "{{password}}"; return c }(), l: exampleLongest, err: content.ErrUnknownVariable},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := content.MeasureWorstCase(tc.c, tc.l)
+			if tc.err != nil {
+				if !errors.Is(err, tc.err) {
+					t.Fatalf("MeasureWorstCase() error = %v, want %v", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("MeasureWorstCase() error = %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatalf("MeasureWorstCase() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// REQ-ABT-01 C9
+// The approval re-check covers every variant × language version: b.sms.body / b.email.subject /
+// b.en.sms.body / b.en.email.subject with the *_worst_case codes and limits 160 / 80, after the A
+// paths; email bodies are not re-checked.
+func TestCheckWorstCase_VariantB(t *testing.T) {
+	t.Parallel()
+	longer := content.Longest{FirstName: 51, LastName: 8, City: 8}
+	// abNoVar is A/B content whose A and en texts have no variables, so only B decides.
+	abNoVar := func(f func(c *content.Content)) content.Content {
+		c := abBilingual()
+		c.SMS.Body, c.Email.Subject = trNoVarSMS, cntOKSubject
+		c.EN.SMS.Body, c.EN.Email.Subject = "Hi, your cart is waiting.", "Your cart"
+		c.B.SMS.Body, c.B.Email.Subject = "Son gün!", "Son gün"
+		c.B.EN.SMS.Body, c.B.EN.Email.Subject = "Last day!", "Last day"
+		f(&c)
+		return c
+	}
+	tests := []struct {
+		name      string
+		c         content.Content
+		l         content.Longest
+		want      []fieldWant
+		sentinels []error
+	}{
+		{name: "B at the boundary passes", c: abNoVar(func(c *content.Content) { c.B.SMS.Body = "{{first_name}}" + strings.Repeat("b", 110) }), l: exampleLongest},
+		{name: "a longer first name at approval fails b.sms.body", c: abNoVar(func(c *content.Content) { c.B.SMS.Body = "{{first_name}}" + strings.Repeat("b", 110) }), l: longer,
+			want:      []fieldWant{{"b.sms.body", "sms_too_long_worst_case", ip(160), ip(161)}},
+			sentinels: []error{content.ErrSMSTooLong, content.ErrWorstCaseTooLong}},
+		{name: "a longer last name at approval fails b.email.subject", c: abNoVar(func(c *content.Content) { c.B.Email.Subject = "{{last_name}}" + strings.Repeat("b", 72) }), l: content.Longest{FirstName: 18, LastName: 9},
+			want:      []fieldWant{{"b.email.subject", "subject_too_long_worst_case", ip(80), ip(81)}},
+			sentinels: []error{content.ErrSubjectTooLong, content.ErrWorstCaseTooLong}},
+		{name: "a longer first name at approval fails b.en.sms.body", c: abNoVar(func(c *content.Content) { c.B.EN.SMS.Body = "{{first_name}}" + strings.Repeat("e", 110) }), l: longer,
+			want:      []fieldWant{{"b.en.sms.body", "sms_too_long_worst_case", ip(160), ip(161)}},
+			sentinels: []error{content.ErrSMSTooLong, content.ErrWorstCaseTooLong}},
+		{name: "a longer city at approval fails b.en.email.subject", c: abNoVar(func(c *content.Content) { c.B.EN.Email.Subject = "{{city}}" + strings.Repeat("e", 72) }), l: content.Longest{FirstName: 18, City: 9},
+			want:      []fieldWant{{"b.en.email.subject", "subject_too_long_worst_case", ip(80), ip(81)}},
+			sentinels: []error{content.ErrSubjectTooLong, content.ErrWorstCaseTooLong}},
+		{name: "A failures come before B failures", c: abNoVar(func(c *content.Content) {
+			c.SMS.Body = cntOKSMS
+			c.B.SMS.Body = "{{first_name}}" + strings.Repeat("b", 110)
+		}), l: longer,
+			want: []fieldWant{
+				{"sms.body", "sms_too_long_worst_case", ip(160), ip(161)},
+				{"b.sms.body", "sms_too_long_worst_case", ip(160), ip(161)},
+			},
+			sentinels: []error{content.ErrSMSTooLong, content.ErrWorstCaseTooLong}},
+		{name: "b.email.body over 5000 is not re-checked at approval", c: abNoVar(func(c *content.Content) { c.B.Email.Body = "{{city}}" + strings.Repeat("c", 4995) }), l: content.Longest{FirstName: 18, City: 10}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := content.CheckWorstCase(tc.c, tc.l)
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("CheckWorstCase() error = %v, want nil", err)
+				}
+				return
+			}
+			for _, s := range tc.sentinels {
+				if !errors.Is(err, s) {
+					t.Fatalf("CheckWorstCase() error = %v, want it to match %v", err, s)
+				}
+			}
+			if diff := cmp.Diff(tc.want, project(fieldsOf(t, err), true)); diff != "" {
+				t.Fatalf("field errors mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// REQ-ABT-01 C1, C7, C10
+// JSON of the Go types: Content writes b and angles only when set (b.en only when B.EN is set; angles
+// keys a and b); WorstCase writes b = {sms_runes, subject_runes} only when B is set, and b.en only when
+// B.EN is set. Without b and angles everything is as in P8.
+func TestVariantJSONShape(t *testing.T) {
+	t.Parallel()
+	enWC := &content.WorstCaseLang{SMSRunes: 9, SubjectRunes: 8}
+	tests := []struct {
+		name string
+		v    any
+		want string
+	}{
+		{name: "content without b and angles", v: cntOK(),
+			want: `{"sms":{"body":"` + jsonEsc(cntOKSMS) + `"},"email":{"subject":"` + jsonEsc(cntOKSubject) + `","body":"` + jsonEsc(cntOKBody) + `"}}`},
+		{name: "content with b and angles", v: content.Content{
+			SMS: content.SMS{Body: "a"}, Email: content.Email{Subject: "b", Body: "c"},
+			B:      &content.Variant{SMS: content.SMS{Body: "x"}, Email: content.Email{Subject: "y", Body: "z"}},
+			Angles: &content.Angles{A: "p", B: "q"},
+		}, want: `{"sms":{"body":"a"},"email":{"subject":"b","body":"c"},"b":{"sms":{"body":"x"},"email":{"subject":"y","body":"z"}},"angles":{"a":"p","b":"q"}}`},
+		{name: "content with b.en", v: content.Content{
+			SMS: content.SMS{Body: "a"}, Email: content.Email{Subject: "b", Body: "c"},
+			EN:     &content.English{SMS: content.SMS{Body: "e"}, Email: content.Email{Subject: "f", Body: "g"}},
+			B:      &content.Variant{SMS: content.SMS{Body: "x"}, Email: content.Email{Subject: "y", Body: "z"}, EN: &content.English{SMS: content.SMS{Body: "h"}, Email: content.Email{Subject: "i", Body: "j"}}},
+			Angles: &content.Angles{A: "p", B: "q"},
+		}, want: `{"sms":{"body":"a"},"email":{"subject":"b","body":"c"},"en":{"sms":{"body":"e"},"email":{"subject":"f","body":"g"}},"b":{"sms":{"body":"x"},"email":{"subject":"y","body":"z"},"en":{"sms":{"body":"h"},"email":{"subject":"i","body":"j"}}},"angles":{"a":"p","b":"q"}}`},
+		{name: "worst case without B", v: content.WorstCase{SMSRunes: 1, SubjectRunes: 2}, want: `{"sms_runes":1,"subject_runes":2}`},
+		{name: "worst case with B", v: content.WorstCase{SMSRunes: 1, SubjectRunes: 2, B: &content.WorstCaseVariant{SMSRunes: 3, SubjectRunes: 4}},
+			want: `{"sms_runes":1,"subject_runes":2,"b":{"sms_runes":3,"subject_runes":4}}`},
+		{name: "worst case with B and B.EN", v: content.WorstCase{SMSRunes: 1, SubjectRunes: 2, EN: enWC, B: &content.WorstCaseVariant{SMSRunes: 3, SubjectRunes: 4, EN: enWC}},
+			want: `{"sms_runes":1,"subject_runes":2,"en":{"sms_runes":9,"subject_runes":8},"b":{"sms_runes":3,"subject_runes":4,"en":{"sms_runes":9,"subject_runes":8}}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b, err := json.Marshal(tc.v)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var got, want any
+			if err := json.Unmarshal(b, &got); err != nil {
+				t.Fatalf("decode %s: %v", b, err)
+			}
+			if err := json.Unmarshal([]byte(tc.want), &want); err != nil {
+				t.Fatalf("test setup: %v", err)
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Fatalf("JSON mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// REQ-ABT-03 C1, C2, C3
+// VariantFor derives the variant from the first byte of SHA-256(campaign UUID bytes ‖ customer UUID
+// bytes): < 128 => a, otherwise b. The ten test vectors of the criterion; upper-case UUIDs give the
+// same result; a malformed UUID is an error.
+func TestVariantFor(t *testing.T) {
+	t.Parallel()
+	const c1, c2 = "00000000-0000-4000-8000-000000000001", "3f1c2a4e-0b8d-4c55-9e1a-7d2b6c8f9a01"
+	cust := func(n int) string { return "00000000-0000-4000-8000-00000000000" + strconv.Itoa(n) } // n is 1..8
+	tests := []struct {
+		campaign, customer, want string
+	}{
+		{c1, cust(1), "a"}, {c1, cust(2), "a"}, {c1, cust(3), "a"}, {c1, cust(4), "b"},
+		{c1, cust(5), "a"}, {c1, cust(6), "b"}, {c1, cust(7), "b"}, {c1, cust(8), "b"},
+		{c2, cust(4), "a"}, {c2, cust(5), "b"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.campaign+" "+tc.customer, func(t *testing.T) {
+			t.Parallel()
+			got, err := content.VariantFor(tc.campaign, tc.customer)
+			if err != nil || got != tc.want {
+				t.Fatalf("VariantFor(%s, %s) = %q, %v; want %q, nil", tc.campaign, tc.customer, got, err, tc.want)
+			}
+			upper, err := content.VariantFor(strings.ToUpper(tc.campaign), strings.ToUpper(tc.customer))
+			if err != nil || upper != tc.want {
+				t.Fatalf("VariantFor(upper case) = %q, %v; want %q, nil", upper, err, tc.want)
+			}
+		})
+	}
+	for _, bad := range [][2]string{{"not-a-uuid", cust(1)}, {c1, ""}, {c1, cust(1) + "0"}, {"", ""}} {
+		t.Run("malformed "+bad[0]+" "+bad[1], func(t *testing.T) {
+			t.Parallel()
+			if _, err := content.VariantFor(bad[0], bad[1]); err == nil {
+				t.Fatalf("VariantFor(%q, %q) error = nil, want an error", bad[0], bad[1])
+			}
+		})
+	}
+}
+
+// REQ-ABT-03 C8
+// RenderContent picks the variant first, then the language inside it: Recipient.Variant "b" and a
+// version with B => B text and Rendered.Variant "b"; otherwise A and Variant "a". An English recipient
+// gets the English text of the chosen variant; without b.en (and en) it gets that variant's Turkish text
+// (the language fallback works inside the variant).
+func TestRenderContent_Variant(t *testing.T) {
+	t.Parallel()
+	ab := abContent()
+	abEN := abBilingual()
+	fill := func(tmpl, first string) string { return strings.ReplaceAll(tmpl, "{{first_name}}", first) }
+	tests := []struct {
+		name string
+		c    content.Content
+		r    content.Recipient
+		want content.Rendered
+	}{
+		{name: "b recipient gets variant B", c: ab, r: content.Recipient{FirstName: "Ayşe", Variant: "b"},
+			want: content.Rendered{SMSText: fill(abBSMS, "Ayşe"), EmailSubject: abBSubject, EmailText: fill(abBBody, "Ayşe"), Language: "tr", Variant: "b"}},
+		{name: "a recipient gets variant A", c: ab, r: content.Recipient{FirstName: "Ayşe", Variant: "a"},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Ayşe"), EmailSubject: cntOKSubject, EmailText: strings.ReplaceAll(fill(cntOKBody, "Ayşe"), "{{city}}", ""), Language: "tr", Variant: "a"}},
+		{name: "unset variant is A", c: ab, r: content.Recipient{FirstName: "Ayşe"},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Ayşe"), EmailSubject: cntOKSubject, EmailText: strings.ReplaceAll(fill(cntOKBody, "Ayşe"), "{{city}}", ""), Language: "tr", Variant: "a"}},
+		{name: "b recipient of a version without b gets A", c: cntOK(), r: content.Recipient{FirstName: "Ayşe", Variant: "b"},
+			want: content.Rendered{SMSText: fill(cntOKSMS, "Ayşe"), EmailSubject: cntOKSubject, EmailText: strings.ReplaceAll(fill(cntOKBody, "Ayşe"), "{{city}}", ""), Language: "tr", Variant: "a"}},
+		{name: "English b recipient gets the English text of B", c: abEN, r: content.Recipient{FirstName: "Ayşe", Language: "en", Variant: "b"},
+			want: content.Rendered{SMSText: fill(abEN.B.EN.SMS.Body, "Ayşe"), EmailSubject: abEN.B.EN.Email.Subject, EmailText: fill(abEN.B.EN.Email.Body, "Ayşe"), Language: "en", Variant: "b"}},
+		{name: "English b recipient with an empty first name gets Dear customer", c: abEN, r: content.Recipient{Language: "en", Variant: "b"},
+			want: content.Rendered{SMSText: fill(abEN.B.EN.SMS.Body, "Dear customer"), EmailSubject: abEN.B.EN.Email.Subject, EmailText: fill(abEN.B.EN.Email.Body, "Dear customer"), Language: "en", Variant: "b"}},
+		{name: "English b recipient without b.en gets the Turkish text of B", c: ab, r: content.Recipient{FirstName: "Ayşe", Language: "en", Variant: "b"},
+			want: content.Rendered{SMSText: fill(abBSMS, "Ayşe"), EmailSubject: abBSubject, EmailText: fill(abBBody, "Ayşe"), Language: "tr", Fallback: true, Variant: "b"}},
+		{name: "English a recipient of a bilingual A/B version gets the English text of A", c: abEN, r: content.Recipient{FirstName: "Ayşe", Language: "en", Variant: "a"},
+			want: content.Rendered{SMSText: fill(abEN.EN.SMS.Body, "Ayşe"), EmailSubject: abEN.EN.Email.Subject, EmailText: fill(abEN.EN.Email.Body, "Ayşe"), Language: "en", Variant: "a"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := content.RenderContent(tc.c, tc.r)
+			if err != nil {
+				t.Fatalf("RenderContent() error = %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatalf("RenderContent() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// jsonEsc is s as the inside of a JSON string literal.
+func jsonEsc(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b[1 : len(b)-1])
 }
 
 // ---- helpers ----
