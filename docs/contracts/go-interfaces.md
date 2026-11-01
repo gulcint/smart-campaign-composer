@@ -1327,7 +1327,9 @@ const (
 	SummaryOrderScheduledAt = "scheduled_at" // scheduled_at ASC NULLS LAST, id ASC
 )
 
-// SummaryFilter: States empty = no filter (duplicates removed, order irrelevant).
+// SummaryFilter: States nil or len 0 = no filter (both mean the same; the store normalises len 0 to
+// no filter). ParseSummaryFilter removes duplicates keeping first-occurrence order; order is irrelevant
+// to the result.
 type SummaryFilter struct {
 	States        []State
 	Order         string // SummaryOrderRecent | SummaryOrderScheduledAt
@@ -1339,7 +1341,8 @@ type SummaryFilter struct {
 // {Path "query.<name>", Code validation.CodeInvalidValue}, collected in the order state, order,
 // limit, offset into ONE *validation.Error (handler => 422 validation_failed). Rules:
 //   - state absent => no filter; present: split on ","; the value "" or any empty element, an unknown
-//     or differently cased value, or an element with spaces => invalid; duplicates kept once.
+//     or differently cased value, or an element with spaces => invalid; duplicates kept once, in
+//     first-occurrence order ("sending,completed,sending" => [sending completed]).
 //   - order absent => SummaryOrderRecent; present: exactly "recent" | "scheduled_at" ("" is invalid).
 //   - limit absent or "" => DefaultPageLimit (50); otherwise an integer 1..MaxPageLimit (200).
 //   - offset absent or "" => 0; otherwise an integer >= 0. (Empty limit/offset as in listCampaigns.)

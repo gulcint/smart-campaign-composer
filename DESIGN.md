@@ -421,7 +421,7 @@ Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu 
 ```
 - Özet sayıları `numeral-md` `--text-accent-numeral`, etiket `caption --ink-600`; yalnız sayı (oran/yüzde yok, sahip kararı); "Başarısız mesaj" > 0 ise sayı `--error`. Kartlar küçük ve gölgesiz (`surface-card`, 1 px `--border-default`): panel ikincil bilgidir, ekranın birincil işi brief yazmaktır.
 - Bölüm başlıkları `h3` + toplam ("Planlanan · 2"); satır tek link, brief ilk satırı `--ink-900` `body` (kullanıcı metni, turuncu değil), ikinci satır `caption --ink-600`. Boş bölüm tek satır metin ("Planlanmış kampanya yok."), kart çerçevesi kalır.
-- Taslak ve onaylı ama gönderilmemiş kampanyalar satır olarak yoktur (yalnız "Toplam"da sayılır). Gönderimi süren satır varken 10 sn'de bir sessizce tazelenir (yükleniyor gösterilmez).
+- Taslak ve onaylı ama gönderilmemiş kampanyalar satır olarak yoktur (yalnız "Toplam"da sayılır). Gönderimi süren satır varken 10 sn'de bir, 1 saat içinde planlı satır varken planın başlamasından 10 sn sonra sessizce tazelenir (yükleniyor gösterilmez).
 - Brief gönderilirken panel gizlenir (dikkat tek göstergede: Kitle yükleniyor kartı).
 - Eskiz kapısı (PLAN §12.7 adım 5): `designer` uygulamadan önce 1280 ve 375 px eskizi sahibe gösterir; bu çizim bağlayıcı değil, yön verir.
 
@@ -656,5 +656,5 @@ web/src/
 - V10. Varsayılan turuncu metin preset'i `accent`.
 - V11. İçerik akışında otomatik yeniden bağlanma yok; dashboard akışında var.
 - V13. ~~Responsive kapsamı eksik~~ **Çözüldü (2026-10-28, `feat/p5-responsive`):** tablet 768–1023 kuralları, Brief/Kitle/İçerik/Onay/Takip mobil düzeni, tablo/liste davranışı, `viewport` meta ve 375/768/1280 kanıt seti §8.6'da.
-- V14. Brief panelinde süzgeç, arama ve sayfa numarası yok; her bölüm 5 satırla açılır, "Daha fazla göster" 5'er ekler; panel gönderimi süren satır varken 10 sn'de bir sessizce tazelenir (P10, D65).
+- V14. Brief panelinde süzgeç, arama ve sayfa numarası yok; her bölüm 5 satırla açılır, "Daha fazla göster" 5'er ekler; panel gönderimi süren satır varken 10 sn'de bir, 1 saat içindeki en erken planın başlamasından 10 sn sonra bir kez sessizce tazelenir (P10, D65).
 - V12. Kenar değerleri (radius, gölge, dark tema) approximated; ilk ekran görüntüsünden sonra sahiple gözden geçirilir.
