@@ -198,7 +198,6 @@ export const tr = {
   'approval.title': 'Gönderimi onayla',
   'approval.subtitle': 'Kime ve tam olarak ne gideceğini kontrol et; önce onayla, sonra gönder.',
   'approval.summaryTitle': 'Gönderim özeti',
-  'approval.version': 'Sürüm {n}',
   'approval.row.recipients': 'Kime',
   'approval.row.message': 'Ne gidiyor',
   'approval.row.limits': 'Uzunluk',

@@ -357,14 +357,6 @@ onMounted(async () => {
           <h2 id="approval-summary-title" class="text-h3 text-accent-heading">
             {{ t('approval.summaryTitle') }}
           </h2>
-          <span
-            v-if="latest"
-            data-testid="approval-version"
-            :data-version-id="latest.id"
-            :data-value="latest.version_number"
-            class="rounded-pill border border-border-default px-2.5 py-0.5 font-mono text-caption text-ink-600"
-            >{{ t('approval.version', { n: latest.version_number }) }}</span
-          >
         </div>
 
         <div

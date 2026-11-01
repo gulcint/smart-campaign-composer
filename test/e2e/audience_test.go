@@ -192,9 +192,11 @@ func TestE2E_SQLInValueIsOnlyAValue(t *testing.T) {
 	assertExampleCount(t, api, m)
 }
 
-// REQ-AUD-01, REQ-AUD-02, REQ-AUD-03
+// REQ-AUD-01, REQ-AUD-01 C5, REQ-AUD-02, REQ-AUD-03
 // POST /api/segments/count runs the same Parse/Validate/Compile path without the LLM: the manifest
-// rule gives the manifest audience; segment-dsl.md §7.3 inputs are refused with their field errors.
+// rule gives the manifest audience; segment-dsl.md §7.3 inputs are refused with their field errors;
+// city spellings (Istanbul, istanbul, ISTANBUL, İSTANBUL, ankara) count like the canonical city for
+// eq, neq, in and not_in, and Kars is 200 with matched 0.
 func TestE2E_CountSegment(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -218,6 +220,44 @@ func TestE2E_CountSegment(t *testing.T) {
 		}
 		assertExampleCount(t, api, m)
 	})
+
+	// REQ-AUD-01 C5: the audience does not depend on how the city is spelled. Every spelling gives
+	// the same audience (matched, sms, email) as the canonical spelling with the same operator.
+	spellings := []struct {
+		op, canonical string
+		values        []string
+		positive      bool // matched > 0 is required for the canonical spelling
+	}{
+		{op: "eq", canonical: `"İstanbul"`, values: []string{`"Istanbul"`, `"istanbul"`, `"ISTANBUL"`, `"İSTANBUL"`}, positive: true},
+		{op: "neq", canonical: `"İstanbul"`, values: []string{`"Istanbul"`, `"istanbul"`, `"ISTANBUL"`, `"İSTANBUL"`}},
+		{op: "in", canonical: `["İstanbul"]`, values: []string{`["Istanbul"]`, `["istanbul","ISTANBUL"]`, `["İSTANBUL","İstanbul"]`}, positive: true},
+		{op: "not_in", canonical: `["İstanbul"]`, values: []string{`["Istanbul"]`, `["istanbul"]`, `["ISTANBUL"]`, `["İSTANBUL"]`}},
+		{op: "eq", canonical: `"Ankara"`, values: []string{`"ankara"`, `"ANKARA"`}, positive: true},
+	}
+	for _, sp := range spellings {
+		t.Run("city "+sp.op+" "+sp.canonical+" is spelling independent", func(t *testing.T) {
+			t.Parallel()
+			want := countCity(t, api, sp.op, sp.canonical)
+			if sp.positive && want["matched"].(float64) <= 0 {
+				t.Fatalf("city %s %s matched = %v, want > 0 on the seed", sp.op, sp.canonical, want["matched"])
+			}
+			for _, v := range sp.values {
+				if diff := cmp.Diff(want, countCity(t, api, sp.op, v)); diff != "" {
+					t.Fatalf("city %s %s audience differs from %s (-canonical +spelling):\n%s", sp.op, v, sp.canonical, diff)
+				}
+			}
+		})
+	}
+
+	// REQ-AUD-01 C5: a city without a canonical form is kept and counts zero (200, not 422).
+	for _, v := range []string{`"Kars"`, `"  Kars "`, `"kars"`} {
+		t.Run("city eq "+v+" is 200 with matched 0", func(t *testing.T) {
+			t.Parallel()
+			if diff := cmp.Diff(map[string]any{"matched": 0.0, "sms": 0.0, "email": 0.0}, countCity(t, api, "eq", v)); diff != "" {
+				t.Fatalf("audience mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
 
 	rejected := []struct {
 		name string
@@ -579,6 +619,18 @@ func assertExampleCount(t *testing.T, api string, m manifestDoc) {
 		t.Fatalf("count audience mismatch with manifest (-want +got):\n%s", diff)
 	}
 	assertTimeEquals(t, "reference_time", got["reference_time"], m.Params.RefTime)
+}
+
+// countCity posts {"rule":{"all":[{"field":"city","op":op,"value":value}]}} (value is raw JSON) to
+// POST /api/segments/count, requires 200 and returns the audience counts.
+func countCity(t *testing.T, api, op, value string) map[string]any {
+	t.Helper()
+	body := []byte(`{"rule":{"all":[{"field":"city","op":"` + op + `","value":` + value + `}]}}`)
+	status, _, resp := doJSON(t, http.MethodPost, api+"/api/segments/count", body, nil)
+	if status != http.StatusOK {
+		t.Fatalf("POST /api/segments/count %s: status = %d, want 200; body: %s", body, status, resp)
+	}
+	return audienceCounts(t, decodeObject(t, resp)["audience"])
 }
 
 // ---- error body ----
