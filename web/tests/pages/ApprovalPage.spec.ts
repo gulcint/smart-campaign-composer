@@ -245,18 +245,23 @@ describe('ApprovalPage lang query (REQ-LNG-04 C6)', () => {
 })
 
 describe('ApprovalPage (REQ-APR-01)', () => {
-  it('shows the latest version, the channel audiences and requests a preview', async () => {
+  // REQ-APR-01 C4: the summary card shows no version number (approval-version is not in the DOM);
+  // the approved version is still campaign.latest_content_version and the approve body is unchanged.
+  it('shows no version number, the channel audiences, requests a preview and approves the latest version', async () => {
     const { w, a } = await mountApproval({
       camp: { value: campaign('content_ready', version(V1, 3)) },
     })
     expect(w.find(sel('page-approval')).exists()).toBe(true)
-    const v = w.get(sel('approval-version'))
-    expect(v.attributes('data-version-id')).toBe(V1)
-    expect(v.attributes('data-value')).toBe('3')
+    expect(w.find(sel('approval-summary')).exists()).toBe(true)
+    expect(w.find(sel('approval-version')).exists()).toBe(false)
+    expect(document.querySelector(sel('approval-version'))).toBeNull()
     expect(w.get(sel('approval-audience-sms')).attributes('data-value')).toBe('350')
     expect(w.get(sel('approval-audience-email')).attributes('data-value')).toBe('368')
     expect(a.count('GET', `${C}/preview`)).toBeGreaterThanOrEqual(1)
     expect(w.get(sel('approval-bar')).attributes('data-state')).toBe('ready')
+
+    await openAndConfirm(w, 'approval-approve')
+    expect(a.last('POST', `${C}/approve`)?.opts?.body).toEqual({ content_version_id: V1 })
   })
 
   it('without a version the approve button is disabled with reason no_content', async () => {
