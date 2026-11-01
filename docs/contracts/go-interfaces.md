@@ -389,7 +389,10 @@ type Email struct {
 // key or an unknown key inside "en" are schema_violation at that path ("en", "en.sms", "en.email.subject", "en.html").
 // P9: "b" without "angles" => path "angles"; "angles" without "b" => path "b"; "b": null => "b"; a missing
 // or unknown key inside "b"/"angles" => its path ("b.sms", "b.email.subject", "b.html", "angles.a",
-// "angles.c"); top-level "en" present but "b.en" missing, or "b.en" present without top-level "en" => "b.en".
+// "angles.c"); top-level "en" present but "b.en" missing, or "b.en" present without top-level "en" => "b.en";
+// "angles": null => "angles". Parse never stops at the first structural error: it returns all of them, per
+// level unknown keys first, then known keys in schema order (sms, email, en, b, angles), the co-presence
+// rules (b <=> angles, en <=> b.en) last.
 // Errors: *validation.Error matching validation.ErrInvalidJSON / ErrSchemaViolation.
 func Parse(raw []byte) (Content, error)
 
@@ -402,7 +405,7 @@ func Parse(raw []byte) (Content, error)
 // P9: when c.B != nil the same field checks run for b.sms.body, b.email.subject, b.email.body and (B.EN)
 // b.en.sms.body, b.en.email.subject, b.en.email.body with the SAME Longest; then "b" =>
 // variants_identical (ErrVariantsIdentical; no Limit/Actual) iff B's three Turkish texts all equal A's
-// (NFC, exact); then angles.a, angles.b: empty after TrimSpace => required, > AngleMaxRunes runes =>
+// (NFC, exact), reported IN ADDITION to any per-field errors (independent check); then angles.a, angles.b: empty after TrimSpace => required, > AngleMaxRunes runes =>
 // too_long (validation.ErrTooLong, Limit 60, Actual). Full order: the six fields above, the six b.*
 // fields, "b", "angles.a", "angles.b".
 // Checks per field, in order sms.body, email.subject, email.body:
