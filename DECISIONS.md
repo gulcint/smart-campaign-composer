@@ -313,6 +313,21 @@ PR #72'nin açık soruları üzerine sahip kararları (PR #74, #77, #87, #94):
 - **Alternatifler:** Dil başına ayrı sürüm/onay (modeli ikiye böler, hangisi onaylı karışır); ayrı çeviri çağrısı (iki ardışık çağrı, ikinci çağrının ilkine bağımlılığı); her zaman iki dil üretmek (kullanılmayan metin için ~2× token).
 - **Bedel:** Kitlede İngilizce varken çıktı ve akış süresi ~2× olur (`LLM_MAX_TOKENS` sınırı yaklaşabilir; `truncated_output` yolu var). Tek strict şema yerine iki şema bakımı gerekir. Çeviri kalitesini sistem ölçemez; insan onayı ve sekmede görünür metin tek güvencedir. Tek `longest_*` İngilizce metinde gereksiz muhafazakâr olabilir. Planlı gönderimde dil gönderim anında okunur (D62 ile aynı ilke).
 
+### D66 — Şehir yazımı Go'da kanonikleştirilir (sahip kararı, 2026-11-01)
+- **Bağlam:** `city` koşulu birebir, büyük/küçük harf duyarlı eşleşiyordu (`segment-dsl.md` §2). Kural `Istanbul`, `istanbul` veya `İSTANBUL` derse kitle 0 çıkıyordu. Bu, sistem talimatındaki "yalnız kanonik Türkçe yazım" kuralıyla örtülüyordu; o kural modelin listede olmayan şehri (ör. `Kars`) kuraldan düşürmesine de yol açtı. Sahip kuralı talimattan kaldırdı (PR #153) ve yazım farklarını backend'in karşılamasını istedi.
+- **Seçenekler:**
+  1. *Talimat kuralı (eski hâl):* modele kanonik yazımı dayatmak. Garanti değildir (model kuralı çiğneyebilir), `POST /api/segments/count` çağıranını kapsamaz ve bilinmeyen şehri düşürme yan etkisi gördük.
+  2. *SQL'de `lower()` + `unaccent`:* `c.city` ve parametre her sorguda dönüştürülür. `unaccent` eklentisi ve uygulama rolü için ek yetki/migration gerekir, `lower()` PostgreSQL'de yerel ayara bağlıdır (Türkçe `I`/`İ` doğru inmez), düz indeks kullanılamaz (ifade indeksi gerekir) ve saklanan kural ile arayüz yine `Istanbul` gösterir.
+  3. *Go'da katlama + kanonik yazıma çevirme (seçilen):* `segment.Parse` her `city` değerini `segment.CanonicalCity` ile seed'deki kanonik yazıma çevirir; SQL birebir karşılaştırma olarak kalır.
+- **Karar:** 3. seçenek. Katlama: NFC, baş/son boşluk kırpma, sabit rune tablosu (`I`/`ı`/`İ`/`i`/`Î`/`î` → `i`, `ş` → `s`, `ğ` → `g`, `ü`/`û` → `u`, `ö` → `o`, `ç` → `c`, `â` → `a`, U+0307 silinir, kalan rune'lar `unicode.ToLower`). Katlaması on kanonik şehirden birine eşit olan değer o kanonik yazıma çevrilir; eşi olmayan değer (`Kars`) kırpılıp NFC'ye getirilerek yazıldığı gibi kalır ve 0 kişiyle eşleşir. Dört operatörün (`eq`, `neq`, `in`, `not_in`) hepsine ve dizinin her elemanına uygulanır; dizide çeviri sonrası birebir aynı elemanlar tekilleşir (ilki kalır, sıra korunur). Backend bir şehir koşulunu asla kuraldan çıkarmaz ve bilinmeyen şehri hata saymaz.
+- **Neden:** LLM çıktısı yine SQL'e girmez (değer parametre olarak kalır), DB karşılaştırması indeks dostu birebir eşleşmedir, migration ve eklenti gerekmez. Saklanan kural ve arayüz pazarlamacıya kanonik adı ("Şehir = İstanbul") gösterir; sayım ucu aynı `Parse` yolundan geçtiği için ek iş gerekmez. Yerel ayara bağlı `ToLower` yerine açık tablo, `I`/`İ` sorununu ve test edilebilirliği tek yerde çözer.
+- **VARSAYIM:**
+  - `customers.city` yalnız kanonik yazımı taşır (seed garanti eder); kanonik listede olmayan şehrin müşteri verisi farklı yazılmışsa eşleşme birebir kalır.
+  - Kanonik liste seed'deki on şehirdir ve Go'da sabittir; seed şehir listesi değişirse bu liste de değişir.
+  - Uzunluk ve dizi sınırları çeviri ve tekilleştirme sonrasına uygulanır; yalnız boşluktan oluşan değer `""` olur ve `invalid_value` alır (eskiden geçerliydi). Hata yolları çevrilmiş diziye göredir.
+  - Alt dizgi veya bulanık eşleşme yoktur (`İstanbul'da`, `Istanbu` kanonikleşmez); yazım hatası düzeltmesi kapsam dışıdır.
+- **Bedel:** Kanonik liste dışındaki şehirler (seed'de olmasa da gerçek hayatta) yazım farkına duyarlı kalır. Kural, modelin yazdığından farklı saklanır; onarım turunda modele dönen hata yolları çevrilmiş diziye göredir.
+
 ## Bilinen sınırlar ve riskler
 
 | Konu | Durum |
