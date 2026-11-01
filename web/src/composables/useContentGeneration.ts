@@ -16,6 +16,7 @@ import type {
   VersionStatus,
   WorstCase,
 } from '@/api/types'
+import { isVariantLevelPath } from '@/lib/variant'
 
 export interface FieldState {
   text: string
@@ -42,12 +43,15 @@ export function fieldKeyOfPath(path: string): FieldKey | null {
 const isEnPath = (path: string) => path === 'en' || path.startsWith('en.')
 
 /**
- * Splits field errors by field for one language (P8, ui.md §5.2); `""` (and unmapped) paths
- * are added to every field. `en.`-prefixed paths belong to `en` only, other mapped paths to `tr`.
+ * Splits field errors by field for one variant × language (P8/P9, ui.md §3.14, §5.2); `""` (and
+ * unmapped) paths are added to every field of every copy. Variant A takes the unprefixed and
+ * `en.` paths, variant B the `b.` and `b.en.` ones; within a variant `en.` belongs to English
+ * only. Variant-level paths (`b`, `angles.*`) belong to no field (`variantErrors`).
  */
 export function routeFieldErrors(
   errors: readonly FieldError[],
   language: 'tr' | 'en' = 'tr',
+  variant: 'a' | 'b' = 'a',
 ): Record<FieldKey, FieldError[]> {
   const out: Record<FieldKey, FieldError[]> = {
     'sms-body': [],
@@ -55,9 +59,13 @@ export function routeFieldErrors(
     'email-body': [],
   }
   for (const e of errors) {
-    const en = isEnPath(e.path)
+    if (isVariantLevelPath(e.path)) continue
+    const isB = e.path.startsWith('b.')
+    if (e.path !== '' && isB !== (variant === 'b')) continue
+    const path = isB ? e.path.slice(2) : e.path
+    const en = isEnPath(path)
     if (language === 'tr' && en) continue
-    const key = fieldKeyOfPath(language === 'en' && en ? e.path.slice(3) : e.path)
+    const key = fieldKeyOfPath(language === 'en' && en ? path.slice(3) : path)
     if (key) {
       if ((language === 'en') === en) out[key].push(e)
     } else for (const k of FIELD_KEYS) out[k].push(e)
@@ -85,18 +93,30 @@ function asInvalid(d: unknown): ContentInvalidEvent | null {
   return d as unknown as ContentInvalidEvent
 }
 
+/** sms.body, email.subject, email.body are strings (one variant × language copy). */
+function isCopy(v: unknown): boolean {
+  if (!isObj(v) || !isObj(v.sms) || !isObj(v.email)) return false
+  return (
+    typeof v.sms.body === 'string' &&
+    typeof v.email.subject === 'string' &&
+    typeof v.email.body === 'string'
+  )
+}
+
 function asValidated(d: unknown): ContentValidatedEvent | null {
   if (!isObj(d) || !isAttempt(d.attempt) || typeof d.content_version_id !== 'string') return null
   if (typeof d.version_number !== 'number') return null
   const c = d.content
-  if (!isObj(c) || !isObj(c.sms) || !isObj(c.email)) return null
-  if (typeof c.sms.body !== 'string') return null
-  if (typeof c.email.subject !== 'string' || typeof c.email.body !== 'string') return null
-  if (c.en !== undefined) {
-    const en = c.en
-    if (!isObj(en) || !isObj(en.sms) || !isObj(en.email)) return null
-    if (typeof en.sms.body !== 'string') return null
-    if (typeof en.email.subject !== 'string' || typeof en.email.body !== 'string') return null
+  if (!isObj(c) || !isCopy(c)) return null
+  if (c.en !== undefined && !isCopy(c.en)) return null
+  // P9: variant B with its own optional English copy, and the two angle labels.
+  if (c.b !== undefined) {
+    if (!isObj(c.b) || !isCopy(c.b)) return null
+    if (c.b.en !== undefined && !isCopy(c.b.en)) return null
+  }
+  if (c.angles !== undefined) {
+    const a = c.angles
+    if (!isObj(a) || typeof a.a !== 'string' || typeof a.b !== 'string') return null
   }
   const wc = d.worst_case
   if (!isObj(wc) || typeof wc.sms_runes !== 'number' || typeof wc.subject_runes !== 'number') {
@@ -121,6 +141,22 @@ export function useContentGeneration() {
     'email-body': { text: '', phase: 'idle', errors: [] },
   })
   const hasEnglish = ref(false)
+  /** P9: variant B (Turkish and English); idle/empty unless the run has `variant: "b"` chunks. */
+  const bFields = reactive<Record<FieldKey, FieldState>>({
+    'sms-body': { text: '', phase: 'idle', errors: [] },
+    'email-subject': { text: '', phase: 'idle', errors: [] },
+    'email-body': { text: '', phase: 'idle', errors: [] },
+  })
+  const bEnFields = reactive<Record<FieldKey, FieldState>>({
+    'sms-body': { text: '', phase: 'idle', errors: [] },
+    'email-subject': { text: '', phase: 'idle', errors: [] },
+    'email-body': { text: '', phase: 'idle', errors: [] },
+  })
+  const hasVariantB = ref(false)
+  /** P9: angles come only with `validated.content.angles` (they are not streamed). */
+  const angles = ref<{ a: string; b: string } | null>(null)
+  /** P9: final `invalid` errors with path `b` (variants_identical) and `angles.*`. */
+  const variantErrors = ref<FieldError[]>([])
   const versionStatus = ref<VersionStatus>('none')
   const versionId = ref<string | null>(null)
   const worstCase = ref<WorstCase | null>(null)
@@ -133,8 +169,16 @@ export function useContentGeneration() {
   let run = 0
   let disposed = false
 
-  /** The field sets of the languages in play: English only once it has shown up. */
-  const groups = () => (hasEnglish.value ? [fields, enFields] : [fields])
+  /** The field sets in play: English and variant B only once they have shown up. */
+  const groups = () => {
+    const g = [fields]
+    if (hasEnglish.value) g.push(enFields)
+    if (hasVariantB.value) {
+      g.push(bFields)
+      if (hasEnglish.value) g.push(bEnFields)
+    }
+    return g
+  }
 
   function setAll(phase: ContentPhase, clearText: boolean) {
     for (const g of groups()) {
@@ -164,18 +208,23 @@ export function useContentGeneration() {
     }
   }
 
-  async function start(campaignId: string): Promise<void> {
+  async function start(campaignId: string, opts: { ab?: boolean } = {}): Promise<void> {
     if (disposed || versionStatus.value === 'streaming') return
     const token = ++run
     const live = () => token === run && !disposed
 
     setAll('streaming', true)
-    for (const k of FIELD_KEYS) {
-      enFields[k].phase = 'idle'
-      enFields[k].errors = []
-      enFields[k].text = ''
+    for (const g of [enFields, bFields, bEnFields]) {
+      for (const k of FIELD_KEYS) {
+        g[k].phase = 'idle'
+        g[k].errors = []
+        g[k].text = ''
+      }
     }
     hasEnglish.value = false
+    hasVariantB.value = false
+    angles.value = null
+    variantErrors.value = []
     versionStatus.value = 'streaming'
     versionId.value = null
     worstCase.value = null
@@ -191,7 +240,8 @@ export function useContentGeneration() {
       res = await doFetch(url, {
         method: 'POST',
         headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
-        body: '{}',
+        // P9: `{"ab":true}` asks for variant B; otherwise the exact pre-P9 bytes.
+        body: opts.ab ? '{"ab":true}' : '{}',
         signal: ctrl.signal,
       })
     } catch (e) {
@@ -249,8 +299,12 @@ export function useContentGeneration() {
         attempt.value = data.attempt as number
         const key = DELTA_FIELD[`${String(data.channel)}:${String(data.field)}`]
         if (!key) return
-        const target = data.language === 'en' ? enFields : fields
-        if (data.language === 'en') hasEnglish.value = true
+        if (data.variant !== undefined && data.variant !== 'b') return
+        const en = data.language === 'en'
+        const b = data.variant === 'b'
+        const target = b ? (en ? bEnFields : bFields) : en ? enFields : fields
+        if (en) hasEnglish.value = true
+        if (b) hasVariantB.value = true
         target[key].text += data.text
         target[key].phase = 'streaming'
       } else if (m.event === 'invalid') {
@@ -265,16 +319,27 @@ export function useContentGeneration() {
           return
         }
         terminal = true
-        // A malformed `en` block (no English deltas) still needs its tab and errors.
-        if (ev.errors.some((e) => isEnPath(e.path))) hasEnglish.value = true
-        const routed = routeFieldErrors(ev.errors)
-        const routedEn = routeFieldErrors(ev.errors, 'en')
-        for (const k of FIELD_KEYS) {
-          fields[k].phase = 'invalid'
-          fields[k].errors = routed[k]
-          if (hasEnglish.value) {
-            enFields[k].phase = 'invalid'
-            enFields[k].errors = routedEn[k]
+        // A malformed `en` / `b` block (no such deltas) still needs its tab and errors.
+        if (ev.errors.some((e) => isEnPath(e.path) || e.path.startsWith('b.en'))) {
+          hasEnglish.value = true
+        }
+        if (ev.errors.some((e) => e.path === 'b' || e.path.startsWith('b.'))) {
+          hasVariantB.value = true
+        }
+        if (ev.errors.some((e) => isVariantLevelPath(e.path))) hasVariantB.value = true
+        variantErrors.value = ev.errors.filter((e) => isVariantLevelPath(e.path))
+        const sets: [Record<FieldKey, FieldState>, 'tr' | 'en', 'a' | 'b', boolean][] = [
+          [fields, 'tr', 'a', true],
+          [enFields, 'en', 'a', hasEnglish.value],
+          [bFields, 'tr', 'b', hasVariantB.value],
+          [bEnFields, 'en', 'b', hasEnglish.value && hasVariantB.value],
+        ]
+        for (const [g, language, variant, used] of sets) {
+          if (!used) continue
+          const routed = routeFieldErrors(ev.errors, language, variant)
+          for (const k of FIELD_KEYS) {
+            g[k].phase = 'invalid'
+            g[k].errors = routed[k]
           }
         }
         versionId.value = ev.content_version_id
@@ -296,6 +361,20 @@ export function useContentGeneration() {
           enFields['email-subject'].text = ev.content.en.email.subject
           enFields['email-body'].text = ev.content.en.email.body
         }
+        const b = ev.content.b
+        if (b) {
+          hasVariantB.value = true
+          bFields['sms-body'].text = b.sms.body
+          bFields['email-subject'].text = b.email.subject
+          bFields['email-body'].text = b.email.body
+          if (b.en) {
+            hasEnglish.value = true
+            bEnFields['sms-body'].text = b.en.sms.body
+            bEnFields['email-subject'].text = b.en.email.subject
+            bEnFields['email-body'].text = b.en.email.body
+          }
+        }
+        angles.value = ev.content.angles ? { ...ev.content.angles } : null
         setAll('validated', false)
         versionId.value = ev.content_version_id
         worstCase.value = ev.worst_case
@@ -351,6 +430,11 @@ export function useContentGeneration() {
     fields,
     enFields,
     hasEnglish,
+    bFields,
+    bEnFields,
+    hasVariantB,
+    angles,
+    variantErrors,
     versionStatus,
     versionId,
     worstCase,
