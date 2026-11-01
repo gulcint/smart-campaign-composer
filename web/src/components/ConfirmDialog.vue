@@ -6,6 +6,7 @@
 // Plan mode (§3.18, REQ-SCH-04): for kind="send" with `allowSchedule` the dialog offers "now"
 // or "later"; "later" takes a TSİ wall-clock time, checked against the API's own window
 // (the API stays the authority, this only saves a round trip) and emitted as `schedule(utc)`.
+// The time is typed in the field or picked in DateTimePicker's themed calendar popover.
 import { CalendarClock, CircleAlert, Send } from '@lucide/vue'
 import {
   AlertDialogContent,
@@ -25,6 +26,7 @@ import { toTsiInput, toUtcIso } from '@/lib/schedule'
 import { cn } from '@/lib/utils'
 
 import Button from './Button.vue'
+import DateTimePicker from './DateTimePicker.vue'
 import InlineError from './InlineError.vue'
 
 const props = withDefaults(
@@ -121,8 +123,10 @@ function onModeKeydown(ev: KeyboardEvent) {
   else if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') mode.value = 'later'
 }
 
-function onTimeInput(ev: Event) {
-  localValue.value = (ev.target as HTMLInputElement).value
+const todayTsi = computed(() => toTsiInput(new Date(nowMs.value).toISOString()).slice(0, 10))
+
+function onTimeInput(value: string) {
+  localValue.value = value
   nowMs.value = Date.now()
 }
 
@@ -218,27 +222,20 @@ function cancel() {
             >{{ t('schedule.tz') }}</span
           >
         </div>
-        <input
+        <DateTimePicker
           :id="fieldId"
           data-testid="confirm-dialog-scheduled-at"
-          type="datetime-local"
-          step="60"
-          :value="localValue"
+          :model-value="localValue"
           :min="minInput"
           :max="maxInput"
+          :today="todayTsi"
+          :invalid="!!scheduleErrorCode"
           :data-value="scheduledUtc ?? undefined"
           :aria-invalid="scheduleErrorCode ? 'true' : undefined"
           :aria-describedby="
             [hintId, noteId, scheduleErrorCode ? errorId : null].filter(Boolean).join(' ')
           "
-          :class="
-            cn(
-              'datetime-field block h-11 w-full rounded-input border bg-surface-card px-4 text-body text-ink-900 outline-none',
-              'focus-visible:border-primary focus-visible:shadow-focus',
-              scheduleErrorCode ? 'border-[1.5px] border-error' : 'border-border-default',
-            )
-          "
-          @input="onTimeInput"
+          @update:model-value="onTimeInput"
         />
         <p :id="hintId" class="text-caption text-ink-600">
           {{ t('confirm.scheduledAt.hint', { min: Math.ceil(scheduleMinLeadSeconds / 60) }) }}
