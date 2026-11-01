@@ -233,6 +233,13 @@ export const tr = {
   'confirm.sendMode.later': 'İleri bir tarihte gönder',
   'confirm.scheduledAt.label': 'Gönderim zamanı',
   'confirm.scheduledAt.hint': 'En erken {min} dakika sonra, en geç 30 gün içinde.',
+  'datetimePicker.open': 'Takvimi aç',
+  'datetimePicker.dialog': 'Gönderim tarihi ve saati seç',
+  'datetimePicker.calendar': 'Gönderim günü',
+  'datetimePicker.prevMonth': 'Önceki ay',
+  'datetimePicker.nextMonth': 'Sonraki ay',
+  'datetimePicker.time': 'Saat',
+  'datetimePicker.done': 'Tamam',
 
   // --- Preview (P4, required ids) ---
   'preview.emailFrameTitle': 'Email önizlemesi',
