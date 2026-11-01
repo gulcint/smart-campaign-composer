@@ -93,7 +93,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `llm_unavailable` | 502 | LLM'e erişilemedi (segment; içerikte stream açılmadan önce) |
 | `internal_error` | 500 | Beklenmeyen hata |
 
-### 5.2 Alan hatası `fields[].code` (kapalı liste, 25)
+### 5.2 Alan hatası `fields[].code` (kapalı liste, 27)
 
 | Kod | Kaynak | Go sentinel (`errors.Is`) |
 |---|---|---|
@@ -122,6 +122,10 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `max_conditions_exceeded` | Koşul > 10 | `segment.ErrMaxConditionsExceeded` |
 | `schedule_too_soon` | `scheduled_at` < şimdi + `SCHEDULE_MIN_LEAD` (geçmiş dahil); yol `scheduled_at` | `campaign.ErrScheduleTooSoon` |
 | `schedule_too_far` | `scheduled_at` > şimdi + 720 sa (30 gün); yol `scheduled_at` | `campaign.ErrScheduleTooFar` |
+| `variants_identical` | P9: B varyantının üç Türkçe metni A'nınkilerle birebir aynı (NFC); yol `b` | `content.ErrVariantsIdentical` |
+| `variant_not_available` | P9: önizlemede `variant=b`, ama sürümde B varyantı yok; yol `query.variant` | (`campaign.Preview` kaynaklı `*validation.Error`) |
+
+P9 notu: `too_long` A/B açı etiketleri için de kullanılır (`angles.a` / `angles.b` > 60 karakter, `limit` 60).
 
 ### 5.3 Go → HTTP eşlemesi
 
@@ -149,9 +153,9 @@ P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
 | | 409 `invalid_state` | `draft`, `scheduled`, `sending`, `completed` | toast + yeniden çek |
 | | 409 `generation_in_progress` | kilit tutuluyor | toast |
 | | 413 `payload_too_large` | gövde > 64 KiB | — |
-| | 422 `validation_failed` | `schema_violation` (gövdede `{}` dışında alan; yol = alan adı); `invalid_value` (`header.X-Mock-LLM-Scenario`) | `ErrorCard` |
+| | 422 `validation_failed` | `schema_violation` (gövdede `ab` dışında alan; yol = alan adı; P9: `ab` boolean değil, yol `ab`); `invalid_value` (`header.X-Mock-LLM-Scenario`) | `ErrorCard` |
 | | 502 `llm_unavailable` | stream açılmadan önce erişim yok | `ErrorCard` + "yeniden üret" |
-| | 200 SSE, son `invalid` | `invalid_json`, `schema_violation`, `truncated_output`, `no_tool_call` (yol alan adı veya `""`); `sms_too_long`, `subject_too_long`, `email_body_too_long`, `unknown_variable`, `malformed_variable`, `required`; `llm_unavailable`, `internal_error` (yol `""`) | `StreamingText` `invalid` |
+| | 200 SSE, son `invalid` | `invalid_json`, `schema_violation`, `truncated_output`, `no_tool_call` (yol alan adı veya `""`); `sms_too_long`, `subject_too_long`, `email_body_too_long`, `unknown_variable`, `malformed_variable`, `required`; P9: `variants_identical` (yol `b`), `too_long` (yol `angles.a`/`angles.b`), `b.`/`b.en.` önekli yollar; `llm_unavailable`, `internal_error` (yol `""`) | `StreamingText` `invalid` |
 | `editContent` | 400, 413 | `generateContent` ile aynı | toast / satır içi |
 | | 404 `campaign_not_found` | | sayfa |
 | | 409 `generation_in_progress` › `invalid_state` › `content_edit_conflict` | `invalid_state`: `draft`, `scheduled`, `sending`, `completed`; `content_edit_conflict`: `X-Expected-Version` ≠ güncel en son `validated` sürüm (`error.current_version`) | toast / `editor-conflict` |
@@ -164,7 +168,7 @@ P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
 | `cancelSchedule` | 404 `campaign_not_found`; 409 `invalid_state` (`scheduled` değil) | gövde okunmaz | toast + yeniden çek |
 | `previewContent` | 404 `campaign_not_found` › `content_version_not_found` › `customer_not_found` | `sample_index` ≥ eşleşen sayı → `customer_not_found` | toast (uyarı) |
 | | 409 `invalid_state` › `content_not_validated` | segment/doğrulanmış sürüm yok; verilen sürüm `invalid` | önizleme `empty` |
-| | 422 `validation_failed` | `invalid_value`: `query.sample_index`, `query.customer_id`, `query.content_version_id` | — |
+| | 422 `validation_failed` | `invalid_value`: `query.sample_index`, `query.customer_id`, `query.content_version_id`, `query.language` (P8), `query.variant` (P9); P9: `variant_not_available` (`query.variant`, sürüm çözüldükten sonra) | — |
 | `listContentVersions` | 404 `campaign_not_found` | | sayfa |
 | `getContentVersion` | 404 `campaign_not_found` › `content_version_not_found` | | toast |
 
@@ -266,6 +270,10 @@ Test türleri ve konumları `.claude/skills/writing-tests/SKILL.md` §4'tedir. G
 | REQ-LNG-02 | go-interfaces `segment.Audience.Languages`/`WantsEnglish`, `llm.ContentRequest.IncludeEnglish`, `llm.ContentToolSchema`, `ContentChunk.Path`; schemas/llm/content-en.tool.json; llm-tools §1.3, §3.3 `CNT_OK_EN`, §3.4, §3.5; sse-events §1.1 `language`; openapi `Audience.languages`, `ContentDeltaEvent.language`; db-schema §3.4 `audience_languages` |
 | REQ-LNG-03 | go-interfaces `content.Recipient.Language`, `RenderContent` (`Rendered.Language`/`Fallback`), `RenderEmailHTMLLang`, `delivery.Job.Recipient`, `PreviewQuery.Language`, `Preview.Language`/`Fallback`; openapi `previewContent` (`language` sorgusu, `Preview.language`/`fallback`) |
 | REQ-LNG-04 | **ui.md §3.7** (`audience-languages`), **§3.14** (`language`), **§3.15** (`preview-language`), **§3.23** (dil sekmeleri), **§3.27** `LanguageTabs`, §5.2 (`enFields`, `hasEnglish`), §6; DESIGN.md `LanguageTabs` |
+| REQ-ABT-01 | schemas/content.schema.json (`b`, `angles`, `dependentRequired`, `allOf`), go-interfaces `content.Content.B`/`Angles`/`Variant`/`VariantA`/`VariantB`/`AngleMaxRunes`/`WorstCase.B`/`WorstCaseVariant`/`ErrVariantsIdentical`/`Parse`/`Validate`/`CheckWorstCase`, openapi `Content`/`ContentDraft`/`WorstCase.b`/`editContent`/`approveContent`/`FieldError` (`variants_identical`), db-schema §3.5 `b_*`/`angle_*` + §3.5.1 `0010_content_variants` |
+| REQ-ABT-02 | openapi `generateContent` (`GenerateContentRequest`), `ContentDeltaEvent.variant`; go-interfaces `campaign.ContentOptions`/`WithContentOptions`/`ContentOptionsFromContext`, `llm.ContentRequest.IncludeVariantB`, `llm.ContentToolSchemaAB`, `ContentChunk.Path`, `composer.DeltaEvent.Variant`; schemas/llm/content-ab.tool.json, content-ab-en.tool.json; llm-tools §1.4, §3.3 `CNT_OK_AB`/`CNT_OK_AB_EN`, §3.4, §3.5; sse-events §1.1 `variant` |
+| REQ-ABT-03 | go-interfaces `content.VariantFor`, `Recipient.Variant`, `RenderContent` (`Rendered.Variant`), `delivery.Job.Recipient.Variant`, `campaign.CampaignStatus.ByVariant`/`VariantCounts`, `Delivery.Variant`, `PreviewQuery.Variant`, `Preview.Variant`, `PreviewCustomer.Variant`, `startSendingLocked` notu; db-schema §3.7 `variant` + `deliveries_variant_check`, §3.9, §4 claim; openapi `sendCampaign`, `CampaignStatus.by_variant` (`VariantStatusCounts`, `ChannelStatusCounts`), `Delivery.variant`, `previewContent` (`variant` sorgusu, `variant_not_available`); sse-events §2 `by_variant` |
+| REQ-ABT-04 | **ui.md §3.7** (`audience-ab-toggle`), **§3.14** (`variant`, `editor-angle`), **§3.15** (`data-variant`), **§3.20** (`variant-breakdown`), **§3.22** (`inline-error-variant`, `inline-error-angle`), **§3.23** (varyant sekmeleri, `content-ab-toggle`), **§3.24** (Onay varyant sekmeleri, `approval-ab-note`, `variant` sorgusu), **§3.28** `VariantTabs`, **§3.29** `AbToggle`, **§3.30** `VariantBreakdown`, §4 i18n, §5.2 (`bFields`, `bEnFields`, `hasVariantB`, `angles`, `start(id, { ab })`), §6; DESIGN.md `VariantTabs`, `VariantBreakdown`, `AbToggle` |
 
 ## 9. Kararlar (sahip / lider, P1 incelemesi)
 

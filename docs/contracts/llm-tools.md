@@ -1,7 +1,7 @@
 # LLM araçları, düzeltme döngüsü ve sahte LLM senaryoları
 
-Kapsam: REQ-AUD-00, REQ-AUD-01, REQ-AI-01, REQ-AI-02, REQ-AI-03, REQ-CNT-04, REQ-UI-01 (fixture), REQ-LNG-02 (iki dilli üretim, P8).
-Şemalar: tam doğrulama şemaları [`schemas/segment-rule.schema.json`](schemas/segment-rule.schema.json), [`schemas/content.schema.json`](schemas/content.schema.json); modele gönderilen strict varyantlar [`schemas/llm/segment-rule.tool.json`](schemas/llm/segment-rule.tool.json), [`schemas/llm/content.tool.json`](schemas/llm/content.tool.json) ve (P8) iki dilli [`schemas/llm/content-en.tool.json`](schemas/llm/content-en.tool.json). Go imzaları: [`go-interfaces.md` §llm, §composer](go-interfaces.md#internalllm).
+Kapsam: REQ-AUD-00, REQ-AUD-01, REQ-AI-01, REQ-AI-02, REQ-AI-03, REQ-CNT-04, REQ-UI-01 (fixture), REQ-LNG-02 (iki dilli üretim, P8), REQ-ABT-02 (A/B üretimi, P9).
+Şemalar: tam doğrulama şemaları [`schemas/segment-rule.schema.json`](schemas/segment-rule.schema.json), [`schemas/content.schema.json`](schemas/content.schema.json); modele gönderilen strict varyantlar [`schemas/llm/segment-rule.tool.json`](schemas/llm/segment-rule.tool.json), [`schemas/llm/content.tool.json`](schemas/llm/content.tool.json), (P8) iki dilli [`schemas/llm/content-en.tool.json`](schemas/llm/content-en.tool.json) ve (P9) A/B [`schemas/llm/content-ab.tool.json`](schemas/llm/content-ab.tool.json), A/B + iki dilli [`schemas/llm/content-ab-en.tool.json`](schemas/llm/content-ab-en.tool.json). Go imzaları: [`go-interfaces.md` §llm, §composer](go-interfaces.md#internalllm).
 
 ## 1. Araç (tool) tanımları
 
@@ -10,7 +10,7 @@ Karar: segment **ve** içerik için tek mekanizma **tool use**'tur (tek doğrula
 | Ad (`llm.ToolEmit…`) | Kullanım | Gönderilen `input_schema` (`llm.ToolSchema(name)`) | Açıklama (modele giden `description`) |
 |---|---|---|---|
 | `emit_segment_rule` | Segment üretimi (stream yok) | `schemas/llm/segment-rule.tool.json` | "Return the target audience for the marketing brief as a structured segment rule. Use only the listed fields and operators. Never output SQL. Channel consent is applied by the system; do not try to express it. Use value null for is_null / is_not_null." |
-| `emit_campaign_content` | İçerik üretimi (stream) | `schemas/llm/content.tool.json` (yalnız Türkçe) veya `schemas/llm/content-en.tool.json` (iki dilli, P8; §1.3) | "Return the SMS and email copy for the campaign in Turkish. SMS body at most 160 characters and email subject at most 80 characters AFTER personalization; the longest recipient values are given in the prompt. Allowed variables: {{first_name}}, {{last_name}}, {{city}}. Plain text only, no HTML." |
+| `emit_campaign_content` | İçerik üretimi (stream) | `schemas/llm/content.tool.json` (yalnız Türkçe) veya `schemas/llm/content-en.tool.json` (iki dilli, P8; §1.3); A/B istendiğinde `schemas/llm/content-ab.tool.json` veya `schemas/llm/content-ab-en.tool.json` (P9; §1.4) | "Return the SMS and email copy for the campaign in Turkish. SMS body at most 160 characters and email subject at most 80 characters AFTER personalization; the longest recipient values are given in the prompt. Allowed variables: {{first_name}}, {{last_name}}, {{city}}. Plain text only, no HTML." |
 
 ### 1.1 İki şema katmanı
 
@@ -34,6 +34,17 @@ Karar: segment **ve** içerik için tek mekanizma **tool use**'tur (tek doğrula
 - **Akış:** `ContentChunk.Path` değerleri `sms.body`, `email.subject`, `email.body` ve iki dilli üretimde `en.sms.body`, `en.email.subject`, `en.email.body`; Türkçe alanlar önce. `eager_input_streaming` aynıdır; istemci `partial_json` içinde `en` nesnesinin alanlarını da artımlı çözer. Doğrulama `content.Parse` + `content.Validate(c, req.Longest)` (İngilizce sürüm dahil; hata yolları `en.` önekli).
 - **Onarım turu:** hata `tool_result` içinde dil önekli yollarla gider; deneme 2 iki dil sürümünü birlikte yeniden üretir; `IncludeEnglish` aynı kalır. Deneme sayısı ≤ 2.
 - **İngilizce eksik gelirse:** `IncludeEnglish = true` iken model `en`'i atlarsa (strict modda beklenmez) `content.Parse` geçerli sayar (`en` isteğe bağlı) ve içerik yalnız Türkçe olarak saklanır; bu bir hata değildir (yedek davranış, REQ-LNG-03).
+
+### 1.4 A/B üretimi (P9, D64, REQ-ABT-02)
+
+- **Ne zaman:** yalnız üretim isteği `{"ab": true}` taşıyorsa. HTTP katmanı bunu `campaign.WithContentOptions(ctx, campaign.ContentOptions{AB: true})` ile `ctx`'e koyar; `StartContentGeneration` `llm.ContentRequest.IncludeVariantB = true` ile açar. Gövdesiz, `{}` veya `{"ab": false}` → `false` (P8 davranışı birebir). `IncludeEnglish` kararı (§1.3) bundan bağımsızdır; ikisi birlikte dört durumu verir. Karar `OpenContent` anında verilir ve düzeltme denemesinde değişmez.
+- **Şema seçimi:** `IncludeVariantB = false` → `llm.ContentToolSchema(includeEnglish)` (değişmez); `true` → `llm.ContentToolSchemaAB(includeEnglish bool) json.RawMessage`: `false` → `content-ab.tool.json`, `true` → `content-ab-en.tool.json`. Dört şemanın da araç adı `emit_campaign_content`'tır. A/B şemaları, karşılığı olan şemanın (`content.tool.json` / `content-en.tool.json`) yapısına ek olarak zorunlu `b` (`sms.body`, `email.subject`, `email.body`; iki dillide `b.en` de zorunlu) ve zorunlu `angles` (`a`, `b`) taşır; özellik sırası `sms`, `email`, (`en`), `b`, `angles` (model bu sırayla yazar). §1.1'deki strict yasakları ve unit test şartı **dört** şema için de geçerlidir; istek başına yine tek strict araç (sayım: 0 isteğe bağlı, 0 birleşim). Byte kopyaları `internal/llm/schemas/` altında (`make check-tool-schemas`).
+- **Araç açıklaması (A/B):** "Return the campaign copy as an A/B test: variant A (`sms`, `email`) and variant B (the `b` object) in Turkish, plus a short Turkish label for each variant's angle (`angles.a`, `angles.b`, at most 60 characters each). Both variants make the SAME offer to the same audience in the same tone; variant B tells it from a deliberately different angle (e.g. the discount rate vs. urgency) and must not repeat variant A's texts. For EVERY variant: SMS body at most 160 characters and email subject at most 80 characters AFTER personalization; the longest recipient values are given in the prompt. Allowed variables: {{first_name}}, {{last_name}}, {{city}}. Plain text only, no HTML." İki dilli A/B açıklaması aynı metne şu cümleyi ekler: "Each variant also has an English version for English-speaking customers (`en` for variant A, `b.en` for variant B): same intent, angle and tone as its Turkish text, not a word-for-word translation; the same limits apply to every language version."
+- **Sistem talimatı:** §1.2'deki sınır sayıları her varyant × dil sürümü için ayrı ayrı söylenir. Talimat ayrıca: teklif (ör. %30 indirim), kitle, kanal ve ton varyantlar arasında **değişmez**; yalnız anlatım açısı değişir; açılar kısa ve somut yazılır (≤ 60 karakter, değişkensiz); B'nin üç Türkçe metni A'nınkilerle aynı olamaz. Brief hâlâ `<brief>` içinde veridir ve talimat değiştiremez.
+- **Akış:** `ContentChunk.Path` sırası A Türkçe (`sms.body`, `email.subject`, `email.body`), A İngilizce (`en.*`, varsa), B Türkçe (`b.sms.body`, `b.email.subject`, `b.email.body`), B İngilizce (`b.en.*`, varsa). **Açılar `ContentChunk` olarak verilmez** (yalnız tam girdide, `Raw()`); SSE'de `delta` olarak akmaz, `validated.content.angles`'ta gelir. Gerekçe: `ContentDeltaEvent` (kanal, alan) çiftine bağlıdır; açılar bu çiftlere girmez ve ≤ 60 karakterlik etiketi akıtmanın kullanıcıya değeri yoktur. Doğrulama `content.Parse` + `content.Validate(c, req.Longest)` (B varyantı, açılar ve `variants_identical` dahil).
+- **Onarım turu:** hata `tool_result` içinde önekli yollarla (`b.sms.body`, `angles.b`, `b`) gider; deneme 2 bütün varyant × dil sürümlerini birlikte yeniden üretir; `IncludeVariantB` ve `IncludeEnglish` aynı kalır. Deneme sayısı ≤ 2.
+- **B eksik gelirse:** `IncludeVariantB = true` iken model `b` ve `angles`'ı birlikte atlarsa (strict modda beklenmez) içerik B'siz geçerli sayılır ve öyle saklanır (hata değildir). Yalnız biri gelirse `schema_violation` (yol `angles` veya `b`) ve onarım turu.
+- **Token bütçesi:** A/B çıktı ~2×, A/B + İngilizce ~4× metin setidir; `LLM_MAX_TOKENS` (4096) aşılırsa `truncated_output` yolu çalışır. Varsayılan bu fazda değişmez; ölçümle yükseltilir (D64).
 
 ### 1.2 Çağrı biçimi (gerçek Claude istemcisi; testlerde çalışmaz)
 
@@ -135,18 +146,33 @@ Segment (`emit_segment_rule` girdisi olarak döner):
 |---|---|---|---|
 | `CNT_OK_EN` | `Hi {{first_name}}, your cart is waiting! Finish your order today and get 30% off: example.com/cart` (şablon 98 karakter; en uzun `first_name` 50 ile 134) | `Your cart is waiting: 30% off today` (35) | `Hi {{first_name}},\n\nThe items you added to your cart are still waiting for you. We have set up a special 30% discount for {{city}} today.\n\nComplete your order at example.com/cart.\n\nHappy shopping!` |
 
+**`CNT_OK_AB` / `CNT_OK_AB_EN` (P9, REQ-ABT-02):** `llm.ContentRequest.IncludeVariantB = true` iken sahte LLM, `CNT_OK` döneceği her yerde (`ok`, `sql_in_value`, `then_ok_after_repair` deneme 2, `stalled_stream` ilk parçası) `IncludeEnglish = false` ise `CNT_OK_AB`, `true` ise `CNT_OK_AB_EN` döner. `CNT_OK_AB` = `CNT_OK` (varyant A, aynen) + aşağıdaki `b` (Türkçe üç alan) + `angles`; `CNT_OK_AB_EN` = `CNT_OK_EN` (varyant A Türkçe + `en`, aynen) + aşağıdaki `b` (Türkçe üç alan + `b.en`) + aynı `angles`. `IncludeVariantB = false` iken hiçbir çıktı değişmez; diğer fixture'lar iki durumda da aynıdır (B'siz). B, A ile aynı teklifi (%30, aynı bağlantı) aciliyet açısından anlatır.
+
+| Alan | Değer |
+|---|---|
+| `b.sms.body` | `{{first_name}}, %30 indirim bugün gece yarısı bitiyor! Sepetindeki ürünleri kaçırma: example.com/sepet` (şablon 102 karakter; en uzun `first_name` 50 ile 138) |
+| `b.email.subject` | `Son gün: sepetindeki ürünlerde %30 indirim` (42) |
+| `b.email.body` | `Merhaba {{first_name}},\n\nSepetindeki ürünler için tanımladığımız %30 indirim bugün gece yarısı sona eriyor. {{city}} için bu fırsat yalnız bugün geçerli.\n\nKaçırmadan example.com/sepet adresinden siparişini tamamla.\n\nSevgiler,\nSmart Campaign Composer` |
+| `b.en.sms.body` (yalnız `CNT_OK_AB_EN`) | `{{first_name}}, your 30% discount ends at midnight! Don't miss the items in your cart: example.com/cart` (şablon 103; en uzun `first_name` 50 ile 139) |
+| `b.en.email.subject` (yalnız `CNT_OK_AB_EN`) | `Last day: 30% off the items in your cart` (40) |
+| `b.en.email.body` (yalnız `CNT_OK_AB_EN`) | `Hi {{first_name}},\n\nThe special 30% discount for {{city}} ends at midnight today, and the items in your cart are still waiting.\n\nComplete your order at example.com/cart before it ends.\n\nHappy shopping!` |
+| `angles.a` | `İndirim oranı öne çıkar` (23) |
+| `angles.b` | `Aciliyet: indirim bugün bitiyor` (31) |
+
+İki fixture da tam şemaya ve kendi strict şemasına (`content-ab.tool.json` / `content-ab-en.tool.json`) göre geçerlidir (§1.1 unit test şartı bunları da kapsar) ve örnek brief kitlesinde (`first_name` 50, `city` 8) `content.Validate`'ten geçer: `worst_case.b = {sms_runes: 138, subject_runes: 42}`, `worst_case.b.en = {sms_runes: 139, subject_runes: 40}`.
+
 **Not (REQ-CNT-05 sınırı):** `CNT_OK` SMS'i, örnek brief kitlesindeki en uzun `first_name` (50 karakter, [`seed.md`](seed.md)) ile tam **160** karakter olur; yani `content.Validate(c, longest)` (doldurma sonrası uzunluk) ve onay anındaki yeniden denetimi sınırda geçer (`worst_case.sms_runes = 160`). Seed'siz/başka kitlede `longest_values` farklıysa sonuç değişir; testler değeri manifestten alır. `{{city}}` yalnızca email gövdesindedir.
 
 ### 3.4 Stream parçalama (sahte LLM)
 
-- Alan sırası: `sms.body`, `email.subject`, `email.body`; `IncludeEnglish = true` iken ardından `en.sms.body`, `en.email.subject`, `en.email.body` (SSE'de `language: "en"`).
+- Alan sırası: `sms.body`, `email.subject`, `email.body`; `IncludeEnglish = true` iken ardından `en.sms.body`, `en.email.subject`, `en.email.body` (SSE'de `language: "en"`); `IncludeVariantB = true` iken ardından `b.sms.body`, `b.email.subject`, `b.email.body` (SSE'de `variant: "b"`) ve iki dilliyse `b.en.sms.body`, `b.en.email.subject`, `b.en.email.body` (SSE'de `variant: "b"`, `language: "en"`). `angles` parçalanmaz (yalnız ham JSON'da).
 - Her alan, ardışık **en çok 20 karakterlik** (rune) parçalara bölünür; her parça bir `llm.ContentChunk` ve SSE'de bir `delta` olur. Bir alanın tüm `delta.text` değerlerinin birleşimi o alanın değerine eşittir.
 - `CNT_EXTRA_PROP` ve `CNT_INJECTION` için bilinen üç alan normal parçalanır; ek anahtar yalnızca ham JSON'da bulunur. `CNT_BAD_JSON` için yalnızca `sms.body` = `Merhaba {{first_name}}` (2 parça) gelir.
 - Parçalar arası bekleme `MockOptions.ChunkDelay` (ortamda `MOCK_LLM_CHUNK_DELAY`, varsayılan `0s`; compose demo `40ms`). Bekleme enjekte edilen `Clock` ile yapılır; testlerde 0.
 
 ### 3.5 İçerik akışı sonuçları hangi katmanda test edilir
 
-E2E (docker, `X-Mock-LLM-Scenario`) yalnız yukarıdaki 14 senaryoyu üretebilir. Senaryosu olmayan sonuçlar için test, `campaign.Deps.LLM` veya `composer.OpenContent`'e **test içi bir `llm.Client` sahtesi** verir (`llm.Client` ve `llm.ContentStream` genel arayüzlerdir; ham çıktıyı ve hataları sahte belirler). Yeni senaryo adı eklenmez (kapalı liste 14; P8 de eklemez). İngilizce sürüme özgü hatalar (`en.sms.body` 161 karakter, `en` içinde bilinmeyen değişken) senaryo değil, test içi sahte `llm.Client` ile üretilir.
+E2E (docker, `X-Mock-LLM-Scenario`) yalnız yukarıdaki 14 senaryoyu üretebilir. Senaryosu olmayan sonuçlar için test, `campaign.Deps.LLM` veya `composer.OpenContent`'e **test içi bir `llm.Client` sahtesi** verir (`llm.Client` ve `llm.ContentStream` genel arayüzlerdir; ham çıktıyı ve hataları sahte belirler). Yeni senaryo adı eklenmez (kapalı liste 14; P8 ve P9 de eklemez). İngilizce sürüme özgü hatalar (`en.sms.body` 161 karakter, `en` içinde bilinmeyen değişken) ve B varyantına özgü hatalar (`b.sms.body` 161 karakter, `variants_identical`, 61 karakterlik `angles.b`, `b` var `angles` yok) senaryo değil, test içi sahte `llm.Client` ile üretilir.
 
 | Davranış | Katman ve yöntem |
 |---|---|
@@ -158,5 +184,6 @@ E2E (docker, `X-Mock-LLM-Scenario`) yalnız yukarıdaki 14 senaryoyu üretebilir
 | LLM çıktısı olarak boş değer (`required`), `malformed_variable`, `email_body_too_long` → `content_version_id` dolu, `invalid` sürüm saklanır | composer unit / Service entegrasyonu; sahte `llm.Client` ham çıktıyı verir (düzenleme yolundaki aynı kodlar HTTP'den E2E'de kapsanır) |
 | `internal_error` son `invalid` | httpapi handler unit: sahte `ContentRun` bu olayı yayar; gerçek Service'te zorla üretilmez |
 | İki dilli üretim (`IncludeEnglish`), `CNT_OK_EN`, `delta` olaylarında `language: "en"`, `en.*` hata yolları ve tek düzeltme turu | composer unit ve HTTP entegrasyon; kitle kuralı Service entegrasyonu (`audience.languages` dolu kampanya); İngilizce hatası olan çıktı sahte `llm.Client` ile; E2E yalnız `ok` ile `CNT_OK_EN` akışını görür |
+| A/B üretimi (`IncludeVariantB`, `{"ab": true}`), `CNT_OK_AB`/`CNT_OK_AB_EN`, `delta` olaylarında `variant: "b"`, `b.*`/`angles.*` hata yolları, `variants_identical` ve tek düzeltme turu | composer unit ve HTTP entegrasyon; `ab` gövdesinin `ctx`'e çevrilmesi httpapi handler unit (sahte `Service`'in gördüğü `ctx`'te `campaign.ContentOptionsFromContext`); B hatası olan çıktı sahte `llm.Client` ile; E2E yalnız `ok` + `{"ab": true}` ile `CNT_OK_AB_EN` akışını görür (seed örnek kitlesinde İngilizce alıcı vardır) |
 | Heartbeat (`: keepalive`, 15 sn) ve olay biçimi/sırası | httpapi handler unit: sahte `ContentRun` + `clock.Fake` + `httptest` |
 | Terminal olay öncesi kayıt: `validated`'dan önce sürüm DB'de | E2E: `validated` alındığında `GET /api/campaigns/{id}` o sürümü `latest_content_version` olarak döner |

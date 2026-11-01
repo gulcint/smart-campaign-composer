@@ -19,7 +19,7 @@ Entegrasyon testleri yalnızca burada adı geçen tablo, kolon, constraint, fonk
 - Dizin: `migrations/`. Ad: `NNNN_snake_case_name.up.sql` + `NNNN_snake_case_name.down.sql`; `NNNN` 4 haneli, 0001'den artan, boşluksuz ve çakışmasız.
 - Her `up` için `down` zorunlu; `up → down → up` sonrası şema diff'i boş olmalı (`make db-roundtrip`).
 - Takip tablosu: `schema_migrations(version bigint PRIMARY KEY, dirty boolean NOT NULL)` (golang-migrate biçimi).
-- Planlanan ilk set (VARSAYIM, adlar bağlayıcı değil): `0001_customers_events`, `0002_customer_stats_fn`, `0003_campaigns_content_approvals`, `0004_deliveries`, `0005_seed_runs`. Sonradan eklenenler: `0006_revoke_schema_migrations`, `0007_campaign_generation_lease` (D52), `0008_campaign_schedule` (P7a, D62; §3.4.1), `0009_content_en` (P8, D63; §3.4, §3.5).
+- Planlanan ilk set (VARSAYIM, adlar bağlayıcı değil): `0001_customers_events`, `0002_customer_stats_fn`, `0003_campaigns_content_approvals`, `0004_deliveries`, `0005_seed_runs`. Sonradan eklenenler: `0006_revoke_schema_migrations`, `0007_campaign_generation_lease` (D52), `0008_campaign_schedule` (P7a, D62; §3.4.1), `0009_content_en` (P8, D63; §3.4, §3.5), `0010_content_variants` (P9, D64; §3.5, §3.5.1, §3.7).
 - `migrations/embed.go` (`package migrations`, `var FS embed.FS`) dosyaları gömer.
 
 ## 3. Tablolar
@@ -160,6 +160,10 @@ Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state):
 | `worst_case_sms_runes`, `worst_case_subject_runes` | integer | NULL; şablon söz dizimi geçerliyse oluşturma anındaki segmentin `longest_*` değerleriyle `content.MeasureWorstCase` sonucu |
 | `en_sms_body`, `en_email_subject`, `en_email_body` | text | NULL (0009, D63); İngilizce sürüm (NFC normalize şablon metni). `content_versions_en_all_or_none_check`: üçü birlikte NULL ya da üçü birlikte NOT NULL (boş dize olabilir: `invalid` taslak). NULL = sürümde İngilizce yok |
 | `worst_case_en_sms_runes`, `worst_case_en_subject_runes` | integer | NULL (0009); İngilizce sürümün `MeasureWorstCase` sonucu, aynı `longest_*` ile. `content_versions_worst_case_en_check`: `en_sms_body IS NULL` ⇒ ikisi de NULL; İngilizce söz dizimi geçersizse NULL |
+| `b_sms_body`, `b_email_subject`, `b_email_body` | text | NULL (0010, D64); B varyantının Türkçe metni (NFC normalize şablon). NULL = sürümde B yok |
+| `angle_a`, `angle_b` | text | NULL (0010); açı etiketleri (NFC normalize düz metin). `content_versions_b_all_or_none_check`: `b_sms_body`, `b_email_subject`, `b_email_body`, `angle_a`, `angle_b` beşi birlikte NULL ya da beşi birlikte NOT NULL (boş dize olabilir: `invalid` taslak) |
+| `b_en_sms_body`, `b_en_email_subject`, `b_en_email_body` | text | NULL (0010); B varyantının İngilizce sürümü. `content_versions_b_en_check`: üçü birlikte NULL ya da birlikte NOT NULL **ve** `(b_en_sms_body IS NOT NULL) = (b_sms_body IS NOT NULL AND en_sms_body IS NOT NULL)` (dil tutarlılığı: A'da İngilizce varsa B'de de vardır, yoksa yoktur) |
+| `worst_case_b_sms_runes`, `worst_case_b_subject_runes`, `worst_case_b_en_sms_runes`, `worst_case_b_en_subject_runes` | integer | NULL (0010); B ve B-İngilizce sürümlerinin `MeasureWorstCase` sonucu, aynı `longest_*` ile. `content_versions_worst_case_b_check`: `b_sms_body IS NULL` ⇒ `worst_case_b_*` NULL; `b_en_sms_body IS NULL` ⇒ `worst_case_b_en_*` NULL; söz dizimi geçersizse NULL |
 | `created_at` | timestamptz | NOT NULL |
 
 - `content_versions_campaign_version_key`: `UNIQUE (campaign_id, version_number)`
@@ -167,6 +171,16 @@ Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state):
 - `content_versions_errors_check`: `(status = 'validated') = (validation_errors = '[]'::jsonb)`
 
 İçerik sürümleri değişmezdir (UPDATE yapılmaz; DELETE yalnız `campaigns` ON DELETE CASCADE ve seed `--reset` ile).
+
+#### 3.5.1 Migration `0010_content_variants` (P9, D64)
+
+`up` (tek dosya, sırayla; kolonlar 0009 kalıbıyla, 0009 düzenlenmez):
+
+1. `ALTER TABLE content_versions ADD COLUMN b_sms_body text NULL, ADD COLUMN b_email_subject text NULL, ADD COLUMN b_email_body text NULL, ADD COLUMN angle_a text NULL, ADD COLUMN angle_b text NULL, ADD COLUMN b_en_sms_body text NULL, ADD COLUMN b_en_email_subject text NULL, ADD COLUMN b_en_email_body text NULL, ADD COLUMN worst_case_b_sms_runes integer NULL, ADD COLUMN worst_case_b_subject_runes integer NULL, ADD COLUMN worst_case_b_en_sms_runes integer NULL, ADD COLUMN worst_case_b_en_subject_runes integer NULL`.
+2. Adlandırılmış kısıtlar: `content_versions_b_all_or_none_check`, `content_versions_b_en_check`, `content_versions_worst_case_b_check` (ifadeler §3.5 tablosunda). Mevcut satırlar (hepsi NULL) üçünü de sağlar.
+3. `ALTER TABLE deliveries ADD COLUMN variant text NOT NULL DEFAULT 'a'` ve `deliveries_variant_check: CHECK (variant IN ('a','b'))` (§3.7). Varsayılan sayesinde mevcut satırlar `a` olur ve A/B'siz gönderimin `INSERT`'i değişmeden çalışır.
+
+`down` (sırayla): `deliveries_variant_check` ve `deliveries.variant` düşer; üç `content_versions` kısıtı düşer; on iki kolon `-- allow-destructive` ile düşer (A/B sürümlerinin B metni ve teslimatların varyantı kaybolur; kabul edilen bedel, 0008/0009 kalıbı). `make db-roundtrip`: `up → down → up` sonrası şema diff'i boş.
 
 `version_number`: aynı kampanyanın **tüm** satırlarının (`validated` ve `invalid`) `MAX(version_number) + 1`'i (satır yoksa 1), `campaigns` satırı kilitliyken (`SELECT … FOR UPDATE`) hesaplanır; yeniden kullanılmaz ve `segment_revision` değişince sıfırlanmaz. `content_versions_campaign_version_key` yalnız son güvencedir: bu kısıtın SQLSTATE `23505`'i hiçbir zaman HTTP 500'e dönüşmez (kilit altında hesaplandığı için oluşmaması gerekir; oluşursa servis bir kez yeniden dener). "En son sürüm" = güncel `segment_revision`'daki en yüksek `version_number`'lı **`validated`** satır; `invalid` taslaklar hiçbir zaman en son sürüm olmaz.
 
@@ -207,6 +221,7 @@ Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state):
 | `last_error` | text | NULL; kapalı küme, PII içermez: `http_<status>` (2xx dışı her HTTP yanıtı), `timeout`, `connection_error`, `content_too_long`, `recipient_unavailable` |
 | `failure_reason` | text | NULL; `CHECK (failure_reason IN ('provider_rejected','max_attempts_exceeded','rate_limit_budget_exhausted','content_too_long','recipient_unavailable'))` |
 | `provider_message_id` | text | NULL |
+| `variant` | text | NOT NULL DEFAULT `'a'` (0010, D64); `deliveries_variant_check`: `variant IN ('a','b')`. Teslimat oluşturulurken yazılır, sonra değişmez: onaylı sürümde B varsa `CASE WHEN get_byte(sha256(uuid_send(campaign_id) \|\| uuid_send(customer_id)), 0) >= 128 THEN 'b' ELSE 'a' END`, yoksa `'a'`. Kanala bağlı değildir (aynı müşterinin iki teslimatı aynı değer). PII değildir |
 | `sent_at`, `failed_at` | timestamptz | NULL |
 | `created_at`, `updated_at` | timestamptz | NOT NULL |
 
@@ -216,6 +231,7 @@ Adlandırılmış kısıtlar (sözleşme):
 - `deliveries_sent_check`: `(status = 'sent') = (sent_at IS NOT NULL)`
 - `deliveries_failed_check`: `(status = 'failed') = (failure_reason IS NOT NULL AND failed_at IS NOT NULL)`
 - `deliveries_lease_check`: `status <> 'sending' OR lease_expires_at IS NOT NULL`
+- `deliveries_variant_check`: `variant IN ('a','b')` (0010, P9). İhlal SQLSTATE `23514`.
 
 Teslimat geçişleri: `queued → sending` (claim), `sending → sent`, `sending → failed`, `sending → queued` (retry planlandı veya süresi dolmuş lease geri alındı). Claim'den sonra, provider çağrısından önce iki denetim yapılır (sırayla; go-interfaces `Dispatcher.ProcessOnce`): (1) claim anında yeniden okunan kanal izni `false` veya iletişim (`phone`/`email`) NULL → `sending → failed`, `failure_reason = 'recipient_unavailable'`, `last_error = 'recipient_unavailable'`; (2) render sonrası uzunluk aşımı → `sending → failed`, `failure_reason = 'content_too_long'`, `last_error = 'content_too_long'`. İkisinde de provider'a istek gitmez ve hız sınırlayıcı izni tüketilmez. `queued → failed` geçişi yoktur. `sent` ve `failed` sonuç durumlarıdır, değişmez.
 
@@ -242,7 +258,7 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 |---|---|
 | Segment üretimi (P3) | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (kira sona erip başkasına geçti; D52). Aksi halde `segment_*`/`audience_*` (P8: `audience_languages` dahil)/`longest_*` yazılır, `segment_revision + 1`; etkin onay varsa `revoked_at`, `revoke_reason = 'segment_changed'` ve `approved_content_version_id = NULL`; durum `audience_ready` |
 | `editContent` ön koşulu | Satır kilidi altında, ekleme ile **aynı** transaction'da: `X-Expected-Version` = güncel `segment_revision`'daki en yüksek `version_number`'lı `validated` satırın `id`'si (satır yoksa `none`) değilse hiçbir yazma yapılmaz ve 409 `content_edit_conflict` döner (karşılaştırma ile ekleme arasına başka yazma giremez) |
-| İçerik `validated` (LLM `validated` olayı veya `editContent`) | yeni `content_versions` satırı (`status = 'validated'`, `source` = `llm`/`edit`, `segment_revision` = güncel, `worst_case_*` dolu (P8: içerikte `en` varsa `en_*` ve `worst_case_en_*` de dolu, yoksa NULL), `validation_errors = '[]'`); durum `content_ready`; etkin onay varsa `revoke_reason = 'content_changed'` ve `approved_content_version_id = NULL` |
+| İçerik `validated` (LLM `validated` olayı veya `editContent`) | yeni `content_versions` satırı (`status = 'validated'`, `source` = `llm`/`edit`, `segment_revision` = güncel, `worst_case_*` dolu (P8: içerikte `en` varsa `en_*` ve `worst_case_en_*` de dolu, yoksa NULL; P9: içerikte `b` varsa `b_*`, `angle_a`, `angle_b`, `worst_case_b_*` ve `b.en` varsa `b_en_*`, `worst_case_b_en_*` de dolu, yoksa NULL), `validation_errors = '[]'`); durum `content_ready`; etkin onay varsa `revoke_reason = 'content_changed'` ve `approved_content_version_id = NULL` |
 | Saklanabilir son `invalid` taslak (LLM) | yalnız yeni `content_versions` satırı (`status = 'invalid'`, `source = 'llm'`, `validation_errors` dolu); `campaigns` ve `approvals` satırlarına dokunulmaz |
 | Diğer son `invalid` sonuçları, kopan akış, 422 ile reddedilen düzenleme | hiçbir yazma yok |
 | Onay | yeni `approvals` satırı (`content_status = 'validated'`), `approved_content_version_id` = sürüm, durum `approved` |
@@ -250,7 +266,7 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 | Üretim başlangıcı (segment veya içerik) | Durum ve kira aynı kilit altında denetlenir; süresi geçmemiş kira varsa 409 `generation_in_progress`, yoksa `generation_token`/`generation_expires_at` yazılır (süresi geçmiş kiranın üzerine). `updated_at` değişmez |
 | LLM içerik sürümünün kaydı | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (son `invalid` olayı, `llm_unavailable`) |
 | Üretim sonu (başarı, hata, istemci kopması) | `generation_token = NULL, generation_expires_at = NULL WHERE generation_token = <kendi jetonu>` (tek ifade; başkasının kirasına dokunmaz) |
-| Gönderim (P5; anlık, veya `scheduled`'dan "şimdi gönder") | §3.7 / README ve openapi `sendCampaign`. Durum `approved` veya `scheduled` olmalı; teslimatlar, `state = 'sending'`, `sending_started_at = now`, `scheduled_at = NULL` aynı transaction'da yazılır (kitle boşsa aynı transaction'da `completed`, `completed_at = now`) |
+| Gönderim (P5; anlık, veya `scheduled`'dan "şimdi gönder") | §3.7 / README ve openapi `sendCampaign`. Durum `approved` veya `scheduled` olmalı; teslimatlar (P9: `variant` aynı `INSERT … SELECT`'te, §3.7 ifadesiyle), `state = 'sending'`, `sending_started_at = now`, `scheduled_at = NULL` aynı transaction'da yazılır (kitle boşsa aynı transaction'da `completed`, `completed_at = now`) |
 | Planlama / yeniden planlama (P7a) | Durum `approved` veya `scheduled` olmalı (sürüm ve üretim kirası gönderimdeki sırayla denetlenir); `state = 'scheduled'`, `scheduled_at = <istenen an>`, `updated_at = now`. **Teslimat satırı yazılmaz**; onay satırı ve `approved_content_version_id` değişmez |
 | Plan iptali (P7a, `DELETE …/schedule`) | Durum `scheduled` olmalı (değilse hiçbir yazma yok, 409 `invalid_state`); `state = 'approved'`, `scheduled_at = NULL`, `updated_at = now`; onay korunur |
 | Zamanı gelen planın başlatılması (P7a, `campaign.Scheduler`) | Kampanya başına **ayrı** bir transaction: `SELECT … FROM campaigns WHERE state = 'scheduled' AND scheduled_at <= $now ORDER BY scheduled_at, id LIMIT 1 FOR UPDATE SKIP LOCKED` (bu turda başarısız olan veya atlanan kampanyalar hariç); kilit altında `state = 'scheduled' AND scheduled_at <= $now` yeniden denetlenir (daha ileri bir zamana yeniden planlama yarışı kazanır; koşul tutmuyorsa kampanya atlanır) ve süresi geçmemiş bir üretim kirası varsa kampanya bu turda atlanır (savunma; `scheduled`'da üretim başlatılamaz). Sonra anlık gönderimle **aynı** yazmalar (paylaşılan başlatma fonksiyonu, go-interfaces `startSendingLocked`): teslimatlar, `state = 'sending'`, `sending_started_at = $now` (worker saati); `scheduled_at` **korunur**; kitle boşsa aynı transaction'da `completed`. Commit edilmeden kesilen transaction hiçbir iz bırakmaz (kampanya `scheduled` kalır) |
@@ -259,7 +275,7 @@ Düzenleme, onay, gönderim ve planlama, kendi transaction'larında satırı kil
 
 ## 4. Kuyruk mekanikleri (gözlemlenebilir)
 
-- **Claim** (müşteri satırı aynı sorguda `customers` ile birleştirilerek **yeniden okunur**: güncel `phone`/`email` ve kanal izni `delivery.Job.To`/`Consent`'e girer): `UPDATE deliveries SET status='sending', lease_expires_at=$lease, attempts=attempts+1, last_attempt_at=$now, first_attempt_at=COALESCE(first_attempt_at,$now) WHERE id IN (SELECT id FROM deliveries WHERE channel=$ch AND status='queued' AND next_attempt_at <= $now ORDER BY next_attempt_at, id LIMIT $n FOR UPDATE SKIP LOCKED) RETURNING ...` → eşzamanlı worker'lar aynı satırı alamaz.
+- **Claim** (müşteri satırı aynı sorguda `customers` ile birleştirilerek **yeniden okunur**: güncel `phone`/`email` ve kanal izni `delivery.Job.To`/`Consent`'e girer; P8: `customers.language` → `Job.Recipient.Language`; P9: teslimatın kendi `variant`'ı → `Job.Recipient.Variant`): `UPDATE deliveries SET status='sending', lease_expires_at=$lease, attempts=attempts+1, last_attempt_at=$now, first_attempt_at=COALESCE(first_attempt_at,$now) WHERE id IN (SELECT id FROM deliveries WHERE channel=$ch AND status='queued' AND next_attempt_at <= $now ORDER BY next_attempt_at, id LIMIT $n FOR UPDATE SKIP LOCKED) RETURNING ...` → eşzamanlı worker'lar aynı satırı alamaz.
 - **Lease geri alma:** `status='sending' AND lease_expires_at < $now` olan satırlar `queued`'a döner (`failed_attempts` artmaz). Yeniden gönderim aynı `Idempotency-Key` (= `id`) ile yapılır; provider tekilleştirir. Lease süresi `DELIVERY_LEASE` (varsayılan `60s`).
 - **Kanal başına tek dispatcher:** `pg_try_advisory_lock(key)` oturum kilidi. Anahtarlar: `sms` = `7001`, `email` = `7002` (bigint). Kilidi tutmayan worker o kanal için istek başlatmaz.
 - **Canlı durum:** `LISTEN/NOTIFY` kullanılmaz; API'nin durum akışı `Service.Status`'u 1 sn'de bir yoklar (go-interfaces §httpapi). VARSAYIM.
