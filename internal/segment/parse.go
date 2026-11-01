@@ -40,6 +40,7 @@ var identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // (a group nested deeper than MaxDepth+1 => max_depth_exceeded; more than MaxConditions+1
 // conditions => max_conditions_exceeded). Errors: *validation.Error matching
 // validation.ErrInvalidJSON or validation.ErrSchemaViolation (or the two limit sentinels).
+// On success every city condition value is rewritten to its canonical spelling (CanonicalCity).
 func Parse(raw []byte) (Rule, error) {
 	if !json.Valid(raw) {
 		return Rule{}, &validation.Error{Fields: []validation.FieldError{{
@@ -63,6 +64,9 @@ func Parse(raw []byte) (Rule, error) {
 	if len(errs) > 0 {
 		return Rule{}, newError(errs)
 	}
+	// City spellings are canonicalised here, so Validate/Compile/Match and the stored rule see
+	// the seed spelling (segment-dsl.md §2.1, D66). Rules built in code skip this rewrite.
+	canonicaliseCities(root)
 	return Rule{Root: *root}, nil
 }
 
