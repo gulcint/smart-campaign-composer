@@ -69,6 +69,7 @@ type svcManifest struct {
 	Groups map[string]struct {
 		CustomerIDs []string `json:"customer_ids"`
 	} `json:"groups"`
+	Cities map[string]int `json:"cities"`
 }
 
 func readSvcManifest(t *testing.T) svcManifest {
@@ -1769,6 +1770,86 @@ func TestService_ApproveRechecksWorstCaseWithCurrentCustomers(t *testing.T) {
 				t.Fatalf("approvals rows = %d, want 0", len(rows))
 			}
 		})
+	}
+}
+
+// segmentClient is a scripted llm.Client for one segment output (no new mock scenario name exists for
+// it, REQ-AUD-01 C5): GenerateSegment returns raw, content streams come from llm.Mock.
+type segmentClient struct {
+	mock *llm.Mock
+	raw  string
+}
+
+func (s *segmentClient) GenerateSegment(context.Context, llm.SegmentRequest) (json.RawMessage, error) {
+	return json.RawMessage(s.raw), nil
+}
+
+func (s *segmentClient) StreamContent(ctx context.Context, req llm.ContentRequest) (llm.ContentStream, error) {
+	return s.mock.StreamContent(ctx, req)
+}
+
+// REQ-AUD-01 C5
+// The rewritten rule is stored and returned: when the model's rule spells the city differently
+// (Istanbul, ankara, İSTANBUL) GenerateSegment and a later Get carry the canonical city in
+// segment.rule, and the audience equals the manifest's count for that city. A city without a
+// canonical form (Kars) is kept as written: the backend never drops a city condition and never
+// counts an unknown city as an error; it simply matches nobody.
+func TestService_SegmentCityIsStoredCanonical(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		modelCity string
+		wantCity  string
+	}{
+		{name: "Istanbul is stored as İstanbul", modelCity: "Istanbul", wantCity: "İstanbul"},
+		{name: "İSTANBUL is stored as İstanbul", modelCity: "İSTANBUL", wantCity: "İstanbul"},
+		{name: "ankara is stored as Ankara", modelCity: "ankara", wantCity: "Ankara"},
+		{name: "Kars is kept and matches nobody", modelCity: "Kars", wantCity: "Kars"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			raw := `{"rule":{"all":[{"field":"city","op":"eq","value":` + strconv.Quote(tc.modelCity) + `}]}}`
+			h := newHarness(t, &segmentClient{mock: llm.NewMock(llm.MockOptions{}), raw: raw})
+			c, err := h.svc.Create(context.Background(), h.m.ExampleBrief.Brief)
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			res, err := h.svc.GenerateSegment(context.Background(), c.ID)
+			if err != nil {
+				t.Fatalf("GenerateSegment() error = %v, want nil (a city is never an error)", err)
+			}
+			if res.State != campaign.StateAudienceReady {
+				t.Fatalf("state after segment = %s, want audience_ready", res.State)
+			}
+			want := `{"all":[{"field":"city","op":"eq","value":` + strconv.Quote(tc.wantCity) + `}]}`
+			assertRuleJSON(t, "GenerateSegment segment.rule", want, res.Segment.Rule)
+			got := h.get(t, c.ID)
+			assertRuleJSON(t, "Get segment.rule", want, got.Segment.Rule)
+
+			wantMatched := h.m.Cities[tc.wantCity] // 0 for a city the seed does not have
+			if tc.wantCity != "Kars" && wantMatched == 0 {
+				t.Fatalf("test setup: manifest cities has no %s", tc.wantCity)
+			}
+			if res.Segment.Audience.Matched != wantMatched || got.Segment.Audience.Matched != wantMatched {
+				t.Fatalf("audience matched = %d (Get %d), want %d (manifest cities[%s])", res.Segment.Audience.Matched, got.Segment.Audience.Matched, wantMatched, tc.wantCity)
+			}
+		})
+	}
+}
+
+// assertRuleJSON compares a stored rule with the expected root group semantically.
+func assertRuleJSON(t *testing.T, what, want string, got json.RawMessage) {
+	t.Helper()
+	var w, g any
+	if err := json.Unmarshal([]byte(want), &w); err != nil {
+		t.Fatalf("test setup: bad want JSON %s: %v", want, err)
+	}
+	if err := json.Unmarshal(got, &g); err != nil {
+		t.Fatalf("%s is not JSON (%v): %s", what, err, got)
+	}
+	if diff := cmp.Diff(w, g); diff != "" {
+		t.Fatalf("%s mismatch (-want +got):\n%s", what, diff)
 	}
 }
 

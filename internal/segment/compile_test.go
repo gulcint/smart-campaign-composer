@@ -93,6 +93,59 @@ func TestCompile_InjectionPayloadsStayParameters(t *testing.T) {
 	}
 }
 
+// REQ-AUD-01 C5, REQ-AUD-02
+// The city rewrite happens in Go before Compile: whatever the spelling, the canonical value is a
+// parameter in Args, no spelling of the city appears in Where, and Where uses no lower(), unaccent
+// or ILIKE (the database comparison stays exact on the canonical value).
+func TestCompile_CanonicalCityIsAnArg(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		group   string
+		want    string
+		inArr   bool
+		spelled string
+	}{
+		{name: "eq Istanbul", group: all(cond("city", "eq", `"Istanbul"`)), want: "İstanbul", spelled: "Istanbul"},
+		{name: "eq istanbul", group: all(cond("city", "eq", `"istanbul"`)), want: "İstanbul", spelled: "istanbul"},
+		{name: "eq ISTANBUL", group: all(cond("city", "eq", `"ISTANBUL"`)), want: "İstanbul", spelled: "ISTANBUL"},
+		{name: "eq İSTANBUL", group: all(cond("city", "eq", `"İSTANBUL"`)), want: "İstanbul", spelled: "İSTANBUL"},
+		{name: "eq ankara", group: all(cond("city", "eq", `"ankara"`)), want: "Ankara", spelled: "ankara"},
+		{name: "neq ISTANBUL", group: all(cond("city", "neq", `"ISTANBUL"`)), want: "İstanbul", spelled: "ISTANBUL"},
+		{name: "in istanbul", group: all(cond("city", "in", `["istanbul","ANKARA"]`)), want: "İstanbul", inArr: true, spelled: "istanbul"},
+		{name: "not_in under not", group: all(not(cond("city", "not_in", `["IZMIR"]`))), want: "İzmir", inArr: true, spelled: "IZMIR"},
+		{name: "eq Kars stays a parameter", group: all(cond("city", "eq", `"Kars"`)), want: "Kars", spelled: "Kars"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := segment.Compile(mustRule(t, doc(tc.group)), refTime)
+			if err != nil {
+				t.Fatalf("Compile() error = %v", err)
+			}
+			if !argsContain(c.Args[1:], tc.want, tc.inArr) {
+				t.Fatalf("Args = %#v, want the canonical value %q as a parameter", c.Args, tc.want)
+			}
+			if tc.spelled != tc.want && argsContain(c.Args[1:], tc.spelled, tc.inArr) {
+				t.Fatalf("Args = %#v still carry the spelling %q", c.Args, tc.spelled)
+			}
+			for _, s := range []string{tc.want, tc.spelled} {
+				if strings.Contains(c.Where, s) {
+					t.Fatalf("Where contains the city value %q: %q", s, c.Where)
+				}
+			}
+			lw := strings.ToLower(c.Where)
+			for _, f := range []string{"lower(", "unaccent", "ilike"} {
+				if strings.Contains(lw, f) {
+					t.Fatalf("Where uses %q; the comparison must stay exact on the canonical value: %q", f, c.Where)
+				}
+			}
+			assertRefArg(t, c, refTime)
+			assertPlaceholders(t, c)
+		})
+	}
+}
+
 // REQ-AUD-01
 // Compile validates first and returns Validate's error; nothing is compiled for an invalid rule.
 func TestCompile_InvalidRuleIsRejected(t *testing.T) {
