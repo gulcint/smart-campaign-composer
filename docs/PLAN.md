@@ -97,6 +97,7 @@ Doküman "her şeyi yapmak yerine çekirdek akışı sağlam yap" diyor; fronten
 | 7 | **P7 Bonus** (`slice/p7-schedule`) | Case'in "Bonus (isteğe bağlı)" listesinden iki kırım (§9): **P7a Zamanlanmış gönderim** — onaylı kampanya ileri bir zamana planlanır, iptal/yeniden planlanır, zamanı gelince worker gönderimi başlatır; Onay ekranında "şimdi / ileri tarihte", Takip ekranında planlanan saat + geri sayım (REQ-SCH-01..04) · **P7b CI pipeline ✅** — P0'da kuruldu, P2–P6'da genişletildi ve sadeleştirildi (§1.2, §2.3, D27, D51); P7'de yeni iş yok. A/B varyantları **kapsam dışı** (sahip eklemedikçe); dile göre içerik P8'e taşındı | P7a: REQ-SCH (01–04) testleri yeşil, `make db-roundtrip` yeşil, §3.2 listesi; P7b: `main` ruleset'i `ci-ok`'u zorunlu tutuyor (kanıt: son merge'lerin `ci-ok` sonucu) |
 | 7+ | **P8 Bonus: dile göre içerik** (`slice/p8-language`) | Kullanıcının `language` alanına (`tr`/`en`) göre içerik: Claude tek çağrıda Türkçe ana metni ve İngilizce varyantı üretir, tek sürüm ikisini taşır, doğrulama ve onay her dil için aynı kurallarla yapılır, gönderimde her alıcıya kendi dilindeki metin gider, İngilizce varyantı olmayan sürümde İngilizce alıcı Türkçe yedek metni alır; Kitle ekranında dil dağılımı, İçerik ekranında TR/EN sekmeleri (§10, REQ-LNG-01..04) | REQ-LNG (01–04) testleri yeşil, `make db-roundtrip` yeşil, mevcut REQ-CNT/SND/SCH testleri değişmeden yeşil, §3.2 listesi |
 | 7++ | **P9 Bonus: A/B varyantları** (`slice/p9-ab`) | Pazarlamacı üretimden önce "A/B testi" seçerse Claude tek çağrıda iki içerik varyantı (A, B) ve her birinin kısa açısını üretir; tek sürüm ikisini taşır, doğrulama ve onay her varyant (ve varsa her dil sürümü) için aynı kurallarla yapılır; gönderimde kitle kampanya + alıcı özetiyle belirlenimci olarak %50/%50 bölünür, aynı kişi her kanalda aynı varyantı alır ve hiçbir zaman iki varyantı birden almaz; Takip ekranında varyant başına teslimat sayıları (§11, REQ-ABT-01..04) | REQ-ABT (01–04) testleri yeşil, `make db-roundtrip` yeşil, mevcut REQ-CNT/SND/SCH/LNG testleri değişmeden yeşil, §3.2 listesi |
+| 7+++ | **P10 Kampanya paneli + Takip düzeni** (`slice/p10-dashboard`) | Case bonusu değil, sahip isteği (2026-11-01). Salt okunur özet ucu `GET /api/campaign-summaries` (durum süzgeci, sıralama, sayfalama, kampanya başına teslimat sayıları, genel özet; migration yok); yeni **Kampanyalar** ekranı (`/campaigns`: özet kartları, durum süzgeci, liste); Brief giriş ekranının altında **planlanan** ve **gönderilen** kampanya özetleri; "Gönderimi izle" ekranının bilgi sırası, tipografi hiyerarşisi ve kart görünümünün yeniden düzenlenmesi (§12, REQ-DSH-01..04) | REQ-DSH (01–04) testleri yeşil, mevcut REQ-TRK/SCH/ABT testleri değişmeden yeşil, 375/768/1280 px ekran görüntüsü kanıtı, §3.2 listesi |
 
 Her faz sonunda `main` üzerinde `p<N>-done` etiketi.
 
@@ -457,6 +458,7 @@ Her test fonksiyonunun üstünde `// REQ-XXX-NN`. CI script'i testi olmayan REQ 
 - [ ] P7 yapıldıysa: `p7-done` etiketi, REQ-SCH testleri yeşil, `README.md` bonuslarda CI'ın yanında zamanlanmış gönderimi anar (§9.6); yapılmadıysa P7a dalı `main`'e girmemiştir
 - [ ] P8 yapıldıysa: `p8-done` etiketi, REQ-LNG testleri yeşil, `README.md` bonus tablosunda dile göre içerik "yapıldı" olarak geçer (§10.7); yapılmadıysa P8 dalı `main`'e girmemiştir
 - [ ] P9 yapıldıysa: `p9-done` etiketi, REQ-ABT testleri yeşil, `README.md` bonus tablosunda A/B varyantları "yapıldı" olarak geçer (§11.7); yapılmadıysa P9 dalı `main`'e girmemiştir
+- [ ] P10 yapıldıysa: `p10-done` etiketi, REQ-DSH testleri yeşil, `README.md` ekran listesinde Kampanyalar ekranı ve Brief özetleri geçer, DESIGN.md §11 madde 8 ("kampanya listesi kapsam dışı") D65'e göre güncellenmiş (§12.7); yapılmadıysa P10 dalı `main`'e girmemiştir
 
 ---
 
@@ -833,3 +835,160 @@ P7/P8 ile aynı akış (§1.2, §3) ve aynı **tek entegrasyon branch'i** kalıb
 | Geriye uyumluluk | Eski sürümlerde `b` yok, eski teslimatlarda `variant = 'a'` | `by_variant` `null`; arayüz tabloyu gizler; mevcut testler değişmeden yeşil (kapı) |
 
 **Sahip kararları (2026-11-01, `DECISIONS.md` D64):** (1) kazanan ölçülmez: Takip ekranı yalnız varyant başına teslimat sonucunu gösterir, sahte açılma/tıklama üretilmez; (2) bölme oranı sabit ≈ %50/%50, oran seçimi yok; (3) A/B isteğe bağlıdır, pazarlamacı "A/B testi" anahtarıyla açar (her kampanyada otomatik değil). Case yalnız "A/B varyantları" der; başka ayrıntı yoktur, kalan tasarım VARSAYIM'dır.
+
+---
+
+## 12. P10 — Kampanya paneli ve Takip ekranı düzeni
+
+> **Kaynak:** sahip isteği, 2026-11-01 [SEN]. Case'in bonus listesinde değildir; case'in "Takip: canlı gönderim durumu" maddesine ve %20'lik frontend ağırlığına hizmet eder. Tasarım VARSAYIM'dır ve `DECISIONS.md` **D65** olarak yazılır. Çekirdek akışın anlamı (kitle → içerik → onay → gönderim → takip) ve P7a/P8/P9 davranışı değişmez; kuyruk, hız sınırı, retry, idempotency ve canlı akış (`/events`) dokunulmaz.
+> **Kapsam [SEN]:** (1) "Gönderimi izle" (Takip) ekranının tasarımı: tipografi hiyerarşisi, bilgi sırası, bileşen görünümü; (2) kampanyalara genel bakış ekranı; (3) Brief giriş ekranının altında gönderilen ve planlanan kampanyaların özeti. **DESIGN.md §11 madde 8 ("Kampanya listesi / geçmiş ekranı: kapsam dışı, tek kampanya akışı") bu fazla tersine döner;** gerekçe D65'e ve DESIGN.md §11'e yeni karar satırı olarak yazılır.
+> **Ön koşul: `p9-done`.** API kısmı P9'dan bağımsızdır; ama Takip yeniden düzeni P9'un eklediği `variant-breakdown` ile aynı dosyalara (`TrackingPage.vue`, `DeliveryCounters.vue`) dokunur ve iki faz da `openapi.yaml`, `docs/requirements.md`, `ui.md`'yi değiştirir. Paralel yürütmek entegrasyon branch'inde çakışma ve iki kez kırmızı test demektir; fazlar sıralı yürütülür. P9 gecikirse yalnız adım 1'in (sözleşme) taslağı paralel yazılabilir, `main`'e P9 sözleşmesinden sonra girer.
+
+### 12.1 Bugünkü durum (tasarımın dayanağı)
+
+- **Liste ucu var, panele yetmez:** `GET /api/campaigns` (`listCampaigns`, `limit`/`offset`, `created_at DESC`) tam `Campaign` döner: segment kuralı ve son içerik sürümünün gövdeleri dahil, teslimat sayıları hariç. Durum süzgeci yoktur. Arayüz bu ucu bugün hiç çağırmaz (`web/src`'de kullanım yok); yalnız E2E testi (`test/e2e/campaigns_test.go`, REQ-AUD-00) sınar.
+- **Teslimat sayıları kampanya başınadır:** `GET …/status` ve `GET …/events` tek kampanyanın `StatusCounts`'unu verir; bir liste için kampanya başına ayrı istek (N+1) gerekir. Toplu `GROUP BY` sayımı için `deliveries_campaign_status_idx (campaign_id, status)` zaten vardır.
+- **Metrics kaynak olamaz:** `scc_deliveries_*` sayaçlarında `campaign_id` etiketi yoktur (kardinalite kuralı, metrics.md) ve Prometheus metni arayüzün okuyacağı bir biçim değildir. Panel sayıları SQL'den gelir.
+- **Rotalar:** `/` (`brief-new`) ve `/campaigns/:campaignId/*` adımları var; `/campaigns` (tam yol) boştur. Stepper yalnız kampanya rotalarında çizilir (`App.vue`), dolayısıyla kampanyadan bağımsız bir sayfa stepper'sız açılır. `AppHeader`'daki tek link logo → `brief-new`.
+- **Takip ekranının somut tasarım sorunları** (kod okunarak; düzeltme bu fazın işi):
+  1. **Durum üç kez söylenir, kampanya hiç söylenmez.** `StepHeader` genel bir başlık ("Gönderimi izle") ve durum rozeti çizer (`TrackingPage.vue:300–308`); hemen altında sayaç kartının `h2`'si aynı durumu yeniden yazar ("Kampanya gönderiliyor / tamamlandı") ve yanında "Canlı" hapı vardır (`DeliveryCounters.vue:169–204`). Hangi kampanyanın izlendiği (brief), kitle büyüklüğü, başlama ve bitiş zamanı ekranda yoktur; `CampaignStatus.sending_started_at` / `completed_at` API'den gelir ama gösterilmez.
+  2. **Ana sayı en küçük yazıdır.** Toplam ilerleme yüzdesi `text-numeral-sm text-ink-600` (13 px, gri; `DeliveryCounters.vue:222`); beş toplam sayaç (toplam, gönderildi, başarısız, gönderiliyor, kuyrukta) aynı `text-numeral-md` boyunda yan yanadır (`:242–266`). Sonuç (gönderildi/başarısız) ile kalan iş (gönderiliyor/kuyrukta) arasında hiyerarşi yok.
+  3. **Başlık düzeyi ile tip token'ı uyuşmaz.** `h2` öğesi `text-h3` ile (`:173`, `:181`), kanal kartının `h3`'ü `text-h4` ve `text-ink-900` ile çizilir (`:296`); DESIGN.md §4.1 h2–h4 için `--text-accent-heading`, §4.3 `h2` için 24/32 der. Bekleme metni ("Gönderim durumu alınıyor…") başlık olarak çizilir (`:183`).
+  4. **Kanal kartında aynı tür sayılar farklı boylarda:** kanal toplamı `numeral-md` (`:301–309`), dört durum `numeral-sm` ile 2×2 ızgarada (`:332–350`), yüzde çubuğun yanında ayrı (`:327`).
+  5. **Üç ayrı kart dili:** genel kart `surface-raised` + `shadow-raised` + gradient şerit (`:161–166`), kanal kartları gölgesiz `surface-card` (`:288`), başarısız listesi üçüncü bir biçim (`TrackingPage.vue:351`).
+  6. **Bayat durumda bütün kart `opacity-80`** (`DeliveryCounters.vue:162`, `:289`): gri metnin kontrastı WCAG AA altına inebilir; bayatlık zaten `delivery-stale-note` ile söylenir. Son güncelleme saati yalnız bayatken görünür (`:214`).
+  7. **Plan notu sayfada yüzer:** `schedule-started-note` başlık ile sayaçlar arasında bağımsız bir satırdır (`TrackingPage.vue:319–327`), kampanyanın zaman bilgisiyle bir arada değildir.
+
+### 12.2 Tasarım seçenekleri (karar D65)
+
+**Veri — panel ve özetler nereden okur:**
+
+| | A — İstemcide N+1 (`/campaigns` + kampanya başına `/status`) | B — `GET /api/campaigns`'i genişlet (süzgeç + `Campaign`'e sayılar) | **C — Yeni salt okunur özet ucu (seçilen)** |
+|---|---|---|---|
+| API değişikliği | Yok | `Campaign` şeması değişir; `getCampaign` ve her kampanya yanıtı etkilenir, anahtar denetleyen mevcut E2E testleri kırılır | Yalnız ekleme: yeni işlem ve şemalar; mevcut uçlar bayt bayt aynı |
+| İstek sayısı | 1 + N (20'lik sayfada 21) | 1 | 1 |
+| Yanıt boyutu | Tam `Campaign` (içerik gövdeleri dahil) | Tam `Campaign` + sayılar | Yalnız panelin gördüğü alanlar |
+| Test edilebilirlik | Sayılar istemcide birleşir, E2E'si zor | Orta | Tek uç, tek E2E; sayım SQL'de |
+
+C seçilir: tek sorgu ailesi (sayfa + `GROUP BY` sayımı), migration yok, mevcut sözleşme değişmez. Bedel: kampanya okuma yolu ikiye çıkar (`Campaign` ve `CampaignSummary`); özet şeması bilerek küçük tutulur.
+
+**Ekran — panel nerede yaşar:**
+
+| | A — Yalnız Brief ekranında bölüm | **B — Ayrı `/campaigns` rotası + Brief'te kısa özetler (seçilen)** |
+|---|---|---|
+| Brief ekranı | Uzun liste composer'ı aşağı iter; ilk ekranın işi (brief yazmak) gölgelenir | Composer'ın altında iki kısa özet (en çok 3'er satır) ve "Tümünü gör" |
+| Genel bakış | Süzgeç ve sayfalama Brief'e sığmaz | Özet kartları, durum süzgeci, sayfalama ayrı ekranda |
+| Navigasyon | Değişmez | `AppHeader`'a "Kampanyalar" linki; bu ekranda stepper yok (kampanya bağlamı yok, `App.vue` kuralı) |
+
+B seçilir: sahibin istediği iki yüzey (genel bakış, Brief altı özet) ayrı amaçlara hizmet eder ve ikisi aynı ucu farklı süzgeçle çağırır.
+
+**Takip ekranı:** yeniden yazım yok. Mevcut bileşenler (`StepHeader`, `DeliveryCounters`, `ProgressBar`, `SchedulePanel`, başarısız listesi) korunur; yalnız sıra, tip token'ları ve kart dili değişir. **Mevcut bütün `data-testid`'ler ve `data-value`'lar aynı anlamla kalır** (REQ-TRK-01, REQ-SCH-04, REQ-ABT-04 testleri değişmeden yeşil).
+
+### 12.3 API ve veri
+
+**Yeni işlem `GET /api/campaign-summaries` (`listCampaignSummaries`; `openapi.yaml`, ekleme):**
+- **Sorgu:** `state` (isteğe bağlı, virgülle ayrılmış `CampaignState` listesi, ör. `state=sending,completed`; boş öğe veya bilinmeyen değer → 422 `invalid_value`, yol `query.state`); `order` (`recent` varsayılan = `created_at DESC, id ASC`; `scheduled_at` = `scheduled_at ASC, id ASC`, `NULL`'lar sonda; bilinmeyen → 422 `invalid_value`, yol `query.order`); mevcut `Limit` (1..200, varsayılan 50) ve `Offset`.
+- **Yanıt `CampaignSummaryPage`:** `items`, `total` (süzgeçten sonra), `limit`, `offset`, `overview`.
+- **`CampaignSummary`** (`additionalProperties: false`): `id`, `brief` (tam metin; kısaltma arayüzde), `state`, `audience` (`{matched, sms, email}` veya `null`; `draft`'ta `null`), `scheduled_at`, `sending_started_at`, `completed_at`, `created_at`, `updated_at`, `deliveries` (`StatusCounts` veya `null`: teslimat satırı olmayan kampanyada `null`; `sending`/`completed`'da her zaman dolu ve `GET …/status`'un `counts`'u ile aynı). Segment kuralı, içerik gövdesi ve alıcı adresi **yoktur** (REQ-SEC-01 ruhu).
+- **`overview`** süzgeç ve sayfalamadan bağımsızdır: `campaigns` (`total` ve yedi `CampaignState`'in her biri için sayı; anahtarlar her zaman var, olmayan durum 0) ve `deliveries` (bütün kampanyaların toplam `StatusCounts`'u).
+- **Sorgular:** sayfa için `campaigns` üzerinde süzgeçli `SELECT … ORDER BY … LIMIT/OFFSET` (`state` beyaz listeden geçmiş değerlerle parametreli `= ANY($1)`); sayılar için sayfadaki kimliklerle tek `deliveries … GROUP BY campaign_id, status`; `overview` için iki `GROUP BY`. Hepsi okumadır; sayılar canlıdır, sorgular arası anlık tutarlılık iddiası yoktur.
+- **Migration yok:** mevcut indeksler (`campaigns_pkey`, `campaigns_scheduled_due_idx`, `deliveries_campaign_status_idx`) seed ölçeğinde yeterli; `created_at` indeksi ölçek gerekirse eklenir (YAGNI, `DECISIONS.md` "Bilinen sınırlar"a satır).
+- `GET /api/campaigns`, `GET /api/campaigns/{id}`, `/status`, `/events`, `/deliveries` **değişmez**.
+- **Go:** `campaign.Store`'a `ListSummaries(ctx, SummaryFilter) ([]Summary, int, Overview, error)` (imza `go-interfaces.md`'de, mimar sabitler); handler `internal/httpapi` mevcut `Limit`/`Offset` doğrulamasını yeniden kullanır. `OPENAPI_VALIDATE=strict` (D30) yeni işlemi de sınar; contract allowlist'ine eklenir.
+
+### 12.4 Arayüz
+
+**Takip ekranı (`TrackingPage`, `DeliveryCounters`; DESIGN.md §8.5 yeniden yazılır).** Yukarıdan aşağı sıra:
+1. **Başlık bloğu:** `StepHeader` (h1 `page-title` "Gönderimi izle"; tek durum rozeti burada kalır). Genel alt başlık yerine kampanyanın kimliği: brief'in ilk iki satırı (`tracking-campaign-brief`; kullanıcı metni olduğu için `--ink-700`, `line-clamp-2`, `v-html` yok) ve tek meta satırı: kitle (`SMS n · Email m`), başlama (`tracking-started-at`, `data-value` = `sending_started_at`), bitiş (`tracking-completed-at`, `data-value` = `completed_at`). Planlı başlatılmışsa `schedule-started-note` bu satıra taşınır (testid ve `data-value` aynı). Saatler `formatTsi` (ui.md §3.26) ile.
+2. **Genel durum kartı (tek vurgulu kart):** başlık `h2` (`text-h2`, `--text-accent-heading`) sabit "Genel durum"; durum cümlesi artık başlık değil, başlığın yanındaki canlılık göstergesidir ("Canlı" / bayat notu). Büyük sayı tamamlanma yüzdesidir: `numeral-xl`, `--text-accent-numeral` (`delivery-percent`, `data-value` = taban yüzde) ve yanında "x / y mesaj işlendi" cümlesi; altında segmentli toplam çubuğu (`delivery-bar-total`). Sayaçlar iki gruba ayrılır: **sonuç** (Gönderildi, Başarısız; `numeral-md`, başarısız > 0 ise `--error`) ve **kalan iş** (Gönderiliyor, Kuyrukta; `numeral-sm`, `--ink-700`). Toplam (`delivery-count-total-total`) cümledeki `y`'dir; testid oradaki öğeye taşınır. Son güncelleme saati her zaman kartın altında (`caption`); bayatken ek olarak `delivery-stale-note`. Tamamlanınca `delivery-completed-title` başlığın yanında görünmeye devam eder (testid aynı).
+3. **Kanal kartları:** başlık `h3` (`text-h3`, `--text-accent-heading`) + kanal noktası; kanal toplamı ve yüzde aynı `numeral-md` boyunda çubuğun üstünde; dört durum tek sütunlu tanım listesi (etiket `body-sm --ink-600`, sayı `numeral-sm` sağa hizalı, `tabular-nums`). ≥ 768 yan yana, < 768 alt alta.
+4. **Varyant tablosu** (P9 `variant-breakdown`): kanal kartlarının altında, aynı kart dilinde (içerik P9'daki gibi).
+5. **Başarısız teslimatlar:** bağlantı ve liste davranışı aynı; liste kartı kanal kartlarıyla aynı dilde.
+
+Tek kart dili: `surface-card`, `--radius-card`, `--shadow-card`; yalnız genel durum kartı `--radius-card-lg` + gradient şerit (DESIGN.md §5, "dashboard ana sayaç"). **Bayatlıkta opaklık düşürülmez** (kontrast korunur); bayatlık not, ikon ve metinle söylenir. Bekleme hâli başlık değil, iskelet (`Skeleton`) + görsel olarak gizli `role="status"` metnidir. Hareket kuralları (§5 sayaç tween'i, reduced-motion) değişmez.
+
+**Kampanyalar ekranı (yeni; rota `/campaigns`, ad `campaigns`, `CampaignsPage`, kök `page-campaigns`):**
+- h1 `page-title` "Kampanyalar" ve birincil eylem "Yeni kampanya" (`campaigns-new` → `brief-new`). Stepper yok.
+- **Özet kartları** (`overview`'dan; `campaigns-kpi-<k>`, `data-value` ham sayı): `total` (bütün kampanyalar), `scheduled`, `sent` (`sending` + `completed`), `messages-sent` (`overview.deliveries.sent`), `messages-failed` (`overview.deliveries.failed`; > 0 ise `--error`). ≥ 1024 beş sütun, 768–1023 üç, < 768 iki sütunlu ızgara; sayı `numeral-md`, etiket `caption`.
+- **Durum süzgeci:** sekme grubu (`campaigns-filter-<g>`; `role="tablist"`, ok tuşları, `LanguageTabs` kalıbı): `all` (süzgeç yok), `draft` (`draft,audience_ready,content_ready,approved`), `scheduled`, `sending`, `completed`. Seçim `?state=<g>` rota sorgusunda tutulur (geri/ileri ve link paylaşımı çalışır); bilinmeyen değer `all` sayılır. `scheduled` sekmesi `order=scheduled_at`, diğerleri `recent` ister.
+- **Liste:** ≥ 768 tablo, < 768 kart (DESIGN.md §8.6 başarısız listesi kalıbı). Satır `campaign-row` (`data-campaign-id`, `data-state`); sütunlar: brief (ilk satır, tek satıra kesilmiş, `--ink-900`, `title`'da tam metin), durum (`StatusBadge kind="campaign"`), kitle (SMS · Email), ilerleme (`sending`/`completed`: mini `ProgressBar` + "gönderildi n · başarısız m"; `scheduled`: planlanan saat `formatTsi`; diğerleri "—"), oluşturma tarihi. Satırın tamamı tek link (`campaign-row-link`) `/campaigns/:id`'ye gider; yönlendirme tablosu (ui.md §1) doğru adımı seçer.
+- **Sayfalama** 20'şer: "Daha fazla göster" (`campaigns-load-more`, `offset += 20`; `total`'a ulaşınca gizlenir). **Boş:** `campaigns-empty` (süzgeçliyken "Bu durumda kampanya yok", hiç kampanya yoksa "Yeni kampanya" eylemi). **Hata:** `ErrorCard action="retry"`.
+- **Tazeleme:** listede `sending` kampanya varken aynı sorgu her **10 sn**'de yeniden istenir (yükleniyor durumu gösterilmeden, yerinde güncelleme); yoksa yoklama yok; unmount'ta durur. Kampanya başına SSE açılmaz.
+- **`AppHeader`'a `nav-campaigns` linki** ("Kampanyalar"; ≥ 640 metin, < 640 ikon + `sr-only` metin; 44 px dokunma hedefi); `campaigns` rotasında `aria-current="page"`.
+
+**Brief giriş ekranı (`BriefPage`, yalnız `brief-new` rotası).** Composer ve seed notunun altında iki bölüm; ≥ 1024 yan yana, altında alt alta:
+- **Planlanan kampanyalar** (`brief-scheduled-summary`): `state=scheduled&order=scheduled_at&limit=3`; satırda brief'in ilk satırı + planlanan saat (`formatTsi`) + yükleme anında hesaplanan göreli süre ("2 saat sonra"; saniyelik geri sayım yok).
+- **Gönderilen kampanyalar** (`brief-sent-summary`): `state=sending,completed&order=recent&limit=3`; satırda brief'in ilk satırı + durum rozeti + "gönderildi n · başarısız m".
+- Her satır `campaign-summary-item` (`data-campaign-id`), `tracking` rotasına link. Bölüm başlığının yanında `total`; altında "Tümünü gör": `brief-scheduled-all` → `/campaigns?state=scheduled`, `brief-sent-all` → `/campaigns?state=completed`. Boşken bölüm tek satırlık boş metinle kalır (ilk kurulumda ne olacağını söyler, yer kaplamaz).
+- **Hata yalıtımı:** özet isteği başarısızsa bölüm içinde `InlineError` + "Tekrar dene"; composer ve `brief-submit` etkilenmez (ekranın birincil işi brief yazmaktır). Özet istekleri composer'ın ilk boyamasını beklemez.
+- Brief gönderilirken (`AudienceLoadingPreview` görünürken) iki bölüm gizlenir; dikkat tek göstergede kalır.
+
+i18n tek dosyada (`web/src/i18n`); brief metinleri kullanıcı verisidir, yalnız metin interpolasyonuyla basılır (`v-html` yok, REQ-UI-01).
+
+### 12.5 Erişilebilirlik ve responsive
+
+- Başlık düzeyleri atlamaz: sayfada tek `h1`, bölüm `h2`, kart `h3`; görsel token düzeyle aynı (`h2` → `text-h2`, `h3` → `text-h3`).
+- Kampanyalar tablosu gerçek `<table>` (`<th scope="col">`); < 768 kartlarda başlıklar `sr-only`. Satır linkinin erişilebilir adı brief'in ilk satırı + durum.
+- Süzgeç sekmeleri `role="tablist"`, ok tuşları, `aria-selected`; sekme değişince liste bölgesi `aria-busy` olur, sonuç sayısı `role="status"` ile bir kez okunur ("12 kampanya").
+- 10 sn yoklaması ekran okuyucuya duyurulmaz; Takip'in 10 sn'lik `polite` özet kuralı (DESIGN.md §9) aynen kalır.
+- Durum renkten bağımsızdır: rozetler ikon + metin; başarısız sayısı `--error` + "Başarısız" etiketi.
+- Kontrast: bayat kartta opaklık yok; gri metinler `--ink-600` ve koyusu (DESIGN.md §3.7 tablosu).
+- **Genişlikler 375 / 768 / 1280 px:** yatay sayfa kaydırması yok; < 1024'te etkileşimli öğeler ≥ 44 px (`max-lg:` kuralı); Kampanyalar tablosu < 768'de karta döner; Takip'teki büyük yüzde mobilde 32 px; Brief özetleri < 1024'te alt alta.
+
+### 12.6 Gereksinimler (`docs/requirements.md`, yeni alan DSH) ve testler
+
+Test yazarı yalnız `docs/requirements.md`'den çalışır (D50): testte gerekecek her yol, sorgu, alan, hata kodu ve `data-testid` REQ metnine yazılır. "Kapsam dışı ve bonus" paragrafına "Kampanya listesi P10'da sahip isteğiyle eklendi (D65)" cümlesi eklenir. Taslak kabul ölçütleri:
+
+- **REQ-DSH-01 — Kampanya özet listesi · Faz P10 · [SEN] + VARSAYIM tasarım:** `GET /api/campaign-summaries` 200 ve `CampaignSummaryPage` anahtarları (`items`, `limit`, `offset`, `overview`, `total`); öğe anahtarları tam olarak §12.3 listesi (segment kuralı, içerik gövdesi, telefon, e-posta yok); `state` süzgeci (tek değer ve virgüllü liste; `total` süzgeçten sonra); `order=recent` (`created_at` azalan) ve `order=scheduled_at` (artan) sırası; varsayılan `limit` 50 / `offset` 0 ve yankı; 422 `invalid_value` vakaları (`query.state` bilinmeyen değer ve boş öğe, `query.order`, `query.limit` 0 ve 201, `query.offset` −1); `deliveries` `draft`…`approved` ve `scheduled`'da `null`, gönderim başlamışsa `GET …/status` `counts`'u ile alan alan eşit; `audience` `draft`'ta `null`; `overview.campaigns`'te yedi durum anahtarının hepsi ve `total` = durum sayılarının toplamı; `overview` süzgeçten bağımsız (`state=scheduled` ile ve süzgeçsiz aynı); `overview.deliveries.sent` en az testin kendi tamamlattığı kampanyaların `sent` toplamı (paralel testler sayıyı yalnız artırabilir).
+- **REQ-DSH-02 — Kampanyalar ekranı · Faz P10 · [SEN] + VARSAYIM:** `/campaigns` rotası `page-campaigns` ve tek `h1`; stepper yok; `campaigns-kpi-<k>` (`total`, `scheduled`, `sent`, `messages-sent`, `messages-failed`) `data-value`'ları sahte yanıttaki `overview`'dan (`sent` = `sending` + `completed`); `campaigns-filter-<g>` sekmeleri, ok tuşları, seçim → `?state=<g>` ve istek sorgusu (§12.4 grup → `state` listesi; `scheduled` → `order=scheduled_at`); bilinmeyen `?state` → `all`; `campaign-row` sayısı ve `data-state`; `campaign-row-link` hedefi `/campaigns/<id>`; `campaigns-load-more` `offset=20` ister ve `total`'a ulaşınca kaybolur; `campaigns-empty`; `campaigns-new` → `brief-new`; listede `sending` varken 10 000 ms'de bir yeniden istek (`vi.advanceTimersByTime`), yokken istek yok, unmount'ta durur; `nav-campaigns` her sayfada, `campaigns`'te `aria-current="page"`; brief metni `v-html` ile basılmaz (`<script>` içeren brief metin olarak görünür, DOM'da `script` öğesi oluşmaz).
+- **REQ-DSH-03 — Brief ekranında planlanan ve gönderilen özetleri · Faz P10 · [SEN] + VARSAYIM:** yalnız `brief-new`'de `brief-scheduled-summary` ve `brief-sent-summary`; istek sorguları (`state=scheduled&order=scheduled_at&limit=3`, `state=sending,completed&order=recent&limit=3`); en çok 3 `campaign-summary-item`, her biri `data-campaign-id` taşır ve `tracking` rotasına gider; `brief-scheduled-all` / `brief-sent-all` hedefleri; boş metin; özet isteği 500 dönünce bölüm içi hata ve "Tekrar dene", `brief-submit` etkin kalır ve brief gönderimi çalışır; brief gönderilirken iki bölüm görünmez; salt okunur `brief` rotasında bölümler yok.
+- **REQ-DSH-04 — Takip ekranı bilgi düzeni · Faz P10 · [SEN] + VARSAYIM:** `tracking-campaign-brief` metni kampanyanın brief'i (metin olarak); `tracking-started-at` / `tracking-completed-at` `data-value` = son `status` olayının (yoksa kampanyanın) `sending_started_at` / `completed_at`'i, `null` iken öğe yok; `delivery-percent` `data-value` = ⌊(sent + failed) / total × 100⌋ (total 0 ve tamamlandıysa 100); sayfada tek `h1`, `delivery-counters` içindeki başlıklar `h2` → `h3` sırasında; bayat durumda `delivery-stale-note` ve son güncelleme saati görünür; **REQ-TRK-01, REQ-SCH-04 ve REQ-ABT-04'ün bütün testid ve `data-value` iddiaları değişmeden geçer** (eski testlerin dokunulmadan yeşil kalması bu ölçütün parçasıdır).
+
+İzlenebilirlik tablosuna dört satır: DSH-01 `integration, e2e`; DSH-02 `web-unit`; DSH-03 `web-unit`; DSH-04 `web-unit`.
+
+| Katman | Senaryolar |
+|---|---|
+| **Unit (Go)** | Sorgu parametresi ayrıştırma (`state` listesi, boş öğe, bilinmeyen değer, `order`) |
+| **Entegrasyon (DB)** | `ListSummaries`: süzgeç, iki sıralama, sayfalama, `total`; `deliveries` sayımı `/status` sorgusuyla aynı; `overview` yedi durum anahtarı ve 0'lar; teslimatı olmayan kampanyada `null` |
+| **API E2E** | Key'siz: iki kampanya oluştur (biri planlı, biri gönderilip tamamlanmış) → süzgeçlerle ikisi doğru listede, `deliveries` = `/status`; 422 vakaları; yeni işlem en az bir kez çağrılır (D30 `OPENAPI_VALIDATE=strict`); mevcut `listCampaigns` testi değişmez |
+| **Frontend (Vitest)** | Kampanyalar ekranı (kartlar, süzgeç + rota sorgusu, satırlar, sayfalama, boş/hata, sahte zamanlayıcıyla yoklama); Brief özetleri (istekler, 3 sınırı, linkler, hata yalıtımı, gönderimde gizlenme); Takip düzeni (yeni testid'ler, başlık sırası, yüzde) |
+| **Elle** | 375/768/1280 px'de Takip (canlı, tamamlandı, bayat, planlı), Kampanyalar (dolu, boş) ve Brief (özetli, boş) ekran görüntüleri PR'da (`.playwright-mcp/p10/<ekran>-<durum>-<genişlik>.png`); klavyeyle süzgeç ve satır gezintisi; bayat kartta kontrast denetimi |
+
+### 12.7 Dilim akışı, sıra, roller ve kapı
+
+P7–P9 ile aynı akış (§1.2, §3) ve **tek entegrasyon branch'i** kalıbı (`chore/p10-dashboard-integrate`): yeni uç, sözleşme, test ve web birlikte kırmızıdan yeşile döner; test yazarı dosyaları kopyalanır, `make test` koşulur, orkestratör commit'ler. Uygulayıcı ajanlar test dosyasına dokunmaz. Orkestratör Opus 5.5'tir (CLAUDE.md). Yeni migration olmadığı için `make db-roundtrip`'e ekleme yapılmaz (mevcut hedef yeşil kalır).
+
+1. **Sözleşme** — `docs/p10-dashboard-contracts` → `main` (mimar): `docs/requirements.md` (REQ-DSH-01..04, kapsam dışı paragrafı, izlenebilirlik), `openapi.yaml` + `internal/httpapi/openapi/openapi.yaml` kopyası (`listCampaignSummaries`, `CampaignSummary`, `CampaignSummaryPage`, `CampaignOverview`), `go-interfaces.md` (`ListSummaries`, `SummaryFilter`, `Summary`, `Overview`), `ui.md` (rota `campaigns`, §1 tablosu, `CampaignsPage`, Brief özetleri, §3.20 Takip testid'leri, §8 REQ eşlemesi), DESIGN.md (§8.1 Brief özetleri, §8.5 Takip yeniden yazımı, yeni §8.7 Kampanyalar, §8.6 responsive satırları, §11 madde 8'in tersine dönüşü), `DECISIONS.md` D65. **Kabul:** `api-contract` ve `check-contract-copies` yeşil; sahip REQ metnini ve §12.8'deki açık kararları onayladı.
+2. **Dilim branch'i** — `slice/p10-dashboard` güncel `main`'den (`p9-done` sonrası).
+3. **Testler** — `scripts/test-writer-worktree.sh origin/slice/p10-dashboard test/p10-dashboard`, ayrı session'da `claude --agent test-writer`; yalnız REQ-DSH ölçütlerinden; eksik ad varsa "REQ eksik" döner (adım 1'e). Test yazarı session export'u `ai-sessions/`'a eklenir.
+4. **Backend** — `postgres.CampaignStore.ListSummaries` (süzgeç, sıralama, sayfa, toplu sayım, `overview`), `campaign` servis metodu, handler + rota, `api-types` yeniden üretimi. **Kabul:** Go testleri yeşil; REQ-AUD-00 `listCampaigns` E2E'si ve REQ-TRK/SND/SCH testleri değişmeden yeşil.
+5. **Arayüz** — sırayla, her biri ayrı commit: (a) Takip yeniden düzeni (yalnız `TrackingPage.vue`, `DeliveryCounters.vue`, gerekirse `StepHeader` slot'u; davranış değişmez), (b) `CampaignsPage` + rota + `AppHeader` linki, (c) Brief özetleri. `designer` önce 1280 ve 375 px eskiz ekran görüntüsünü sahibe gösterir, onaydan sonra uygulanır. **Kabul:** Vitest yeşil (eski Takip testleri dokunulmadan), üç genişlikte ekran görüntüsü, `vue/no-v-html` lint yeşil.
+6. **Kapı** — `slice/p10-dashboard` → `main`: `code-reviewer` raporu (SQL'in parametreli olduğu, `state` listesinin beyaz listeyle doğrulandığı ve yanıtta PII olmadığı için ayrıca kısa `security-reviewer` bakışı), `verifier` kanıtı, `ci-ok` yeşil, squash merge, `p10-done` etiketi, session export'ları.
+
+**Faz kapısı (P10):**
+- §3.2 listesinin tamamı; REQ-DSH-01..04'ün her biri en az bir testle eşli ve yeşil; testsiz REQ listesi boş.
+- `make test` key'siz yeşil; REQ-AUD-00/TRK/SCH/LNG/ABT testleri **değiştirilmeden** yeşil. Değişmesi gereken eski test çıkarsa sapma D65'e gerekçesiyle yazılır (D63 madde 1 kalıbı).
+- Elle kanıt: compose yığınında en az bir taslak, bir planlı ve bir tamamlanmış kampanyayla Kampanyalar ekranı ve Brief özetleri; `overview` sayıları SQL ile karşılaştırılır (sorgu PR'da); 375/768/1280 ekran görüntüleri; Takip'te canlı → tamamlandı geçişi.
+- `README.md` ekran listesi (Kampanyalar, Brief özetleri) ve kısa mimari özeti güncel; DESIGN.md §11 madde 8 güncel; `DECISIONS.md` D65 güncel.
+
+### 12.8 Riskler, VARSAYIM'lar ve açık sahip kararları
+
+| Konu | VARSAYIM / risk | Azaltma |
+|---|---|---|
+| İki okuma yolu | `Campaign` ve `CampaignSummary` ayrı şemalar; alanlar zamanla ayrışabilir | Özet şeması yalnız panelin gördüğü alanlar; ortak alanlar aynı kolonlardan okunur; E2E `deliveries` = `/status` eşitliğini sınar |
+| Ölçek | Sayfa sorgusu `created_at` sırasıyla tam tarama; seed ölçeğinde (onlarca kampanya) ihmal edilebilir | "Bilinen sınırlar"a satır; gerekirse `(state, created_at)` indeksi ayrı migration'la |
+| Canlılık | Panel 10 sn'de bir yoklar, Takip SSE kullanır; ikisi arasında birkaç saniyelik fark görünebilir | Bilinçli: panel genel bakıştır, canlı ayrıntı Takip'tedir; kampanya başına SSE açılmaz (bağlantı sayısı) |
+| Paralel E2E | Diğer testler kampanya ekler; `total` ve `overview` kesin sayılamaz | REQ-DSH-01 yalnız "testin kendi kampanyaları listede, sayılar en az şu kadar" iddia eder (mevcut `listCampaigns` testi kalıbı) |
+| Takip testleri | Yeniden düzen eski testid'leri kaybettirebilir | REQ-DSH-04 eski iddiaların değişmeden geçmesini şart koşar; öğe değişse bile testid'ler korunur |
+| Kapsam kayması | "Dashboard" grafik, arama, tarih aralığı, silme/arşiv isteğine açılabilir | Bu fazda yok: grafik kütüphanesi yok (DESIGN V9), metin araması yok, silme/arşiv yok, brief düzenleme yok (API desteklemiyor) |
+| Brief ekranı yükü | Özetler ilk ekranı kalabalıklaştırabilir | En çok 3'er satır, composer'ın altında; gönderim sırasında gizli |
+| Başarısız bağlantısı | Bugün yalnız tamamlanınca görünür (`DeliveryCounters.vue:269`); gönderim sürerken başarısızlar listelenemez | Bu fazda davranış değişmez (REQ-TRK-01 testleri); sahip isterse ayrı küçük kırım |
+
+**Sahip onayı bekleyen noktalar (önerilen varsayılanlarla; sözleşme adımında kilitlenir):**
+1. **Panelin yeri:** ayrı `/campaigns` rotası + `AppHeader` linki mi, yalnız Brief altında genişletilmiş bölüm mü? — Öneri: ayrı rota.
+2. **Brief özetlerinde satır sayısı ve boş durum:** 3'er satır ve boşken tek satırlık metin mi, boşken bölüm tamamen gizli mi? — Öneri: 3 satır, boş metin görünür.
+3. **"Gönderilen" kapsamı:** `sending` + `completed` mi, yalnız `completed` mi? — Öneri: ikisi birlikte (gönderimi süren kampanya da listede); "Tümünü gör" `completed` sekmesine gider.
+4. **Panel tazeleme:** `sending` varken 10 sn yoklama mı, yalnız elle "Yenile" mi? — Öneri: 10 sn yoklama.
+5. **Özet kartlarının seti:** toplam kampanya, planlanan, gönderilen, gönderilen mesaj, başarısız mesaj. — Öneri: bu beşi; teslim oranı yüzdesi eklenmez (mock provider'ın rastgele hatası anlamlı bir oran üretmez).
+6. **Takip'teki büyük sayı:** tamamlanma yüzdesi mi, gönderilen mesaj sayısı mı? — Öneri: yüzde + "x / y mesaj işlendi" cümlesi.
+7. **Tasarım onayı:** uygulamadan önce 1280/375 px eskiz mi, doğrudan uygulama + PR ekran görüntüsü mü? — Öneri: önce eskiz (§12.7 adım 5).
