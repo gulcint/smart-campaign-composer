@@ -36,7 +36,7 @@ Kural **yalnızca** bu alanları kullanabilir. Ad, e-posta, telefon, izin kolonl
 
 | Alan | Tip | Kaynak | Not |
 |---|---|---|---|
-| `city` | string | `customers.city` | Tam eşleşme, büyük/küçük harf duyarlı. Seed'deki kanonik değerler: `İstanbul`, `Ankara`, `İzmir`, `Bursa`, `Antalya`, `Adana`, `Konya`, `Gaziantep`, `Kayseri`, `Eskişehir`. Değer listede olmak zorunda **değildir** (bilinmeyen şehir = 0 eşleşme). |
+| `city` | string | `customers.city` | Büyük/küçük harf ve Türkçe karakter farkına duyarsız: `segment.Parse` değeri kanonik yazıma çevirir (§2.1), SQL karşılaştırması kanonik değerle birebirdir. Seed'deki kanonik değerler: `İstanbul`, `Ankara`, `İzmir`, `Bursa`, `Antalya`, `Adana`, `Konya`, `Gaziantep`, `Kayseri`, `Eskişehir`. Değer listede olmak zorunda **değildir** (bilinmeyen şehir yazıldığı gibi kalır = 0 eşleşme, hata değil). |
 | `language` | enum | `customers.language` | `tr`, `en` |
 | `loyalty_tier` | enum | `customers.loyalty_tier` | `bronze`, `silver`, `gold`, `platinum` |
 | `last_cart_add_at` | timestamp (nullable) | `customer_stats_at($ref).last_cart_add_at` | Referans zamandan önceki en son `cart_add` olayı |
@@ -47,6 +47,31 @@ Kural **yalnızca** bu alanları kullanabilir. Ad, e-posta, telefon, izin kolonl
 | `total_spent` | number | `customer_stats_at($ref).total_spent` | `ref`'e kadar `purchase.amount` toplamı (TRY, 2 ondalık) |
 
 `customer_stats_at(ref_time timestamptz)` bir SQL fonksiyonudur (bkz. [`db-schema.md` §3.3](db-schema.md#33-customer_stats_atref_time)); `ref`'ten **sonraki** olaylar hesaba katılmaz. Bu sayede sonuç yalnızca veriye ve enjekte edilen referans zamana bağlıdır.
+
+### 2.1 Şehir yazımının kanonikleştirilmesi (REQ-AUD-01, D66)
+
+Model veya `POST /api/segments/count` çağıranı `Istanbul`, `istanbul`, `İSTANBUL`, `ESKISEHIR` gibi yazımlar kullanabilir; `customers.city` yalnızca kanonik yazımı taşır. Eşleşme bu yüzden SQL'de değil, Go'da kural çözülürken sağlanır.
+
+1. `segment.CanonicalCity(s)`: `s` → Unicode NFC (`golang.org/x/text/unicode/norm`) → baş/son boşluk kırpma (`strings.TrimSpace`). Sonucun **katlaması** on kanonik şehirden birinin katlamasına eşitse o şehrin kanonik yazımı döner; değilse kırpılmış NFC metin döner. Hata yolu yoktur.
+2. Katlama (paket içi, dışa açılmaz; yalnızca karşılaştırma anahtarı) rune rune yapılır; tabloda olmayan rune `unicode.ToLower` ile küçültülür (dil duyarsız basit eşleme), iç boşluk korunur:
+
+   | Girdi rune'ları | Katlama |
+   |---|---|
+   | `I` U+0049, `i` U+0069, `İ` U+0130, `ı` U+0131, `Î` U+00CE, `î` U+00EE | `i` |
+   | `Ş` U+015E, `ş` U+015F | `s` |
+   | `Ğ` U+011E, `ğ` U+011F | `g` |
+   | `Ü` U+00DC, `ü` U+00FC, `Û` U+00DB, `û` U+00FB | `u` |
+   | `Ö` U+00D6, `ö` U+00F6 | `o` |
+   | `Ç` U+00C7, `ç` U+00E7 | `c` |
+   | `Â` U+00C2, `â` U+00E2 | `a` |
+   | U+0307 COMBINING DOT ABOVE | silinir (`i̇` = `i`+U+0307 NFC'de birleşmez) |
+
+   Türkçe yerel ayarlı `ToLower` (`I`→`ı`) bilerek kullanılmaz: tablo `I`, `ı`, `İ`, `i`'yi doğrudan `i`'ye indirir, böylece sonuç yerel ayara ve büyük/küçük harf sırasına bağlı değildir.
+3. Uygulama yeri: `segment.Parse`, yapısal denetimler geçtikten sonra `field == "city"` olan her koşulda, `op` ∈ {`eq`, `neq`, `in`, `not_in`} iken değeri yeniden yazar: string → `CanonicalCity(string)`; **tamamı string** olan dizi → her eleman `CanonicalCity`, ardından birebir aynı elemanlar tekilleştirilir (**ilk görülen kalır, sıra korunur**). Diğer tipler ve diğer operatörler dokunulmadan kalır (`Validate` bugünkü kodları üretir). `Validate`, `Compile` ve `Match` çevrilmiş kuralı görür; uzunluk sınırları (1..100 karakter, 1..20 eleman) çeviri sonrası değere uygulanır, yalnız boşluk olan değer `""` olup `invalid_value` alır. Hata yolları (`rule.all[0].value[1]` gibi) çevrilmiş diziye göredir.
+4. Saklanan ve dönen kural (`Rule.MarshalJSON`, `campaigns` satırı, `GET /api/campaigns/{campaign_id}` → `segment.rule`) kanonik değeri taşır. `POST /api/segments/count` aynı `Parse` yolundan geçtiği için ek bir işlem gerekmez; kural saklanmaz.
+5. SQL değişmez: `c.city = $n` / `c.city = ANY($n)` birebir karşılaştırma, kanonik değer parametredir (indeks dostu). `lower()`, `unaccent`, `ILIKE` kullanılmaz; LLM metni SQL'e girmez (§5).
+6. Şehir koşulu hiçbir aşamada kuraldan çıkarılmaz; bilinmeyen şehir (`Kars`) geçerlidir ve 0 kişiyle eşleşir.
+7. VARSAYIM: `customers.city` yalnız kanonik yazımı taşır (seed bunu garanti eder); kanonik listede olmayan bir şehrin müşteri verisi farklı yazılmışsa birebir eşleşme aranır.
 
 ## 3. Operatörler (tip başına)
 

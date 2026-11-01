@@ -1,6 +1,6 @@
 # SSE olayları
 
-Kapsam: REQ-CNT-04, REQ-AI-01 (içerik), REQ-APR-01, REQ-TRK-01.
+Kapsam: REQ-CNT-04, REQ-AI-01 (içerik), REQ-APR-01, REQ-TRK-01, REQ-LNG-02 (P8), REQ-ABT-02, REQ-ABT-03 (P9).
 Taşıma: Server-Sent Events (`text/event-stream; charset=utf-8`), PLAN §0.5.
 
 ## 0. Ortak çerçeve kuralları
@@ -16,13 +16,13 @@ Taşıma: Server-Sent Events (`text/event-stream; charset=utf-8`), PLAN §0.5.
 
 ## 1. İçerik üretimi akışı
 
-`POST /api/campaigns/{campaign_id}/content` (istek gövdesi boş veya `{}`; `Accept: text/event-stream`). Fetch/ReadableStream ile tüketilir (EventSource POST yapamaz).
+`POST /api/campaigns/{campaign_id}/content` (istek gövdesi boş, `{}` veya P9'da `{"ab": true|false}`; `Accept: text/event-stream`). Fetch/ReadableStream ile tüketilir (EventSource POST yapamaz).
 
 ### 1.1 Olaylar
 
 | `event` | `data` şeması | Ne zaman |
 |---|---|---|
-| `delta` | `{"attempt": 1, "channel": "sms", "field": "body", "text": "Merhaba {{first_"}` (İngilizce: `{"attempt": 1, "language": "en", "channel": "sms", "field": "body", "text": "Hi {{first_"}`) | Modelden metin parçası geldikçe |
+| `delta` | `{"attempt": 1, "channel": "sms", "field": "body", "text": "Merhaba {{first_"}` (İngilizce: `{"attempt": 1, "language": "en", "channel": "sms", "field": "body", "text": "Hi {{first_"}`; B varyantı, P9: `{"attempt": 1, "variant": "b", "channel": "sms", "field": "body", "text": "{{first_name}}, %3"}`, B'nin İngilizcesi `{"attempt": 1, "variant": "b", "language": "en", …}`) | Modelden metin parçası geldikçe |
 | `invalid` | `{"attempt": 1, "final": false, "errors": [FieldError...], "content_version_id": null}` | Bir denemenin çıktısı doğrulamayı geçemediğinde |
 | `validated` | `{"attempt": 1, "content_version_id": "uuid", "version_number": 3, "content": Content, "worst_case": {"sms_runes": 160, "subject_runes": 42}}` | Çıktı geçerli ve `validated` sürüm olarak kaydedildiğinde |
 
@@ -31,13 +31,14 @@ Alanlar:
 - `attempt`: 1 veya 2 (2 = düzeltme denemesi).
 - `channel` ∈ `sms` | `email`; `field` ∈ `body` | `subject`. Geçerli çiftler: (`sms`,`body`), (`email`,`subject`), (`email`,`body`).
 - `language` (P8, D63; isteğe bağlı): yalnızca İngilizce sürümün parçalarında bulunur ve değeri `"en"`dir; **Türkçe parçalarda anahtar yoktur** (bugünkü olaylar baytı baytına aynı kalır). İngilizce parçalar yalnız iki dilli üretimde gelir (REQ-LNG-02). Aynı denemede önce üç Türkçe alan, sonra üç İngilizce alan akar; geçerli üçlüler (`language`,`channel`,`field`) altı alandır: Türkçe üç çift ve `en` ile aynı üç çift. İstemci biriktirmeyi (`language`,`channel`,`field`) üçlüsüne göre yapar (`language` yoksa `tr`).
-- `text`: boş olmayan parça (boyutu sözleşme değildir: gerçek istemcide API'nin `partial_json` parçalarına bağlıdır, sahte LLM'de ≤ 20 karakter); aynı `attempt` içinde aynı (`language`,`channel`,`field`) için tüm `text`'lerin sırayla birleşimi o alanın modelin ürettiği değeridir.
+- `variant` (P9, D64; isteğe bağlı): yalnızca B varyantının parçalarında bulunur ve değeri `"b"`dir; **A parçalarında anahtar yoktur** (A/B'siz ve P8 olayları baytı baytına aynı kalır). B parçaları yalnız A/B üretiminde (`{"ab": true}`, REQ-ABT-02) gelir. Aynı denemede sıra: A Türkçe üç alan, A İngilizce üç alan (varsa), B Türkçe üç alan, B İngilizce üç alan (varsa). İstemci biriktirmeyi (`variant`,`language`,`channel`,`field`) dörtlüsüne göre yapar (`variant` yoksa `a`, `language` yoksa `tr`). **Açılar (`angles`) `delta` olarak akmaz**; yalnız `validated.content.angles`'ta (ve saklanan sürümde) bulunur.
+- `text`: boş olmayan parça (boyutu sözleşme değildir: gerçek istemcide API'nin `partial_json` parçalarına bağlıdır, sahte LLM'de ≤ 20 karakter); aynı `attempt` içinde aynı (`variant`,`language`,`channel`,`field`) için tüm `text`'lerin sırayla birleşimi o alanın modelin ürettiği değeridir.
 - `final`: `true` ise bu olay akışın **son** olayıdır.
 - Akış sürerken (kampanyanın üretim kilidi tutulurken) aynı kampanyaya segment/içerik üretimi, içerik düzenleme, onay ve gönderim istekleri **409 `generation_in_progress`** alır; önceki `validated` sürüm de bu sırada onaylanamaz. Kilit yalnızca yazma işlemlerini engeller: `GET` uç noktaları (kampanya, sürümler, önizleme, durum) akış sürerken normal yanıt verir.
 - `errors`: en az bir `FieldError` (`{"path","code","message"}` + uzunluk kodlarında `limit`, `actual`); şema README §5'te.
-- `content_version_id` (`invalid` içinde): `final: false` iken **her zaman `null`**. `final: true` iken: son denemenin çıktısı şemaya uygun ama içerik kurallarını geçemediyse (`sms_too_long`, `subject_too_long`, `email_body_too_long`, `unknown_variable`, `malformed_variable`, `required`) bu taslak `status: "invalid"` bir içerik sürümü olarak saklanır ve kimliği burada döner. `required` yalnız anahtar **var ama değeri boş** ise saklanabilir sayılır; **eksik anahtar** `schema_violation`'dır ve saklanmaz. Aksi halde (`invalid_json`, `schema_violation`, `truncated_output`, `no_tool_call`, `llm_unavailable`, `internal_error`) `null`.
-- `content` (`validated` içinde): `{"sms":{"body":...},"email":{"subject":...,"body":...}}` — kaydedilen sürümün şablon metni; iki dilli üretimde ek olarak `"en":{"sms":{"body":...},"email":{"subject":...,"body":...}}`.
-- `worst_case` (`validated` içinde): güncel segmentin en uzun değerleriyle doldurulmuş SMS ve konu uzunluğu (`content.WorstCase`); `sms_runes ≤ 160`, `subject_runes ≤ 80` garantilidir. İngilizce sürüm varsa ek `worst_case.en = {"sms_runes", "subject_runes"}` (aynı garanti); yoksa `en` anahtarı yoktur. UI sayaçtaki ikinci satırı bundan gösterir.
+- `content_version_id` (`invalid` içinde): `final: false` iken **her zaman `null`**. `final: true` iken: son denemenin çıktısı şemaya uygun ama içerik kurallarını geçemediyse (`sms_too_long`, `subject_too_long`, `email_body_too_long`, `unknown_variable`, `malformed_variable`, `required`; P9: `variants_identical` ve `angles.a`/`angles.b` üzerindeki `too_long`) bu taslak `status: "invalid"` bir içerik sürümü olarak saklanır ve kimliği burada döner. `required` yalnız anahtar **var ama değeri boş** ise saklanabilir sayılır; **eksik anahtar** `schema_violation`'dır ve saklanmaz. Aksi halde (`invalid_json`, `schema_violation`, `truncated_output`, `no_tool_call`, `llm_unavailable`, `internal_error`) `null`.
+- `content` (`validated` içinde): `{"sms":{"body":...},"email":{"subject":...,"body":...}}` — kaydedilen sürümün şablon metni; iki dilli üretimde ek olarak `"en":{"sms":{"body":...},"email":{"subject":...,"body":...}}`; A/B üretiminde (P9) ek olarak `"b":{"sms":…,"email":…,("en":…)}` ve `"angles":{"a":…,"b":…}`.
+- `worst_case` (`validated` içinde): güncel segmentin en uzun değerleriyle doldurulmuş SMS ve konu uzunluğu (`content.WorstCase`); `sms_runes ≤ 160`, `subject_runes ≤ 80` garantilidir. İngilizce sürüm varsa ek `worst_case.en = {"sms_runes", "subject_runes"}` (aynı garanti); yoksa `en` anahtarı yoktur. B varyantı varsa ek `worst_case.b = {"sms_runes", "subject_runes"}` ve `b.en` varsa `worst_case.b.en` (aynı garanti); yoksa `b` anahtarı yoktur. UI sayaçtaki ikinci satırı bundan gösterir.
 
 ### 1.2 Sıralama kuralları (normatif)
 
@@ -51,7 +52,7 @@ terminal  := validated | invalid(final=true)
 2. `invalid` (`final: false`) yalnızca deneme 1'in sonunda ve en fazla bir kez gelir. Ondan sonraki ilk `delta` `attempt: 2` taşır. **İstemci bu noktada önceki taslağı atar** ve alanları baştan doldurur ("delta'lar baştan başlar").
 3. Deneme 2'de de doğrulama başarısızsa terminal olay `invalid` (`final: true`, `attempt: 2`) olur. Deneme 1'de doğrudan `final: true` gelmesi yalnız `llm_unavailable` (zaman aşımı dahil) ve `internal_error` için mümkündür (düzeltme denemesi yapılmaz).
 4. Bir denemede sıfır `delta` olabilir (ör. ilk bayt gelmeden biten bozuk JSON).
-5. `delta` olayları alan sırasını korur ama sunucu farklı alanlar arasında geçiş yapabilir; istemci (`language`,`channel`,`field`) üçlüsüne göre biriktirir. İki dilli üretimde İngilizce alanlar Türkçe alanlardan sonra gelir; `invalid` hata yolları dil önekli olabilir (`en.sms.body`, `en.email.subject`, `en.email.body`).
+5. `delta` olayları alan sırasını korur ama sunucu farklı alanlar arasında geçiş yapabilir; istemci (`language`,`channel`,`field`) üçlüsüne göre biriktirir. İki dilli üretimde İngilizce alanlar Türkçe alanlardan sonra gelir; `invalid` hata yolları dil önekli olabilir (`en.sms.body`, `en.email.subject`, `en.email.body`). A/B üretiminde (P9) istemci (`variant`,`language`,`channel`,`field`) dörtlüsüne göre biriktirir; B alanları A alanlarından sonra gelir; hata yolları `b.` önekli (`b.sms.body`, `b.en.email.subject`, …), `b` (`variants_identical`) veya `angles.a`/`angles.b` olabilir.
 6. Kampanya durumu: `validated` olayı gönderilmeden **önce** sürüm kaydedilmiş ve kampanya `content_ready` olmuştur (önceki durum `approved` ise onay düşmüştür). Son `invalid` **hiçbir şeyi değiştirmez** (VARSAYIM): durum aynı kalır (`audience_ready`, `content_ready` veya `approved`), etkin onay düşmez ve saklanan `invalid` taslak "en son sürüm" (`Campaign.latest_content_version` = güncel segment revizyonunun en yüksek numaralı **validated** sürümü) olmaz. Başarısız bir yeniden üretim, onaylı bir kampanyayı bozamaz.
 
 ### 1.3 Yarıda kesilme
@@ -73,7 +74,7 @@ Sunucu terminal olayı yazar yazmaz bağlantıyı kapatır (yanıt gövdesi bite
 2. `data` JSON olarak ayrıştırılamıyor veya ilgili şemaya uymuyorsa akış **kesilmiş** sayılır (aşağıdaki "terminal olay yok" davranışı); istemci bunu `ApiError` olarak göstermez.
 3. Terminal olaydan (`validated` veya `invalid` `final: true`) sonra gelen her şey yok sayılır.
 4. Terminal olay olmadan gövde biterse veya ağ hatası olursa istemci kendiliğinden **yeniden bağlanmaz** (yeniden üretim kullanıcı kararıdır; her üretim yeni bir LLM maliyeti ve yeni sürüm demektir).
-5. Aynı `attempt` içinde (`language`,`channel`,`field`) üçlüsüne göre biriktirilen metin taslaktır; `validated`'daki `content` otoritedir ve alan metinlerini yeniden yazar.
+5. Aynı `attempt` içinde (`variant`,`language`,`channel`,`field`) dörtlüsüne göre biriktirilen metin taslaktır; `validated`'daki `content` otoritedir ve alan metinlerini (ve P9'da `angles`'ı) yeniden yazar.
 
 ### 1.3.2 Neyin ne zaman saklandığı (özet tablo)
 
@@ -160,6 +161,8 @@ Akışın başında bir kez `retry: 3000` satırı gönderilir. Her olay `id: <n
 ```
 
 Değişmezler: `total = queued + sending + sent + failed` (her kanal ve toplam için); `counts.x = by_channel.sms.x + by_channel.email.x`. Teslimat yoksa (`draft`…`approved`, `scheduled`) tüm sayaçlar 0.
+
+**A/B (P9, D64, REQ-ABT-03):** `CampaignStatus` ayrıca `by_variant` taşır (sunucu her zaman yazar). Onaylı sürümde `b` yoksa (veya onay yoksa) `null`; varsa `{"a":{"sms":StatusCounts,"email":StatusCounts},"b":{…}}` ve her kanal `c`, sayaç `k` için `by_variant.a.c.k + by_variant.b.c.k = by_channel.c.k` (teslimat yokken hepsi 0). Sayılar teslimatın `variant` kolonundan gelir. `status` olayı fark kuralı (`updated_at` dışındaki her alan) `by_variant`'ı da kapsar. Kazanan veya açılma/tıklama sayısı yoktur: tablo yalnız teslimat sonucudur. Örnek: `"by_variant":{"a":{"sms":{"total":600,"queued":300,"sending":5,"sent":290,"failed":5},"email":{…}},"b":{"sms":{"total":600,…},"email":{…}}}`; A/B'siz kampanyada `"by_variant":null`.
 
 **Planlı kampanya (P7a, D62):** `state` `scheduled` iken akış normal açılır (`snapshot`, sayaçlar 0, `scheduled_at` dolu) ve kapanmaz. `state` veya `scheduled_at` değişince (yeniden planlama, iptal → `approved`, worker başlattı veya "şimdi gönder" → `sending`) bir sonraki yoklamada `status` olayı gelir (fark kuralı aynı: `updated_at` dışındaki her alan). Worker'ın plandan başlattığı kampanyada `scheduled_at` `sending`/`completed` olaylarında dolu kalır; anlık gönderimde ve "şimdi gönder"de `null`'dır. İptal edilen planda akış açık kalır (`approved`, `completed` değil).
 

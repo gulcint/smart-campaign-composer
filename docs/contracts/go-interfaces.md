@@ -248,7 +248,19 @@ func (r Rule) MarshalJSON() ([]byte, error)
 // group over MaxDepth, as Validate), more than MaxConditions+1 conditions => max_conditions_exceeded
 // (path "rule"). At most 20 field errors. Errors: *validation.Error matching
 // validation.ErrInvalidJSON or validation.ErrSchemaViolation (or those two limit sentinels).
+// After the structural checks pass, Parse rewrites every "city" condition with op eq/neq/in/not_in:
+// a string value -> CanonicalCity(value); an array whose elements are ALL strings -> CanonicalCity of
+// each element, then exact duplicates removed (first occurrence kept, order preserved). Any other
+// value is left untouched for Validate. Validate/Compile/Match and Rule.MarshalJSON therefore see the
+// canonical spelling (segment-dsl.md §2.1, D66). A Rule built in code bypasses this rewrite.
 func Parse(raw []byte) (Rule, error)
+
+// CanonicalCity returns the canonical seed spelling (segment-dsl.md §2: "İstanbul", "Ankara", "İzmir",
+// "Bursa", "Antalya", "Adana", "Konya", "Gaziantep", "Kayseri", "Eskişehir") when the fold of s
+// (NFC, strings.TrimSpace, then the rune table of segment-dsl.md §2.1) equals the fold of one of them;
+// otherwise it returns s after NFC + TrimSpace, unchanged. Never fails; "Kars" -> "Kars",
+// "ISTANBUL" -> "İstanbul", "  Bursa " -> "Bursa". Pure function, safe for concurrent use.
+func CanonicalCity(s string) string
 
 // Validate performs semantic checks and returns nil or a *validation.Error with every problem
 // (segment-dsl.md §1.1, §3, §7.3). Field errors match these sentinels:
@@ -329,21 +341,48 @@ const (
 	FirstNameFallbackEN = "Dear customer" // 13 runes
 	LangTR              = "tr"
 	LangEN              = "en"
+	// P9 (D64)
+	VariantA      = "a"
+	VariantB      = "b"
+	AngleMaxRunes = 60
 )
 
 var AllowedVariables = []string{"first_name", "last_name", "city"}
 
 // Content: SMS and Email are the Turkish main copy. EN (P8, D63) is the optional English version for
 // English-speaking customers; nil = no English version (every pre-P8 document and fixture).
+// P9 (D64): SMS/Email/EN are variant A. B is the optional variant B of an A/B test and Angles labels
+// what each variant tries; B and Angles are both nil (no A/B, every pre-P9 document) or both non-nil.
+// B.EN != nil iff EN != nil (language consistency, enforced by Parse).
 type Content struct {
-	SMS   SMS      `json:"sms"`
-	Email Email    `json:"email"`
-	EN    *English `json:"en,omitempty"`
+	SMS    SMS      `json:"sms"`
+	Email  Email    `json:"email"`
+	EN     *English `json:"en,omitempty"`
+	B      *Variant `json:"b,omitempty"`
+	Angles *Angles  `json:"angles,omitempty"`
 }
 type English struct {
 	SMS   SMS   `json:"sms"`
 	Email Email `json:"email"`
 }
+// Variant is variant B's copy: Turkish SMS/Email and the optional English version.
+type Variant struct {
+	SMS   SMS      `json:"sms"`
+	Email Email    `json:"email"`
+	EN    *English `json:"en,omitempty"`
+}
+// Angles are plain labels (not templates, never sent to customers), at most AngleMaxRunes each.
+type Angles struct {
+	A string `json:"a"`
+	B string `json:"b"`
+}
+
+// VariantFor is the deterministic A/B split (REQ-ABT-03), the Go twin of the SQL expression that
+// writes deliveries.variant: sha256(16-byte campaign UUID || 16-byte customer UUID); first byte < 128
+// => VariantA, otherwise VariantB. Inputs are UUID strings (upper case accepted); a malformed UUID
+// => error. Used by the preview (Preview.Customer.Variant) and tests; the send path uses the SQL.
+// Vectors: requirements.md REQ-ABT-03.
+func VariantFor(campaignID, customerID string) (string, error)
 type SMS struct {
 	Body string `json:"body"`
 }
@@ -360,6 +399,12 @@ type Email struct {
 // NFC-normalized and otherwise stored as given (no trimming). On a Parse error Validate is not run.
 // P8: the optional "en" object must be complete; "en": null, a missing en.sms / en.email / en.email.subject
 // key or an unknown key inside "en" are schema_violation at that path ("en", "en.sms", "en.email.subject", "en.html").
+// P9: "b" without "angles" => path "angles"; "angles" without "b" => path "b"; "b": null => "b"; a missing
+// or unknown key inside "b"/"angles" => its path ("b.sms", "b.email.subject", "b.html", "angles.a",
+// "angles.c"); top-level "en" present but "b.en" missing, or "b.en" present without top-level "en" => "b.en";
+// "angles": null => "angles". Parse never stops at the first structural error: it returns all of them, per
+// level unknown keys first, then known keys in schema order (sms, email, en, b, angles), the co-presence
+// rules (b <=> angles, en <=> b.en) last.
 // Errors: *validation.Error matching validation.ErrInvalidJSON / ErrSchemaViolation.
 func Parse(raw []byte) (Content, error)
 
@@ -369,6 +414,12 @@ func Parse(raw []byte) (Content, error)
 // "en." prefix, same codes and limits) AFTER the three Turkish fields; both language versions use the SAME
 // Longest (language independent). The returned FieldError order is: sms.body, email.subject, email.body,
 // en.sms.body, en.email.subject, en.email.body.
+// P9: when c.B != nil the same field checks run for b.sms.body, b.email.subject, b.email.body and (B.EN)
+// b.en.sms.body, b.en.email.subject, b.en.email.body with the SAME Longest; then "b" =>
+// variants_identical (ErrVariantsIdentical; no Limit/Actual) iff B's three Turkish texts all equal A's
+// (NFC, exact), reported IN ADDITION to any per-field errors (independent check); then angles.a, angles.b: empty after TrimSpace => required, > AngleMaxRunes runes =>
+// too_long (validation.ErrTooLong, Limit 60, Actual). Full order: the six fields above, the six b.*
+// fields, "b", "angles.a", "angles.b".
 // Checks per field, in order sms.body, email.subject, email.body:
 //   required (present but empty after TrimSpace) -> malformed_variable -> unknown_variable -> length.
 // At most ONE FieldError per field (the first that applies); the returned order is the field order
@@ -386,11 +437,17 @@ func Validate(c Content, l Longest) error
 type WorstCase struct {
 	SMSRunes     int            `json:"sms_runes"`
 	SubjectRunes int            `json:"subject_runes"`
-	EN           *WorstCaseLang `json:"en,omitempty"` // P8: nil iff Content.EN == nil
+	EN           *WorstCaseLang    `json:"en,omitempty"` // P8: nil iff Content.EN == nil
+	B            *WorstCaseVariant `json:"b,omitempty"`  // P9: nil iff Content.B == nil
 }
 type WorstCaseLang struct {
 	SMSRunes     int `json:"sms_runes"`
 	SubjectRunes int `json:"subject_runes"`
+}
+type WorstCaseVariant struct {
+	SMSRunes     int            `json:"sms_runes"`
+	SubjectRunes int            `json:"subject_runes"`
+	EN           *WorstCaseLang `json:"en,omitempty"` // nil iff Content.B.EN == nil
 }
 
 // MeasureWorstCase computes WorstCase with the same substitution as Validate.
@@ -404,6 +461,7 @@ var (
 	ErrUnknownVariable   = errors.New("content: unknown variable")     // "unknown_variable"
 	ErrMalformedVariable = errors.New("content: malformed variable")   // "malformed_variable"
 	ErrWorstCaseTooLong  = errors.New("content: worst case too long")  // additionally matched by *_worst_case codes
+	ErrVariantsIdentical = errors.New("content: variants identical")   // "variants_identical" (P9, path "b")
 	// empty fields match validation.ErrRequired ("required")
 )
 
@@ -421,6 +479,8 @@ type Recipient struct {
 	FirstName, LastName, City string
 	// Language is customers.language ("tr" | "en"; "" is treated as "tr"). P8 (D63).
 	Language string
+	// Variant is deliveries.variant ("a" | "b"; "" is treated as "a"). P9 (D64).
+	Variant string
 }
 
 // EffectiveFirstName returns strings.TrimSpace(s), or FirstNameFallback if that is empty.
@@ -443,11 +503,16 @@ type Rendered struct {
 	// content has no English version (the Turkish main copy was used).
 	Language string
 	Fallback bool
+	// P9 (D64): variant of the rendered text ("a" | "b").
+	Variant string
 }
 
-// RenderContent picks the language version for r: r.Language == "en" and c.EN != nil => the English
-// version (Rendered.Language "en"); otherwise the Turkish main copy (Language "tr"); r.Language == "en"
-// with c.EN == nil sets Fallback = true. The fallback first name follows the USED text's language.
+// RenderContent picks the variant first, then the language version inside it (P9):
+// r.Variant == "b" and c.B != nil => variant B (Rendered.Variant "b"), otherwise variant A ("a").
+// Inside the chosen variant: r.Language == "en" and the variant has an English version (c.EN for A,
+// c.B.EN for B) => English (Rendered.Language "en"); otherwise its Turkish text ("tr"); r.Language == "en"
+// without that English version sets Fallback = true. The fallback first name follows the USED text's
+// language. With r.Variant "" / "a" or c.B == nil the result is byte-identical to P8.
 func RenderContent(c Content, r Recipient) (Rendered, error)
 
 // CheckRendered is the per-recipient send-time check (REQ-CNT-05):
@@ -468,7 +533,8 @@ type Longest struct {
 // time. Same substitution as Validate, only sms.body <= 160 and email.subject <= 80; codes
 // sms_too_long_worst_case / subject_too_long_worst_case, Actual = worst-case length; they match
 // ErrSMSTooLong/ErrSubjectTooLong AND ErrWorstCaseTooLong; paths "sms.body" / "email.subject",
-// Limit 160 / 80. email.body (5000) is NOT re-checked at approval. Because Validate already applies
+// Limit 160 / 80. P8/P9: also en.*, b.* and b.en.* (paths "en.sms.body", "b.sms.body", "b.en.email.subject", …;
+// order as in Validate). email.body (5000) is NOT re-checked at approval. Because Validate already applies
 // the rule, this fails over HTTP only if customer data changed after validation; it is unit-tested directly.
 func CheckWorstCase(c Content, l Longest) error
 
@@ -577,6 +643,12 @@ func ToolSchema(name string) (json.RawMessage, error)
 // `en` required; P8, D63). Both obey the strict rules of llm-tools.md §1.1.
 func ContentToolSchema(includeEnglish bool) json.RawMessage
 
+// ContentToolSchemaAB returns the A/B content tool's strict input_schema (P9, D64): false =>
+// schemas/llm/content-ab.tool.json (`b` and `angles` required), true => schemas/llm/content-ab-en.tool.json
+// (`en`, `b` with `b.en`, and `angles` required). Embedded copies under internal/llm/schemas/ (make
+// check-tool-schemas). Both obey the strict rules of llm-tools.md §1.1. ContentToolSchema is unchanged.
+func ContentToolSchemaAB(includeEnglish bool) json.RawMessage
+
 // Client is one LLM attempt; validation and repair live in internal/composer.
 type Client interface {
 	// GenerateSegment returns the raw emit_segment_rule tool input (JSON bytes, possibly invalid).
@@ -606,12 +678,19 @@ type ContentRequest struct {
 	// IncludeEnglish (P8, D63): ask for the bilingual tool (ContentToolSchema(true)). Set by composer
 	// from segment.Audience.WantsEnglish(); the same value is used for the repair attempt.
 	IncludeEnglish bool
+	// IncludeVariantB (P9, D64): ask for the A/B tool (ContentToolSchemaAB(IncludeEnglish)). Set from
+	// campaign.ContentOptions.AB (request body {"ab": true}); the same value is used for the repair attempt.
+	IncludeVariantB bool
 	Attempt  int
 	Previous *Repair
 }
 
 type ContentChunk struct {
-	Path string // "sms.body" | "email.subject" | "email.body" | (IncludeEnglish) "en.sms.body" | "en.email.subject" | "en.email.body"
+	// "sms.body" | "email.subject" | "email.body" | (IncludeEnglish) "en.sms.body" | "en.email.subject" |
+	// "en.email.body" | (IncludeVariantB, P9) "b.sms.body" | "b.email.subject" | "b.email.body" |
+	// (IncludeVariantB && IncludeEnglish) "b.en.sms.body" | "b.en.email.subject" | "b.en.email.body".
+	// Order: A Turkish, A English, B Turkish, B English. "angles.*" is never a chunk (only in Raw()).
+	Path string
 	Text string // non-empty
 }
 
@@ -714,6 +793,7 @@ type Event interface{ Name() string }
 
 type DeltaEvent struct {
 	Attempt  int    `json:"attempt"`
+	Variant  string `json:"variant,omitempty"`  // P9 (D64): "b" on variant B chunks only; empty (key absent) on variant A
 	Language string `json:"language,omitempty"` // P8 (D63): "en" on English chunks only; empty (key absent) on Turkish
 	Channel  string `json:"channel"`            // "sms" | "email"
 	Field    string `json:"field"`              // "body" | "subject"
@@ -744,7 +824,8 @@ type ContentOutcome struct {
 	Errors    []validation.FieldError // last attempt's errors when !Valid
 	// Storable: !Valid, content.Parse succeeded (all keys present, right types, no extra keys) and
 	// every error is a content-rule error (required for an EMPTY value, malformed_variable,
-	// unknown_variable, sms_too_long, subject_too_long, email_body_too_long) => stored as status "invalid".
+	// unknown_variable, sms_too_long, subject_too_long, email_body_too_long; P9: variants_identical and
+	// required/too_long at angles.a / angles.b) => stored as status "invalid".
 	Storable bool
 	Attempts int
 }
@@ -755,6 +836,8 @@ type ContentSession struct{ /* unexported */ }
 // OpenContent starts attempt 1. req.Longest is used both as model hint and for content.Validate.
 // P8 (D63): the caller sets req.IncludeEnglish = campaign.Segment.Audience.WantsEnglish(); the value is kept
 // for the repair attempt, and Run's validation covers the English version when present.
+// P9 (D64): the caller sets req.IncludeVariantB = campaign.ContentOptions.AB; kept for the repair attempt;
+// Run emits DeltaEvent{Variant: "b"} for the b.* chunks and its validation covers variant B and angles.
 // Errors: llm.ErrUnavailable, ctx errors (=> HTTP 502 / no stream).
 func OpenContent(ctx context.Context, c llm.Client, req llm.ContentRequest) (*ContentSession, error)
 
@@ -872,6 +955,20 @@ var (
 
 // ExpectedVersionNone is the X-Expected-Version value meaning "the editor saw no latest validated version".
 const ExpectedVersionNone = "none"
+
+// ---- Content generation options (P9, D64) ----
+
+// ContentOptions are the per-request options of a content generation. They travel in ctx so that the
+// Service interface (and every existing fake) is unchanged: the generateContent handler parses the body
+// ({"ab": true}) and calls StartContentGeneration(WithContentOptions(ctx, opts), id).
+type ContentOptions struct {
+	AB bool // ask for variant B and the angles (llm.ContentRequest.IncludeVariantB)
+}
+
+// WithContentOptions returns ctx carrying o. ContentOptionsFromContext returns them and true, or the zero
+// value and false when absent (=> no A/B, the pre-P9 behaviour).
+func WithContentOptions(ctx context.Context, o ContentOptions) context.Context
+func ContentOptionsFromContext(ctx context.Context) (ContentOptions, bool)
 
 // EditConflictError is returned by EditContent when the expected version is not the current latest
 // validated version. errors.Is(err, ErrContentEditConflict) is true. Current is the CURRENT latest
@@ -996,11 +1093,20 @@ type ChannelCounts struct {
 	Email StatusCounts `json:"email"`
 }
 
+// VariantCounts is CampaignStatus.by_variant (P9, D64; openapi VariantStatusCounts).
+type VariantCounts struct {
+	A ChannelCounts `json:"a"`
+	B ChannelCounts `json:"b"`
+}
+
 type CampaignStatus struct {
 	CampaignID       string        `json:"campaign_id"`
 	State            State         `json:"state"`
 	Counts           StatusCounts  `json:"counts"`
 	ByChannel        ChannelCounts `json:"by_channel"`
+	// ByVariant (P9): nil (JSON null) unless the approved version has variant B; then the counters split
+	// by deliveries.variant (A.c.k + B.c.k == ByChannel.c.k).
+	ByVariant        *VariantCounts `json:"by_variant"`
 	ScheduledAt      *time.Time    `json:"scheduled_at"`
 	SendingStartedAt *time.Time    `json:"sending_started_at"`
 	CompletedAt      *time.Time    `json:"completed_at"`
@@ -1014,6 +1120,7 @@ type Delivery struct {
 	CustomerID        string     `json:"customer_id"`
 	Channel           string     `json:"channel"`
 	Status            string     `json:"status"`
+	Variant           string     `json:"variant"` // P9: deliveries.variant ("a" | "b")
 	Attempts          int        `json:"attempts"`
 	FailedAttempts    int        `json:"failed_attempts"`
 	RateLimitedCount  int        `json:"rate_limited_count"`
@@ -1052,6 +1159,11 @@ type PreviewQuery struct {
 	// Language (P8, D63): "" = the sample customer's own language, or "tr" | "en". Anything else =>
 	// *validation.Error {Path: "query.language", Code: "invalid_value"}.
 	Language string
+	// Variant (P9, D64): "" or "a" = variant A, "b" = variant B. Anything else => *validation.Error
+	// {Path: "query.variant", Code: "invalid_value"}; "b" on a version without variant B =>
+	// *validation.Error {Path: "query.variant", Code: "variant_not_available"} (checked after the version
+	// is resolved, i.e. after the 404/409 checks of Preview).
+	Variant string
 }
 
 type PreviewCustomer struct {
@@ -1060,6 +1172,7 @@ type PreviewCustomer struct {
 	LastName  string `json:"last_name"`
 	City      string `json:"city"`
 	Language  string `json:"language"` // P8: customers.language
+	Variant   string `json:"variant"`  // P9: content.VariantFor(campaign, customer) if the version has B, else "a"
 }
 type PreviewSMS struct {
 	Text        string `json:"text"`
@@ -1081,6 +1194,7 @@ type Preview struct {
 	SampleIndex      int             `json:"sample_index"`
 	SampleCount      int             `json:"sample_count"`
 	Customer         PreviewCustomer `json:"customer"`
+	Variant          string          `json:"variant"`  // P9: variant of the shown text (content.Rendered.Variant)
 	Language         string          `json:"language"` // P8: language of the shown text (content.Rendered.Language)
 	Fallback         bool            `json:"fallback"` // P8: content.Rendered.Fallback
 	SMS              PreviewSMS      `json:"sms"`
@@ -1104,6 +1218,7 @@ type Service interface {
 	// 404 for a malformed id, 422 for an unknown X-Mock-LLM-Scenario and 400/413/422 for the body,
 	// in that order, before calling the Service: README §5.4.) Acquires the generation lock, which
 	// the returned run releases when Stream returns (any outcome) or when ctx is cancelled.
+	// P9 (D64): ContentOptionsFromContext(ctx).AB => llm.ContentRequest.IncludeVariantB (absent => false).
 	StartContentGeneration(ctx context.Context, id string) (ContentRun, error)
 	// EditContent: ErrCampaignNotFound -> ErrGenerationInProgress -> ErrInvalidState (draft, scheduled,
 	// sending, completed) -> *EditConflictError (expectedVersionID, a UUID or ExpectedVersionNone, is not the
@@ -1234,7 +1349,7 @@ func (s *Scheduler) RunOnce(ctx context.Context) (int, error)
 func (s *Scheduler) Run(ctx context.Context) error
 ```
 
-**Paylaşılan başlatma (`startSendingLocked`, unexported, test dikişi değildir):** `Service.Send` (anlık ve "şimdi gönder") ile `Scheduler.RunOnce` gönderimi **tek** bir paket içi fonksiyonla başlatır; fonksiyon kampanya satırı `FOR UPDATE` ile kilitli bir transaction içinde çağrılır ve şunları yazar: saklı segment referans zamanında derlenen kanal kitlelerinden (segment-dsl §6, izin filtresi aynı) her (kanal, müşteri) için bir `queued` teslimat (`next_attempt_at` = now, `INSERT … UNIQUE(campaign_id, channel, customer_id)`), `state = 'sending'`, `sending_started_at` = now, iki kitle de boşsa aynı transaction'da `completed` ve `completed_at` = now. Çağıran yalnız `scheduled_at`'i belirler (`Send`: NULL, `Scheduler`: korunur). Bu yüzden planlı ve anlık gönderimin teslimat kümesi aynı kurala uyar; testler bunu gözlemlenebilir sonuçla (`SendResult.Deliveries`, `/status`, `/deliveries`) doğrular, fonksiyonun kendisini çağırmaz.
+**Paylaşılan başlatma (`startSendingLocked`, unexported, test dikişi değildir):** `Service.Send` (anlık ve "şimdi gönder") ile `Scheduler.RunOnce` gönderimi **tek** bir paket içi fonksiyonla başlatır; fonksiyon kampanya satırı `FOR UPDATE` ile kilitli bir transaction içinde çağrılır ve şunları yazar: saklı segment referans zamanında derlenen kanal kitlelerinden (segment-dsl §6, izin filtresi aynı) her (kanal, müşteri) için bir `queued` teslimat (`next_attempt_at` = now, `INSERT … UNIQUE(campaign_id, channel, customer_id)`; P9: aynı `INSERT … SELECT` `variant`'ı db-schema §3.7 ifadesiyle yazar, onaylı sürümde B yoksa `'a'`), `state = 'sending'`, `sending_started_at` = now, iki kitle de boşsa aynı transaction'da `completed` ve `completed_at` = now. Çağıran yalnız `scheduled_at`'i belirler (`Send`: NULL, `Scheduler`: korunur). Bu yüzden planlı ve anlık gönderimin teslimat kümesi aynı kurala uyar; testler bunu gözlemlenebilir sonuçla (`SendResult.Deliveries`, `/status`, `/deliveries`) doğrular, fonksiyonun kendisini çağırmaz.
 
 `Scheduler` log kayıtları (JSON handler; PII yok, REQ-SEC-01 kuralı geçerli):
 
@@ -1387,7 +1502,7 @@ type Job struct {
 	Channel        Channel
 	To             string // CURRENT phone (sms) or email (email) re-read from customers at claim time; "" if NULL. NEVER logged
 	Consent        bool   // CURRENT channel opt-in (sms_opt_in / email_opt_in) re-read at claim time
-	Recipient      content.Recipient // P8: Language = customers.language, re-read at claim time
+	Recipient      content.Recipient // P8: Language = customers.language, re-read at claim time; P9: Variant = deliveries.variant
 	Content        content.Content // approved version template
 	Attempts       int             // after this claim
 	FailedAttempts int
@@ -1512,7 +1627,9 @@ func (d *Dispatcher) Leader() bool
 //   1. !job.Consent || job.To == ""  => MarkFailed(recipient_unavailable, LastError "recipient_unavailable"),
 //      NO provider call, NO limiter permit (REQ-AUD-04 at send time);
 //   (P8, D63: Job.Recipient.Language = customers.language re-read at claim time; RenderContent picks the
-//   language version, the email HTML uses content.RenderEmailHTMLLang(rendered.Language, ...).)
+//   language version, the email HTML uses content.RenderEmailHTMLLang(rendered.Language, ...).
+//   P9, D64: Job.Recipient.Variant = the delivery's own variant column; RenderContent picks the variant
+//   first, then the language inside it; CheckRendered applies to the chosen text.)
 //   2. content.RenderContent + content.CheckRendered fails => MarkFailed(content_too_long,
 //      LastError "content_too_long"), NO provider call, NO limiter permit (REQ-CNT-05);
 //   3. Limiter.Wait -> Provider.Send -> Policy.Next -> Store.MarkSent / ScheduleRetry / MarkFailed.
@@ -1795,7 +1912,7 @@ Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clo
 - **`POST /api/campaigns/{id}/send`:** gövde (`SendRequest`) handler'da okunur (README §5.4 adım 3; alan hataları tek 422'de, openapi `sendCampaign` adım 2). `scheduled_at` **yoksa** `Service.Send(ctx, id, versionID)`, **varsa** `campaign.ParseScheduledAt` sonucu ile `Service.Schedule(ctx, id, versionID, at)` çağrılır; ikisi de 202 + `SendResult`. Pencere denetimi (`schedule_too_soon`/`schedule_too_far`) handler'da değil `Schedule`'dadır (servisin saati ve `Deps.ScheduleMinLead`); `*validation.Error` → 422.
 - **`DELETE /api/campaigns/{id}/schedule`:** gövde okunmaz; `Service.CancelSchedule` → 200 + `CancelScheduleResult`, hatalar README §5.3.
 - **`GET /api/config`:** `limits.schedule_min_lead_seconds` = `Deps.ScheduleMinLead`'in tam saniyeye yukarı yuvarlanmışı, `limits.schedule_max_ahead_seconds` = 2592000.
-- **`POST /api/campaigns/{id}/content`:** `Service.StartContentGeneration` hata dönerse JSON hata; dönmezse HTTP 200 + SSE başlıkları ve `ContentRun.Stream(ctx, emit)`; her `composer.Event` `event: <Name()>` + JSON olarak yazılır. Heartbeat aynı `HeartbeatInterval` ile.
+- **`POST /api/campaigns/{id}/content`:** gövde (yok, `{}` veya `GenerateContentRequest`) handler'da okunur (README §5.4 adım 3): `ab` boolean değilse (`null` dahil) 422 `schema_violation` yol `ab`, başka anahtar 422 `schema_violation` yol = anahtar. `ab: true` ise `ctx` `campaign.WithContentOptions(ctx, campaign.ContentOptions{AB: true})` ile sarılır; gövdesiz/`{}`/`ab: false` isteklerde `ctx` sarılmaz (P8 davranışı birebir; sahte `Service` testleri bunu `campaign.ContentOptionsFromContext` ile gözler). Sonra `Service.StartContentGeneration` hata dönerse JSON hata; dönmezse HTTP 200 + SSE başlıkları ve `ContentRun.Stream(ctx, emit)`; her `composer.Event` `event: <Name()>` + JSON olarak yazılır. Heartbeat aynı `HeartbeatInterval` ile.
 - `X-Mock-LLM-Scenario` başlığı yalnız `LLMProvider == mock` iken `llm.ParseScenario` ile okunur ve `llm.WithScenario` ile `ctx`'e konur.
 
 ## Sentinel hata özeti

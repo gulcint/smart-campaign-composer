@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "emit_campaign_content input, A/B and bilingual (strict variant sent to the model when the marketer asked for an A/B test and the audience has English-speaking customers)",
+  "description": "Strict-compatible variant of ../content.schema.json with `en`, `b` (including `b.en`) and `angles` required (P8 D63 + P9 D64). Same structure as content-en.tool.json plus `b` and `angles`; no minLength/maxLength. Length limits (after personalization), the 60-character angle limit, the identical-variants rule and template-variable rules are enforced only by the backend validator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sms",
+    "email",
+    "en",
+    "b",
+    "angles"
+  ],
+  "properties": {
+    "sms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body"
+      ],
+      "properties": {
+        "body": {
+          "type": "string",
+          "description": "Variant A, Turkish. Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}."
+        }
+      }
+    },
+    "email": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "body"
+      ],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "description": "Variant A, Turkish. Plain-text email subject template. At most 80 Unicode characters after personalization."
+        },
+        "body": {
+          "type": "string",
+          "description": "Variant A, Turkish. Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters."
+        }
+      }
+    },
+    "en": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sms",
+        "email"
+      ],
+      "description": "Variant A, English version of the same message for English-speaking customers: same intent and tone, same limits, same variables. Not a word-for-word translation.",
+      "properties": {
+        "sms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "body"
+          ],
+          "properties": {
+            "body": {
+              "type": "string",
+              "description": "Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}."
+            }
+          }
+        },
+        "email": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "body"
+          ],
+          "properties": {
+            "subject": {
+              "type": "string",
+              "description": "Plain-text email subject template. At most 80 Unicode characters after personalization."
+            },
+            "body": {
+              "type": "string",
+              "description": "Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters."
+            }
+          }
+        }
+      }
+    },
+    "b": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sms",
+        "email",
+        "en"
+      ],
+      "description": "Variant B: the same offer, audience and tone as variant A, told from a deliberately different angle, in Turkish (sms, email) and English (en). Same limits and variables. Must not repeat variant A's texts.",
+      "properties": {
+        "sms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "body"
+          ],
+          "properties": {
+            "body": {
+              "type": "string",
+              "description": "Variant B, Turkish. Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}."
+            }
+          }
+        },
+        "email": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "body"
+          ],
+          "properties": {
+            "subject": {
+              "type": "string",
+              "description": "Variant B, Turkish. Plain-text email subject template. At most 80 Unicode characters after personalization."
+            },
+            "body": {
+              "type": "string",
+              "description": "Variant B, Turkish. Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters."
+            }
+          }
+        },
+        "en": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sms",
+            "email"
+          ],
+          "description": "Variant B, English version: same angle as Turkish variant B, same limits and variables. Not a word-for-word translation.",
+          "properties": {
+            "sms": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "body"
+              ],
+              "properties": {
+                "body": {
+                  "type": "string",
+                  "description": "Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}."
+                }
+              }
+            },
+            "email": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "subject",
+                "body"
+              ],
+              "properties": {
+                "subject": {
+                  "type": "string",
+                  "description": "Plain-text email subject template. At most 80 Unicode characters after personalization."
+                },
+                "body": {
+                  "type": "string",
+                  "description": "Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "angles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "a",
+        "b"
+      ],
+      "description": "One short Turkish label per variant naming the angle it tries (at most 60 characters each, plain text, no variables), e.g. \"İndirim oranı öne çıkar\" / \"Aciliyet: indirim bugün bitiyor\".",
+      "properties": {
+        "a": {
+          "type": "string",
+          "description": "Angle of variant A. At most 60 characters."
+        },
+        "b": {
+          "type": "string",
+          "description": "Angle of variant B. At most 60 characters."
+        }
+      }
+    }
+  }
+}

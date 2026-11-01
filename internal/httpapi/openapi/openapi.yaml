@@ -234,13 +234,19 @@ paths:
       operationId: generateContent
       summary: Stream SMS + email content generation over SSE (REQ-CNT-04, REQ-AI-01)
       description: |
-        Request body: none or `{}`. Response is `text/event-stream` with events `delta`, `invalid`,
+        Request body: none, `{}` or `{"ab": true|false}` (GenerateContentRequest). Response is `text/event-stream` with events `delta`, `invalid`,
         `validated` exactly as in sse-events.md §1; the stream always ends with `validated` or
         `invalid` with `final: true` (unless the client disconnects).
 
         P8 (D63): the generation also asks for the English version iff the campaign's current segment has
         English-speaking recipients (`segment.audience.languages.sms.en + email.en > 0`, REQ-LNG-02);
         English chunks carry `language: "en"`.
+
+        P9 (D64): `{"ab": true}` asks for an A/B test, i.e. a variant B (`b`) and the two `angles` next to
+        variant A (the top-level copy), REQ-ABT-02. No body, `{}` or `{"ab": false}` behave exactly as before
+        P9. The English decision above is independent of `ab`. Variant B chunks carry `variant: "b"`.
+        `ab` that is not a boolean (`null` included) => 422 `validation_failed`, code `schema_violation`, path
+        `ab`; any other property => 422 `schema_violation`, path = the key (before every 404/409/502).
 
         Allowed states: audience_ready, content_ready, approved. Errors detected before the stream
         opens are returned as JSON with the status codes below (no SSE); use-case order: 404
@@ -263,7 +269,7 @@ paths:
         schemas: { delta: ContentDeltaEvent, invalid: ContentInvalidEvent, validated: ContentValidatedEvent }
       parameters:
         - $ref: '#/components/parameters/MockScenario'
-      requestBody: { $ref: '#/components/requestBodies/EmptyBody' }
+      requestBody: { $ref: '#/components/requestBodies/GenerateContentBody' }
       responses:
         '200':
           description: SSE stream (see sse-events.md §1). The body is not validated as a whole (x-sse-events); every event's `data` JSON validates against the schema named in `x-sse-events.schemas`.
@@ -317,6 +323,9 @@ paths:
         `sms.body`, `email.subject`, `email.body` and, for the English block, `en.sms.body`,
         `en.email.subject`, `en.email.body` (a missing or unknown key is `schema_violation` at that
         path, an empty/whitespace-only value is `required`; at most one error per field).
+        P9 (D64): the optional variant B block `b` and `angles` go through the same validator (paths
+        `b.sms.body` … `b.en.email.body`, `angles.a`, `angles.b`; `variants_identical` at path `b`). A body
+        without `b` creates a version without variant B: editing is how an A/B test is removed.
         Optimistic concurrency (owner decision, DECISIONS D40): the REQUIRED header `X-Expected-Version`
         names the version the editor is based on: the id of the campaign's latest content version
         (`Campaign.latest_content_version.id`: highest version_number among VALIDATED versions of the
@@ -407,7 +416,9 @@ paths:
            seeded E2E database (it would change manifest counts for other tests).
         The 422 `fields[]` entries are `{path: "sms.body", code: "sms_too_long_worst_case", limit: 160,
         actual: n}` and/or `{path: "email.subject", code: "subject_too_long_worst_case", limit: 80,
-        actual: n}`; nothing changes.
+        actual: n}`; nothing changes. P8/P9: check 6 covers every variant x language version of the
+        version (paths prefixed `en.`, `b.`, `b.en.`); the version is approved as a whole, there is no
+        partial approval per variant or language.
         Success, in one transaction: approval row bound to the version, `campaigns.approved_content_version_id`
         set, state `approved`. Approving the already approved version again (state `approved`, version
         is still the latest validated) is idempotent: 200 with the unchanged Campaign, no new approval row,
@@ -458,6 +469,9 @@ paths:
         A due plan is started by the worker (campaign.Scheduler) with the same transaction as the
         immediate send; the campaign then keeps its `scheduled_at` in `sending`/`completed`. A plan is
         cancelled only with DELETE /api/campaigns/{campaign_id}/schedule.
+        P9 (D64): every delivery row gets its `variant` in the same INSERT: `b` iff the approved version
+        has variant B and the first byte of sha256(campaign_id ‖ customer_id) (16-byte binary UUIDs) is
+        >= 128, otherwise `a`; both channels of one customer get the same variant (REQ-ABT-03).
 
         Checks, in this order (first failure wins; README.md §5.4 pattern, D42):
         1. malformed path UUID => 404 `campaign_not_found`;
@@ -648,6 +662,16 @@ paths:
             `en` renders the English version of the content, or the Turkish main copy with `fallback: true` when the
             version has no `en` block. Any other value => 422 `invalid_value` (path `query.language`).
           schema: { type: string, enum: [tr, en] }
+        - name: variant
+          in: query
+          required: false
+          description: |
+            P9 (D64). `a` | `b`, default `a` (a request without `variant` renders exactly as before P9).
+            `b` renders variant B of the version (then the language rule above applies inside variant B).
+            `b` on a version without variant B => 422 `validation_failed`, code `variant_not_available`
+            (path `query.variant`; checked after the version is resolved, so the 404/409 above win); any
+            other value => 422 `invalid_value` (path `query.variant`; like every query error, before 404).
+          schema: { type: string, enum: [a, b] }
         - name: sample_index
           in: query
           required: false
@@ -716,6 +740,12 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/EmptyObject' }
+    GenerateContentBody:
+      description: 'generateContent (P9). None, `{}` or `{"ab": boolean}`. Any other property or a non-boolean `ab` => 422 `schema_violation`.'
+      required: false
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/GenerateContentRequest' }
 
   responses:
     MalformedRequest:
@@ -993,6 +1023,15 @@ components:
       additionalProperties: false
       maxProperties: 0
 
+    GenerateContentRequest:
+      type: object
+      additionalProperties: false
+      description: 'P9 (D64). Body of generateContent; absent, `{}` and `{"ab": false}` are the pre-P9 behaviour.'
+      properties:
+        ab:
+          type: boolean
+          description: 'true => also generate variant B and the two angles (A/B test, REQ-ABT-02). Not a boolean => 422 schema_violation (path ab).'
+
     SegmentRuleDocument:
       description: Body of countSegment; the single source is schemas/segment-rule.schema.json (root object with property `rule`).
       $ref: './schemas/segment-rule.schema.json'
@@ -1038,6 +1077,21 @@ components:
           properties:
             sms_runes: { type: integer }
             subject_runes: { type: integer }
+        b:
+          description: P9 (D64). Same lengths for variant B (and `b.en` for its English version, present iff the version has `b.en`); the key is absent when the version has no variant B.
+          type: object
+          additionalProperties: false
+          required: [sms_runes, subject_runes]
+          properties:
+            sms_runes: { type: integer }
+            subject_runes: { type: integer }
+            en:
+              type: object
+              additionalProperties: false
+              required: [sms_runes, subject_runes]
+              properties:
+                sms_runes: { type: integer }
+                subject_runes: { type: integer }
 
     SegmentResult:
       type: object
@@ -1101,6 +1155,51 @@ components:
               properties:
                 subject: { type: string }
                 body: { type: string }
+        b:
+          description: P9 (D64). Variant B (optional); same shape and the same empty-value allowance as variant A, with its own optional `en` (present iff the top-level `en` is present). Present iff `angles` is present.
+          type: object
+          additionalProperties: false
+          required: [sms, email]
+          properties:
+            sms:
+              type: object
+              additionalProperties: false
+              required: [body]
+              properties:
+                body: { type: string }
+            email:
+              type: object
+              additionalProperties: false
+              required: [subject, body]
+              properties:
+                subject: { type: string }
+                body: { type: string }
+            en:
+              type: object
+              additionalProperties: false
+              required: [sms, email]
+              properties:
+                sms:
+                  type: object
+                  additionalProperties: false
+                  required: [body]
+                  properties:
+                    body: { type: string }
+                email:
+                  type: object
+                  additionalProperties: false
+                  required: [subject, body]
+                  properties:
+                    subject: { type: string }
+                    body: { type: string }
+        angles:
+          description: P9 (D64). Angle label per variant (plain text, at most 60 characters in a validated version); present iff `b` is present.
+          type: object
+          additionalProperties: false
+          required: [a, b]
+          properties:
+            a: { type: string }
+            b: { type: string }
 
     ContentVersion:
       type: object
@@ -1138,12 +1237,13 @@ components:
           validation_errors: { minItems: 1 }
 
     ContentDeltaEvent:
-      description: Data of SSE event `delta` (sse-events.md §1.1). Valid (channel, field) pairs are (sms, body), (email, subject), (email, body); with `language` = `en` the same three pairs of the English version.
+      description: Data of SSE event `delta` (sse-events.md §1.1). Valid (channel, field) pairs are (sms, body), (email, subject), (email, body); with `language` = `en` the same three pairs of the English version; with `variant` = `b` the same pairs of variant B (P9).
       type: object
       additionalProperties: false
       required: [attempt, channel, field, text]
       properties:
         attempt: { type: integer, enum: [1, 2], description: '2 = repair attempt' }
+        variant: { type: string, const: b, description: 'P9 (D64). Present only on variant B chunks (A/B generation); the key is absent on variant A chunks. Angles are not streamed (they arrive in validated.content.angles).' }
         language: { type: string, const: en, description: 'P8 (D63). Present only on English chunks (two-language generation); the key is absent on Turkish chunks.' }
         channel: { $ref: '#/components/schemas/Channel' }
         field: { type: string, enum: [body, subject] }
@@ -1320,10 +1420,35 @@ components:
           properties:
             sms: { $ref: '#/components/schemas/StatusCounts' }
             email: { $ref: '#/components/schemas/StatusCounts' }
+        by_variant:
+          description: |
+            P9 (D64). Always returned by the server. null unless the campaign's approved version has variant B;
+            otherwise the same counters split by delivery variant: for every channel c and counter k,
+            by_variant.a.c.k + by_variant.b.c.k = by_channel.c.k (all 0 while no delivery exists).
+            Delivery outcome only: the mock provider reports no opens or clicks, so there is no winner.
+          oneOf: [ { $ref: '#/components/schemas/VariantStatusCounts' }, { type: 'null' } ]
         scheduled_at: { $ref: '#/components/schemas/ScheduledAt' }
         sending_started_at: { type: [string, 'null'], format: date-time }
         completed_at: { type: [string, 'null'], format: date-time }
         updated_at: { type: string, format: date-time }
+
+    ChannelStatusCounts:
+      type: object
+      additionalProperties: false
+      required: [sms, email]
+      description: P9. StatusCounts per channel (same shape as CampaignStatus.by_channel).
+      properties:
+        sms: { $ref: '#/components/schemas/StatusCounts' }
+        email: { $ref: '#/components/schemas/StatusCounts' }
+
+    VariantStatusCounts:
+      type: object
+      additionalProperties: false
+      required: [a, b]
+      description: P9 (D64). CampaignStatus.by_variant when the approved version has variant B.
+      properties:
+        a: { $ref: '#/components/schemas/ChannelStatusCounts' }
+        b: { $ref: '#/components/schemas/ChannelStatusCounts' }
 
     Delivery:
       type: object
@@ -1339,6 +1464,7 @@ components:
         customer_id: { type: string, format: uuid }
         channel: { $ref: '#/components/schemas/Channel' }
         status: { $ref: '#/components/schemas/DeliveryStatus' }
+        variant: { type: string, enum: [a, b], description: 'P9 (D64). Always returned by the server. Written when the delivery is created; `a` for every delivery of a version without variant B and for every pre-P9 delivery. Both channels of one customer carry the same value.' }
         attempts: { type: integer }
         failed_attempts: { type: integer, minimum: 0, maximum: 5 }
         rate_limited_count: { type: integer, minimum: 0, maximum: 20 }
@@ -1388,6 +1514,8 @@ components:
             last_name: { type: string }
             city: { type: string }
             language: { type: string, enum: [tr, en], description: 'P8. The sample customer''s own language (customers.language). Always returned by the server.' }
+            variant: { type: string, enum: [a, b], description: 'P9 (D64). The variant this customer gets at send time: content.VariantFor(campaign_id, customer_id) when the version has variant B, otherwise `a`. Always returned by the server.' }
+        variant: { type: string, enum: [a, b], description: 'P9 (D64). Variant of the rendered text (= the `variant` query, default `a`). Always returned by the server.' }
         language: { type: string, enum: [tr, en], description: 'P8. Language of the rendered text. Always returned by the server.' }
         fallback: { type: boolean, description: 'P8. True iff English was wanted (language=en, or the sample customer is English and no language was given) but the version has no `en` block, so the Turkish main copy is shown. Always returned by the server.' }
         sms:
@@ -1423,7 +1551,8 @@ components:
                  no_tool_call, llm_unavailable, internal_error, sms_too_long, subject_too_long, email_body_too_long,
                  sms_too_long_worst_case, subject_too_long_worst_case, unknown_variable, malformed_variable,
                  unknown_field, unknown_operator, operator_not_allowed, type_mismatch, empty_group,
-                 max_depth_exceeded, max_conditions_exceeded, schedule_too_soon, schedule_too_far]
+                 max_depth_exceeded, max_conditions_exceeded, schedule_too_soon, schedule_too_far,
+                 variants_identical, variant_not_available]
         message: { type: string }
         limit: { type: integer }
         actual: { type: integer }
