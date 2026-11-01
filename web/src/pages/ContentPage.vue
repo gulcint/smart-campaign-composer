@@ -235,7 +235,7 @@ const variantPhases = computed<Record<ContentVariant, ContentPhase>>(() => {
   }
   return { a: of('a'), b: of('b') }
 })
-const variantErrors = computed<Record<ContentVariant, boolean>>(() => {
+const variantHasErrors = computed<Record<ContentVariant, boolean>>(() => {
   const has = (v: ContentVariant) =>
     copyHasErrors(v, 'tr') ||
     (englishAvailable.value && copyHasErrors(v, 'en')) ||
@@ -470,7 +470,9 @@ watch(gen.versionStatus, (s, prev) => {
   }
   sessionStatus.value = s
   if (s === 'validated') {
-    const c = generatedContent()
+    // The validated event's content is the truth (a repair attempt may drop `en`/`b`).
+    const v = gen.content.value
+    const c: Content = v ? JSON.parse(JSON.stringify(v)) : generatedContent()
     base.value = c
     draft.value = c
     worstCase.value = gen.worstCase.value
@@ -664,13 +666,15 @@ onMounted(() => {
   const id = campaignId.value
   if (!id) return
   void store.ensure(id)
-  if (route.query.generate === '1') {
+  const generate = route.query.generate === '1'
+  // `generate` and `ab` are one-shot: abChoice already read `ab` (ui.md §3.23).
+  if (generate || route.query.ab !== undefined) {
     const rest = { ...route.query }
     delete rest.generate
     delete rest.ab
     void router.replace({ query: rest })
-    startGeneration()
   }
+  if (generate) startGeneration()
 })
 </script>
 
@@ -738,7 +742,7 @@ onMounted(() => {
           <VariantTabs
             :model-value="activeVariant"
             :phases="variantPhases"
-            :errors="variantErrors"
+            :errors="variantHasErrors"
             :id-base="variantId"
             @update:model-value="onVariant"
           />

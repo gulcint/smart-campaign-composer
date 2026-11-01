@@ -8,6 +8,7 @@ import type { ApiError } from '@/api/errors'
 import { apiErrorFromBody, networkError } from '@/api/errors'
 import { createSSEParser, type SSEMessage } from '@/api/sse'
 import type {
+  Content,
   ContentInvalidEvent,
   ContentPhase,
   ContentValidatedEvent,
@@ -16,7 +17,7 @@ import type {
   VersionStatus,
   WorstCase,
 } from '@/api/types'
-import { isVariantLevelPath } from '@/lib/variant'
+import { type ContentCopy, isVariantLevelPath } from '@/lib/variant'
 
 export interface FieldState {
   text: string
@@ -157,6 +158,8 @@ export function useContentGeneration() {
   const angles = ref<{ a: string; b: string } | null>(null)
   /** P9: final `invalid` errors with path `b` (variants_identical) and `angles.*`. */
   const variantErrors = ref<FieldError[]>([])
+  /** The `validated` event's content as sent (null until a run validates). */
+  const content = ref<Content | null>(null)
   const versionStatus = ref<VersionStatus>('none')
   const versionId = ref<string | null>(null)
   const worstCase = ref<WorstCase | null>(null)
@@ -225,6 +228,7 @@ export function useContentGeneration() {
     hasVariantB.value = false
     angles.value = null
     variantErrors.value = []
+    content.value = null
     versionStatus.value = 'streaming'
     versionId.value = null
     worstCase.value = null
@@ -319,8 +323,9 @@ export function useContentGeneration() {
           return
         }
         terminal = true
-        // A malformed `en` / `b` block (no such deltas) still needs its tab and errors.
-        if (ev.errors.some((e) => isEnPath(e.path) || e.path.startsWith('b.en'))) {
+        // A malformed `en` / `b` block (no such deltas) still needs its tab and errors. The bare
+        // `b.en` parity error is no reason for English: with `en` absent it means `b.en` must go.
+        if (ev.errors.some((e) => isEnPath(e.path) || e.path.startsWith('b.en.'))) {
           hasEnglish.value = true
         }
         if (ev.errors.some((e) => e.path === 'b' || e.path.startsWith('b.'))) {
@@ -352,29 +357,31 @@ export function useContentGeneration() {
         }
         terminal = true
         attempt.value = ev.attempt
-        fields['sms-body'].text = ev.content.sms.body
-        fields['email-subject'].text = ev.content.email.subject
-        fields['email-body'].text = ev.content.email.body
-        if (ev.content.en) {
-          hasEnglish.value = true
-          enFields['sms-body'].text = ev.content.en.sms.body
-          enFields['email-subject'].text = ev.content.en.email.subject
-          enFields['email-body'].text = ev.content.en.email.body
-        }
-        const b = ev.content.b
-        if (b) {
-          hasVariantB.value = true
-          bFields['sms-body'].text = b.sms.body
-          bFields['email-subject'].text = b.email.subject
-          bFields['email-body'].text = b.email.body
-          if (b.en) {
-            hasEnglish.value = true
-            bEnFields['sms-body'].text = b.en.sms.body
-            bEnFields['email-subject'].text = b.en.email.subject
-            bEnFields['email-body'].text = b.en.email.body
+        // The validated content is the source of truth: a repair attempt may drop `en`/`b` that
+        // an earlier attempt streamed, so the flags and field sets follow `ev.content` alone.
+        const c = ev.content
+        const fill = (g: Record<FieldKey, FieldState>, copy: ContentCopy | undefined) => {
+          const text: Record<FieldKey, string> = {
+            'sms-body': copy?.sms.body ?? '',
+            'email-subject': copy?.email.subject ?? '',
+            'email-body': copy?.email.body ?? '',
+          }
+          for (const k of FIELD_KEYS) {
+            g[k].text = text[k]
+            if (!copy) {
+              g[k].phase = 'idle'
+              g[k].errors = []
+            }
           }
         }
-        angles.value = ev.content.angles ? { ...ev.content.angles } : null
+        hasEnglish.value = c.en != null || c.b?.en != null
+        hasVariantB.value = c.b != null
+        fill(fields, c)
+        fill(enFields, c.en)
+        fill(bFields, c.b)
+        fill(bEnFields, c.b?.en)
+        content.value = c
+        angles.value = c.angles ? { ...c.angles } : null
         setAll('validated', false)
         versionId.value = ev.content_version_id
         worstCase.value = ev.worst_case
@@ -435,6 +442,7 @@ export function useContentGeneration() {
     hasVariantB,
     angles,
     variantErrors,
+    content,
     versionStatus,
     versionId,
     worstCase,
