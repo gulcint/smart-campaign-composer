@@ -19,6 +19,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import ErrorCard from '@/components/ErrorCard.vue'
 import SchedulePanel from '@/components/SchedulePanel.vue'
+import VariantBreakdown from '@/components/VariantBreakdown.vue'
 import Skeleton from '@/components/Skeleton.vue'
 import StepHeader from '@/components/StepHeader.vue'
 import { useCampaignStatusStream } from '@/composables/useCampaignStatusStream'
@@ -97,6 +98,14 @@ watch(campaignState, (s) => {
     void router.push({ name: 'approval', params: { campaignId: campaignId.value } })
   }
 })
+
+// P9 (ui.md §3.20, §3.30): deliveries per variant when the approved version has variant B
+// (`by_variant` non-null); never in the scheduled view. The angles come from the latest version,
+// which is the approved one once sending started (content can no longer change).
+const byVariant = computed(() =>
+  campaignState.value === 'scheduled' ? null : (status.value?.by_variant ?? null),
+)
+const variantAngles = computed(() => campaign.value?.latest_content_version?.content.angles ?? null)
 
 // ---- cancel the plan / send now (ui.md §3.25) ----
 const cancelling = ref(false)
@@ -332,6 +341,8 @@ onBeforeUnmount(() => {
         :last-updated-at="lastUpdatedAt"
         :view-state="campaignState"
       />
+
+      <VariantBreakdown v-if="byVariant" :by-variant="byVariant" :angles="variantAngles" />
 
       <ConfirmDialog
         :open="dialogOpen"
