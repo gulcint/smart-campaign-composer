@@ -430,7 +430,7 @@ P7a metin önerileri (Türkçe; `web/src/i18n/tr.ts`'e arayüz dilimi yazar, bu 
 | `confirm.sendMode.later` | İleri bir tarihte gönder |
 | `confirm.scheduledAt.label` | Gönderim zamanı |
 | `confirm.scheduledAt.hint` | En erken {min} dakika sonra, en geç 30 gün içinde. |
-| `schedule.tz` | TSİ |
+| `schedule.tz` | (Türkiye saati, UTC+3) |
 | `schedule.title` | Gönderim planlandı |
 | `schedule.timeLabel` | Planlanan zaman |
 | `schedule.countdown` | {hms} |
