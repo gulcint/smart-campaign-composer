@@ -181,13 +181,19 @@ export interface paths {
         put?: never;
         /**
          * Stream SMS + email content generation over SSE (REQ-CNT-04, REQ-AI-01)
-         * @description Request body: none or `{}`. Response is `text/event-stream` with events `delta`, `invalid`,
+         * @description Request body: none, `{}` or `{"ab": true|false}` (GenerateContentRequest). Response is `text/event-stream` with events `delta`, `invalid`,
          *     `validated` exactly as in sse-events.md §1; the stream always ends with `validated` or
          *     `invalid` with `final: true` (unless the client disconnects).
          *
          *     P8 (D63): the generation also asks for the English version iff the campaign's current segment has
          *     English-speaking recipients (`segment.audience.languages.sms.en + email.en > 0`, REQ-LNG-02);
          *     English chunks carry `language: "en"`.
+         *
+         *     P9 (D64): `{"ab": true}` asks for an A/B test, i.e. a variant B (`b`) and the two `angles` next to
+         *     variant A (the top-level copy), REQ-ABT-02. No body, `{}` or `{"ab": false}` behave exactly as before
+         *     P9. The English decision above is independent of `ab`. Variant B chunks carry `variant: "b"`.
+         *     `ab` that is not a boolean (`null` included) => 422 `validation_failed`, code `schema_violation`, path
+         *     `ab`; any other property => 422 `schema_violation`, path = the key (before every 404/409/502).
          *
          *     Allowed states: audience_ready, content_ready, approved. Errors detected before the stream
          *     opens are returned as JSON with the status codes below (no SSE); use-case order: 404
@@ -233,6 +239,9 @@ export interface paths {
          *     `sms.body`, `email.subject`, `email.body` and, for the English block, `en.sms.body`,
          *     `en.email.subject`, `en.email.body` (a missing or unknown key is `schema_violation` at that
          *     path, an empty/whitespace-only value is `required`; at most one error per field).
+         *     P9 (D64): the optional variant B block `b` and `angles` go through the same validator (paths
+         *     `b.sms.body` … `b.en.email.body`, `angles.a`, `angles.b`; `variants_identical` at path `b`). A body
+         *     without `b` creates a version without variant B: editing is how an A/B test is removed.
          *     Optimistic concurrency (owner decision, DECISIONS D40): the REQUIRED header `X-Expected-Version`
          *     names the version the editor is based on: the id of the campaign's latest content version
          *     (`Campaign.latest_content_version.id`: highest version_number among VALIDATED versions of the
@@ -319,7 +328,9 @@ export interface paths {
          *        seeded E2E database (it would change manifest counts for other tests).
          *     The 422 `fields[]` entries are `{path: "sms.body", code: "sms_too_long_worst_case", limit: 160,
          *     actual: n}` and/or `{path: "email.subject", code: "subject_too_long_worst_case", limit: 80,
-         *     actual: n}`; nothing changes.
+         *     actual: n}`; nothing changes. P8/P9: check 6 covers every variant x language version of the
+         *     version (paths prefixed `en.`, `b.`, `b.en.`); the version is approved as a whole, there is no
+         *     partial approval per variant or language.
          *     Success, in one transaction: approval row bound to the version, `campaigns.approved_content_version_id`
          *     set, state `approved`. Approving the already approved version again (state `approved`, version
          *     is still the latest validated) is idempotent: 200 with the unchanged Campaign, no new approval row,
@@ -365,6 +376,9 @@ export interface paths {
          *     A due plan is started by the worker (campaign.Scheduler) with the same transaction as the
          *     immediate send; the campaign then keeps its `scheduled_at` in `sending`/`completed`. A plan is
          *     cancelled only with DELETE /api/campaigns/{campaign_id}/schedule.
+         *     P9 (D64): every delivery row gets its `variant` in the same INSERT: `b` iff the approved version
+         *     has variant B and the first byte of sha256(campaign_id ‖ customer_id) (16-byte binary UUIDs) is
+         *     >= 128, otherwise `a`; both channels of one customer get the same variant (REQ-ABT-03).
          *
          *     Checks, in this order (first failure wins; README.md §5.4 pattern, D42):
          *     1. malformed path UUID => 404 `campaign_not_found`;
@@ -612,6 +626,11 @@ export interface components {
             en: number;
         };
         EmptyObject: Record<string, never>;
+        /** @description P9 (D64). Body of generateContent; absent, `{}` and `{"ab": false}` are the pre-P9 behaviour. */
+        GenerateContentRequest: {
+            /** @description true => also generate variant B and the two angles (A/B test, REQ-ABT-02). Not a boolean => 422 schema_violation (path ab). */
+            ab?: boolean;
+        };
         /** @description Body of countSegment; the single source is schemas/segment-rule.schema.json (root object with property `rule`). */
         SegmentRuleDocument: components["schemas"]["segment-rule.schema"];
         Segment: {
@@ -641,6 +660,15 @@ export interface components {
             en?: {
                 sms_runes: number;
                 subject_runes: number;
+            };
+            /** @description P9 (D64). Same lengths for variant B (and `b.en` for its English version, present iff the version has `b.en`); the key is absent when the version has no variant B. */
+            b?: {
+                sms_runes: number;
+                subject_runes: number;
+                en?: {
+                    sms_runes: number;
+                    subject_runes: number;
+                };
             };
         };
         SegmentResult: {
@@ -679,6 +707,30 @@ export interface components {
                     body: string;
                 };
             };
+            /** @description P9 (D64). Variant B (optional); same shape and the same empty-value allowance as variant A, with its own optional `en` (present iff the top-level `en` is present). Present iff `angles` is present. */
+            b?: {
+                sms: {
+                    body: string;
+                };
+                email: {
+                    subject: string;
+                    body: string;
+                };
+                en?: {
+                    sms: {
+                        body: string;
+                    };
+                    email: {
+                        subject: string;
+                        body: string;
+                    };
+                };
+            };
+            /** @description P9 (D64). Angle label per variant (plain text, at most 60 characters in a validated version); present iff `b` is present. */
+            angles?: {
+                a: string;
+                b: string;
+            };
         };
         ContentVersion: {
             /** Format: uuid */
@@ -702,13 +754,18 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
-        /** @description Data of SSE event `delta` (sse-events.md §1.1). Valid (channel, field) pairs are (sms, body), (email, subject), (email, body); with `language` = `en` the same three pairs of the English version. */
+        /** @description Data of SSE event `delta` (sse-events.md §1.1). Valid (channel, field) pairs are (sms, body), (email, subject), (email, body); with `language` = `en` the same three pairs of the English version; with `variant` = `b` the same pairs of variant B (P9). */
         ContentDeltaEvent: {
             /**
              * @description 2 = repair attempt
              * @enum {integer}
              */
             attempt: 1 | 2;
+            /**
+             * @description P9 (D64). Present only on variant B chunks (A/B generation); the key is absent on variant A chunks. Angles are not streamed (they arrive in validated.content.angles).
+             * @constant
+             */
+            variant?: "b";
             /**
              * @description P8 (D63). Present only on English chunks (two-language generation); the key is absent on Turkish chunks.
              * @constant
@@ -850,6 +907,13 @@ export interface components {
                 sms: components["schemas"]["StatusCounts"];
                 email: components["schemas"]["StatusCounts"];
             };
+            /**
+             * @description P9 (D64). Always returned by the server. null unless the campaign's approved version has variant B;
+             *     otherwise the same counters split by delivery variant: for every channel c and counter k,
+             *     by_variant.a.c.k + by_variant.b.c.k = by_channel.c.k (all 0 while no delivery exists).
+             *     Delivery outcome only: the mock provider reports no opens or clicks, so there is no winner.
+             */
+            by_variant?: components["schemas"]["VariantStatusCounts"] | null;
             scheduled_at: components["schemas"]["ScheduledAt"];
             /** Format: date-time */
             sending_started_at: string | null;
@@ -857,6 +921,16 @@ export interface components {
             completed_at: string | null;
             /** Format: date-time */
             updated_at: string;
+        };
+        /** @description P9. StatusCounts per channel (same shape as CampaignStatus.by_channel). */
+        ChannelStatusCounts: {
+            sms: components["schemas"]["StatusCounts"];
+            email: components["schemas"]["StatusCounts"];
+        };
+        /** @description P9 (D64). CampaignStatus.by_variant when the approved version has variant B. */
+        VariantStatusCounts: {
+            a: components["schemas"]["ChannelStatusCounts"];
+            b: components["schemas"]["ChannelStatusCounts"];
         };
         Delivery: {
             /**
@@ -872,6 +946,11 @@ export interface components {
             customer_id: string;
             channel: components["schemas"]["Channel"];
             status: components["schemas"]["DeliveryStatus"];
+            /**
+             * @description P9 (D64). Always returned by the server. Written when the delivery is created; `a` for every delivery of a version without variant B and for every pre-P9 delivery. Both channels of one customer carry the same value.
+             * @enum {string}
+             */
+            variant?: "a" | "b";
             attempts: number;
             failed_attempts: number;
             rate_limited_count: number;
@@ -924,7 +1003,17 @@ export interface components {
                  * @enum {string}
                  */
                 language?: "tr" | "en";
+                /**
+                 * @description P9 (D64). The variant this customer gets at send time: content.VariantFor(campaign_id, customer_id) when the version has variant B, otherwise `a`. Always returned by the server.
+                 * @enum {string}
+                 */
+                variant?: "a" | "b";
             };
+            /**
+             * @description P9 (D64). Variant of the rendered text (= the `variant` query, default `a`). Always returned by the server.
+             * @enum {string}
+             */
+            variant?: "a" | "b";
             /**
              * @description P8. Language of the rendered text. Always returned by the server.
              * @enum {string}
@@ -958,7 +1047,7 @@ export interface components {
             /** @description e.g. "brief", "sms.body", "rule.all[0].field", "header.X-Mock-LLM-Scenario", "query.limit", "" (whole document) */
             path: string;
             /** @enum {string} */
-            code: "required" | "too_long" | "invalid_value" | "invalid_json" | "schema_violation" | "truncated_output" | "no_tool_call" | "llm_unavailable" | "internal_error" | "sms_too_long" | "subject_too_long" | "email_body_too_long" | "sms_too_long_worst_case" | "subject_too_long_worst_case" | "unknown_variable" | "malformed_variable" | "unknown_field" | "unknown_operator" | "operator_not_allowed" | "type_mismatch" | "empty_group" | "max_depth_exceeded" | "max_conditions_exceeded" | "schedule_too_soon" | "schedule_too_far";
+            code: "required" | "too_long" | "invalid_value" | "invalid_json" | "schema_violation" | "truncated_output" | "no_tool_call" | "llm_unavailable" | "internal_error" | "sms_too_long" | "subject_too_long" | "email_body_too_long" | "sms_too_long_worst_case" | "subject_too_long_worst_case" | "unknown_variable" | "malformed_variable" | "unknown_field" | "unknown_operator" | "operator_not_allowed" | "type_mismatch" | "empty_group" | "max_depth_exceeded" | "max_conditions_exceeded" | "schedule_too_soon" | "schedule_too_far" | "variants_identical" | "variant_not_available";
             message: string;
             limit?: number;
             actual?: number;
@@ -1023,7 +1112,7 @@ export interface components {
         };
         /**
          * CampaignContent
-         * @description Input of the emit_campaign_content tool AND request body of POST /api/campaigns/{campaign_id}/content-versions (human edit). Both go through the same backend validator (content.Validate). Length limits (sms.body <= 160, email.subject <= 80, email.body <= 5000 Unicode code points of the template text) and template-variable rules are NOT expressed as maxLength/pattern here on purpose: the backend reports them with specific field error codes (sms_too_long, subject_too_long, email_body_too_long, unknown_variable, malformed_variable). `minLength: 1` documents that empty is invalid, but content.Parse checks structure and types only: an empty or whitespace-only value is reported by content.Validate as field code `required` (never schema_violation), a missing key or unknown key as schema_violation. See llm-tools.md and go-interfaces.md#content. P8 (D63): the optional `en` block is the English version for English-speaking customers; sms/email stay the Turkish main copy. When `en` is present it must be complete (sms.body, email.subject, email.body) and every unknown or missing key inside it is a schema_violation at its path (en, en.sms, en.email.subject, en.html). The same limits and variable rules apply to every language version; field paths are prefixed with `en.` (en.sms.body, en.email.subject, en.email.body).
+         * @description Input of the emit_campaign_content tool AND request body of POST /api/campaigns/{campaign_id}/content-versions (human edit). Both go through the same backend validator (content.Validate). Length limits (sms.body <= 160, email.subject <= 80, email.body <= 5000 Unicode code points of the template text) and template-variable rules are NOT expressed as maxLength/pattern here on purpose: the backend reports them with specific field error codes (sms_too_long, subject_too_long, email_body_too_long, unknown_variable, malformed_variable). `minLength: 1` documents that empty is invalid, but content.Parse checks structure and types only: an empty or whitespace-only value is reported by content.Validate as field code `required` (never schema_violation), a missing key or unknown key as schema_violation. See llm-tools.md and go-interfaces.md#content. P8 (D63): the optional `en` block is the English version for English-speaking customers; sms/email stay the Turkish main copy. When `en` is present it must be complete (sms.body, email.subject, email.body) and every unknown or missing key inside it is a schema_violation at its path (en, en.sms, en.email.subject, en.html). The same limits and variable rules apply to every language version; field paths are prefixed with `en.` (en.sms.body, en.email.subject, en.email.body). P9 (D64): the optional `b` block is variant B of an A/B test (the top-level sms/email/en are variant A) and `angles` names what each variant tries. `b` and `angles` are present together or not at all (a missing one is a schema_violation at its own path: `angles` or `b`). Inside `b` the language set equals variant A's: `b.en` is required when the top-level `en` is present and forbidden when it is absent (schema_violation at path `b.en`). Every variant x language version gets the same limits and variable rules; paths are prefixed with `b.` (b.sms.body, b.email.subject, b.email.body, b.en.sms.body, b.en.email.subject, b.en.email.body). `angles.a` / `angles.b` are plain labels (not templates): empty or whitespace-only => `required`, more than 60 Unicode characters => `too_long` (limit 60). Variant B whose sms.body, email.subject and email.body all equal variant A's (after NFC) => `variants_identical` at path `b`.
          */
         "content.schema": {
             sms: {
@@ -1049,7 +1138,40 @@ export interface components {
                     body: string;
                 };
             };
-        };
+            /** @description Variant B (optional, P9). Same structure and limits as variant A (the top-level sms/email); `en` is the English version of variant B and is present iff the top-level `en` is present. */
+            b?: {
+                sms: {
+                    /** @description Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}. */
+                    body: string;
+                };
+                email: {
+                    /** @description Plain-text email subject template. At most 80 Unicode characters after personalization. */
+                    subject: string;
+                    /** @description Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters. */
+                    body: string;
+                };
+                /** @description English version of variant B. Required when the top-level `en` is present, forbidden otherwise. */
+                en?: {
+                    sms: {
+                        /** @description Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}. */
+                        body: string;
+                    };
+                    email: {
+                        /** @description Plain-text email subject template. At most 80 Unicode characters after personalization. */
+                        subject: string;
+                        /** @description Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters. */
+                        body: string;
+                    };
+                };
+            };
+            /** @description Short plain-text label per variant naming the angle it tries (P9). Present iff `b` is present. Not a template, never sent to customers. */
+            angles?: {
+                /** @description Angle of variant A. At most 60 Unicode characters (backend code too_long). */
+                a: string;
+                /** @description Angle of variant B. At most 60 Unicode characters (backend code too_long). */
+                b: string;
+            };
+        } & (unknown & unknown);
         /**
          * SegmentRuleToolInput
          * @description Input of the emit_segment_rule tool and body of POST /api/segments/count. Root is an object with a single 'rule' property. The rule tree is unrolled to depth 3 (group1 > group2 > group3); no recursion. Semantic limits that JSON Schema cannot express (max 10 conditions in total, operator-per-type table, value ranges, enum members) are enforced by the backend validator, see segment-dsl.md.
@@ -1388,6 +1510,12 @@ export interface components {
                 "application/json": components["schemas"]["EmptyObject"];
             };
         };
+        /** @description generateContent (P9). None, `{}` or `{"ab": boolean}`. Any other property or a non-boolean `ab` => 422 `schema_violation`. */
+        GenerateContentBody: {
+            content: {
+                "application/json": components["schemas"]["GenerateContentRequest"];
+            };
+        };
     };
     headers: never;
     pathItems: never;
@@ -1670,7 +1798,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: components["requestBodies"]["EmptyBody"];
+        requestBody?: components["requestBodies"]["GenerateContentBody"];
         responses: {
             /** @description SSE stream (see sse-events.md §1). The body is not validated as a whole (x-sse-events); every event's `data` JSON validates against the schema named in `x-sse-events.schemas`. */
             200: {
@@ -1975,6 +2103,14 @@ export interface operations {
                  *     version has no `en` block. Any other value => 422 `invalid_value` (path `query.language`).
                  */
                 language?: "tr" | "en";
+                /**
+                 * @description P9 (D64). `a` | `b`, default `a` (a request without `variant` renders exactly as before P9).
+                 *     `b` renders variant B of the version (then the language rule above applies inside variant B).
+                 *     `b` on a version without variant B => 422 `validation_failed`, code `variant_not_available`
+                 *     (path `query.variant`; checked after the version is resolved, so the 404/409 above win); any
+                 *     other value => 422 `invalid_value` (path `query.variant`; like every query error, before 404).
+                 */
+                variant?: "a" | "b";
                 /** @description >= 0, default 0. Negative => 422 invalid_value (path query.sample_index). */
                 sample_index?: number;
             };
