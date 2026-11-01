@@ -896,6 +896,69 @@ func TestScheduler_CancelRacingRunOnce(t *testing.T) {
 	}
 }
 
+// REQ-SCH-03 C7
+// "Send now" racing the scheduler start (bounded loop, 20 rounds): on a due scheduled campaign,
+// campaign.Service.Send (the harness service) and Scheduler.RunOnce (its own NewScheduler and pool)
+// run at the same time on the same database. Exactly one wins each round: either Send succeeds and
+// RunOnce returns 0, or RunOnce returns 1 and Send is campaign.ErrInvalidState. Either way the
+// deliveries are those of one send (the channel audiences, no duplicate (channel, customer)) and the
+// campaign is sending or completed, never left scheduled.
+func TestScheduler_SendNowRacingRunOnce(t *testing.T) {
+	h := newSchHarness(t, llm.NewMock(llm.MockOptions{}), schRef, 0)
+	s, _ := newScheduler(t, h.clock, campaign.SchedulerConfig{Interval: time.Second, BatchSize: 10})
+
+	const rounds = 20
+	for i := range rounds {
+		id, vid := h.schApproved(t)
+		h.schSchedule(t, id, vid, h.clock.Now()) // due at once (no min lead)
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		var n int
+		var runErr, sendErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			n, runErr = s.RunOnce(context.Background())
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, sendErr = h.svc.Send(context.Background(), id, vid)
+		}()
+		close(start)
+		wg.Wait()
+
+		if runErr != nil {
+			t.Fatalf("round %d: RunOnce() error = %v", i, runErr)
+		}
+		switch {
+		case sendErr == nil:
+			if n != 0 {
+				t.Fatalf("round %d: Send succeeded but RunOnce started %d campaigns, want 0", i, n)
+			}
+		case errors.Is(sendErr, campaign.ErrInvalidState):
+			if n != 1 {
+				t.Fatalf("round %d: Send lost but RunOnce returned %d, want 1", i, n)
+			}
+		default:
+			t.Fatalf("round %d: Send() error = %v, want nil or %v", i, sendErr, campaign.ErrInvalidState)
+		}
+
+		c := h.get(t, id)
+		if c.State != campaign.StateSending && c.State != campaign.StateCompleted {
+			t.Fatalf("round %d: campaign state = %s, want sending or completed", i, c.State)
+		}
+		want := h.audienceTotal(t, id)
+		if want == 0 {
+			t.Fatal("test setup: the example audience is empty")
+		}
+		h.assertStartedRows(t, id, want)
+		h.clock.Advance(time.Second)
+	}
+}
+
 // REQ-SCH-02 C3
 // Run calls RunOnce at once (before waiting on the injected clock) and then every Interval; it
 // returns ctx.Err() when ctx ends.
