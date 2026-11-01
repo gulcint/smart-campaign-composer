@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/gulcint/smart-campaign-composer/docs/contracts/schemas/segment-rule.schema.json",
   "title": "SegmentRuleToolInput",
-  "description": "Input of the emit_segment_rule tool and body of POST /api/segments/count. Root is an object with a single 'rule' property. The rule tree is unrolled to depth 3 (group1 > group2 > group3); no recursion. Semantic limits that JSON Schema cannot express (max 10 conditions in total, operator-per-type table, value ranges, enum members) are enforced by the backend validator, see segment-dsl.md.",
+  "description": "Body of POST /api/segments/count and the 'rule' part of the emit_segment_rule tool input. Root is an object with a single 'rule' property. The full tool input (rule + unsupported) is #/$defs/toolInput (D67). The rule tree is unrolled to depth 3 (group1 > group2 > group3); no recursion. Semantic limits that JSON Schema cannot express (max 10 conditions in total, operator-per-type table, value ranges, enum members) are enforced by the backend validator, see segment-dsl.md.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -287,6 +287,53 @@
           }
         }
       ]
+    },
+    "toolInput": {
+      "description": "D67. Full input of the emit_segment_rule tool: the rule plus the brief criteria the rule could not express. Validated by segment.ParseToolInput (+ segment.Validate for the rule). Not accepted by POST /api/segments/count (its body is the root of this file; 'unsupported' there => 422 schema_violation).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "unsupported"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/group1"
+        },
+        "unsupported": {
+          "$ref": "#/$defs/unsupportedList"
+        }
+      }
+    },
+    "unsupportedList": {
+      "description": "D67. Brief criteria that the allowed fields cannot express (e.g. age, gender, product category, device). Empty when every criterion is in the rule. Display-only text: never part of SQL, never rendered as HTML.",
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/unsupportedCriterion"
+      }
+    },
+    "unsupportedCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "criterion",
+        "reason"
+      ],
+      "properties": {
+        "criterion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Short quote or paraphrase of the brief criterion, e.g. \"25 yaş altı\". NFC, whitespace runs collapsed to one space, trimmed; 1..120 runes after that."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Short Turkish reason, e.g. \"Müşteri verisinde yaş bilgisi yok.\" Same normalisation; 1..200 runes."
+        }
+      }
     }
   }
 }

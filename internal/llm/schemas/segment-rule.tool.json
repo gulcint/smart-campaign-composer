@@ -1,15 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "emit_segment_rule input (strict variant sent to the model)",
-  "description": "Strict-compatible variant of ../segment-rule.schema.json. Differences: anyOf instead of oneOf; no minItems/maxItems; 'value' is required (use null for is_null / is_not_null). Limits (max depth 3, max 10 conditions, value ranges, operator-per-type) are enforced only by the backend validator.",
+  "description": "Strict-compatible variant of the emit_segment_rule input (../segment-rule.schema.json#/$defs/toolInput). Differences: anyOf instead of oneOf; no minItems/maxItems/minLength/maxLength; 'value' is required (use null for is_null / is_not_null). Limits (max depth 3, max 10 conditions, value ranges, operator-per-type; at most 10 unsupported items, criterion 1..120 and reason 1..200 characters after normalisation) are enforced only by the backend validator.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "rule"
+    "rule",
+    "unsupported"
   ],
   "properties": {
     "rule": {
       "$ref": "#/$defs/group1"
+    },
+    "unsupported": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/unsupportedCriterion"
+      }
     }
   },
   "$defs": {
@@ -298,6 +305,22 @@
           }
         }
       ]
+    },
+    "unsupportedCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "criterion",
+        "reason"
+      ],
+      "properties": {
+        "criterion": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
     }
   }
 }

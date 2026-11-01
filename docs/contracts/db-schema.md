@@ -1,6 +1,6 @@
 # Veritabanı şeması (PostgreSQL 16)
 
-Kapsam: REQ-SND-01, REQ-SND-03, REQ-AUD-04, REQ-APR-03, REQ-SEC-02, REQ-SEED-01/02, REQ-TRK-01/02, REQ-SCH-01..03.
+Kapsam: REQ-SND-01, REQ-SND-03, REQ-AUD-04, REQ-AUD-06 (D67), REQ-APR-03, REQ-SEC-02, REQ-SEED-01/02, REQ-TRK-01/02, REQ-SCH-01..03.
 Entegrasyon testleri yalnızca burada adı geçen tablo, kolon, constraint, fonksiyon ve rol adlarına dayanabilir. Kolon sırası ve index'lerin fiziksel ayrıntısı sözleşme değildir; **adı verilen constraint'ler sözleşmedir**.
 
 ## 1. Roller ve bağlantılar (REQ-SEC-02)
@@ -19,7 +19,7 @@ Entegrasyon testleri yalnızca burada adı geçen tablo, kolon, constraint, fonk
 - Dizin: `migrations/`. Ad: `NNNN_snake_case_name.up.sql` + `NNNN_snake_case_name.down.sql`; `NNNN` 4 haneli, 0001'den artan, boşluksuz ve çakışmasız.
 - Her `up` için `down` zorunlu; `up → down → up` sonrası şema diff'i boş olmalı (`make db-roundtrip`).
 - Takip tablosu: `schema_migrations(version bigint PRIMARY KEY, dirty boolean NOT NULL)` (golang-migrate biçimi).
-- Planlanan ilk set (VARSAYIM, adlar bağlayıcı değil): `0001_customers_events`, `0002_customer_stats_fn`, `0003_campaigns_content_approvals`, `0004_deliveries`, `0005_seed_runs`. Sonradan eklenenler: `0006_revoke_schema_migrations`, `0007_campaign_generation_lease` (D52), `0008_campaign_schedule` (P7a, D62; §3.4.1), `0009_content_en` (P8, D63; §3.4, §3.5), `0010_content_variants` (P9, D64; §3.5, §3.5.1, §3.7).
+- Planlanan ilk set (VARSAYIM, adlar bağlayıcı değil): `0001_customers_events`, `0002_customer_stats_fn`, `0003_campaigns_content_approvals`, `0004_deliveries`, `0005_seed_runs`. Sonradan eklenenler: `0006_revoke_schema_migrations`, `0007_campaign_generation_lease` (D52), `0008_campaign_schedule` (P7a, D62; §3.4.1), `0009_content_en` (P8, D63; §3.4, §3.5), `0010_content_variants` (P9, D64; §3.5, §3.5.1, §3.7), `0011_segment_unsupported` (D67; §3.4, §3.4.2).
 - `migrations/embed.go` (`package migrations`, `var FS embed.FS`) dosyaları gömer.
 
 ## 3. Tablolar
@@ -92,6 +92,8 @@ Her müşteri için tam bir satır döner (olayı olmayanlar dahil; sayılar 0, 
 | `segment_generated_at` | timestamptz | NULL |
 | `audience_matched`, `audience_sms`, `audience_email` | integer | NULL, ≥ 0 |
 | `audience_languages` | jsonb | NULL (0009, D63); segment üretiminde `{"sms":{"tr":n,"en":m},"email":{"tr":n,"en":m}}` (kanal kitlesinin `customers.language` dağılımı, izin ve iletişim bilgisi süzgeci sonrası; `tr + en` = `audience_sms` / `audience_email`). NULL = segmenti P8 öncesi üretilmiş kampanya. `campaigns_audience_languages_check`: `audience_languages IS NULL OR (audience_matched IS NOT NULL AND jsonb_typeof(audience_languages) = 'object')` |
+| `segment_unsupported` | jsonb | NOT NULL DEFAULT `'[]'` (0011, D67); segment üretiminde modelin ifade edemediği brief koşulları, normalize edilmiş `[{"criterion": text, "reason": text}, …]` (llm-tools §1.5). Yalnız gösterilir; SQL'e girmez. `campaigns_segment_unsupported_check`: `jsonb_typeof(segment_unsupported) = 'array' AND jsonb_array_length(segment_unsupported) <= 10` |
+| `segment_unsupported_ack_at` | timestamptz | NULL (0011, D67); pazarlamacının bu segment sürümünün uygulanamayan koşullarını onayladığı an (`acknowledgeUnsupported`). Her başarılı segment üretiminde NULL'a döner. `campaigns_segment_unsupported_ack_check`: `segment_unsupported_ack_at IS NULL OR jsonb_array_length(segment_unsupported) > 0` (boş listenin onayı yazılmaz) |
 | `longest_first_name`, `longest_last_name`, `longest_city` | integer | NULL, ≥ 0; segment üretiminde `content.Longest` (eşleşen küme, izinden önce; `first_name` yedek metin dahil, boş küme → 18/0/0) |
 | `approved_content_version_id` | uuid | NULL, FK → `content_versions(id)` |
 | `scheduled_at` | timestamptz | NULL; planlanan gönderim anı (0008, D62). Mikrosaniye hassasiyet, UTC yazılır |
@@ -143,6 +145,15 @@ Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state):
 5. `ALTER TABLE campaigns DROP COLUMN scheduled_at` (`-- allow-destructive`; `sending`/`completed` satırlarındaki plan bilgisi kaybolur — kabul edilen bedel).
 
 `make db-roundtrip`: `up → down → up` sonrası şema diff'i boş. Pre-push ve CI `db-roundtrip` job'ı bunu koşar.
+
+#### 3.4.2 Migration `0011_segment_unsupported` (D67)
+
+`up` (tek dosya; 0003 ve 0009 düzenlenmez):
+
+1. `ALTER TABLE campaigns ADD COLUMN segment_unsupported jsonb NOT NULL DEFAULT '[]'::jsonb, ADD COLUMN segment_unsupported_ack_at timestamptz NULL`. Mevcut satırlar `[]` / NULL olur: D67 öncesi segmentin uygulanamayan koşulu yoktur ve içerik üretimi engellenmez.
+2. Adlandırılmış kısıtlar `campaigns_segment_unsupported_check` ve `campaigns_segment_unsupported_ack_check` (ifadeler §3.4 tablosunda). Mevcut satırlar ikisini de sağlar.
+
+`down`: iki kısıt düşer; iki kolon `-- allow-destructive` ile düşer (uygulanamayan koşullar ve onay anları kaybolur; kabul edilen bedel, 0008–0010 kalıbı). `make db-roundtrip`: `up → down → up` sonrası şema diff'i boş. Numara: P9 `0010`'u kullanır; bu iş paralel ilerlediği için `0011`'dir. Hangisi önce birleşirse birleşsin dosya adları çakışmaz; golang-migrate yalnız güncel sürümden büyük dosyaları uyguladığı için `0011` `0010`'dan önce `main`'e girerse, o arada `0011`'e yükseltilmiş bir veritabanında `0010` hiç uygulanmaz (boş veritabanında sorun yoktur) — bu yüzden `0011`'in implementasyonu P9'dan (`0010`) **sonra** birleştirilir (D67).
 
 ### 3.5 `content_versions`
 
@@ -256,14 +267,15 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 
 | İşlem | Aynı transaction'daki yazmalar |
 |---|---|
-| Segment üretimi (P3) | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (kira sona erip başkasına geçti; D52). Aksi halde `segment_*`/`audience_*` (P8: `audience_languages` dahil)/`longest_*` yazılır, `segment_revision + 1`; etkin onay varsa `revoked_at`, `revoke_reason = 'segment_changed'` ve `approved_content_version_id = NULL`; durum `audience_ready` |
+| Segment üretimi (P3) | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (kira sona erip başkasına geçti; D52). Aksi halde `segment_*`/`audience_*` (P8: `audience_languages` dahil)/`longest_*` yazılır (D67: `segment_unsupported` = yeni liste, `segment_unsupported_ack_at = NULL`), `segment_revision + 1`; etkin onay varsa `revoked_at`, `revoke_reason = 'segment_changed'` ve `approved_content_version_id = NULL`; durum `audience_ready` |
 | `editContent` ön koşulu | Satır kilidi altında, ekleme ile **aynı** transaction'da: `X-Expected-Version` = güncel `segment_revision`'daki en yüksek `version_number`'lı `validated` satırın `id`'si (satır yoksa `none`) değilse hiçbir yazma yapılmaz ve 409 `content_edit_conflict` döner (karşılaştırma ile ekleme arasına başka yazma giremez) |
 | İçerik `validated` (LLM `validated` olayı veya `editContent`) | yeni `content_versions` satırı (`status = 'validated'`, `source` = `llm`/`edit`, `segment_revision` = güncel, `worst_case_*` dolu (P8: içerikte `en` varsa `en_*` ve `worst_case_en_*` de dolu, yoksa NULL; P9: içerikte `b` varsa `b_*`, `angle_a`, `angle_b`, `worst_case_b_*` ve `b.en` varsa `b_en_*`, `worst_case_b_en_*` de dolu, yoksa NULL), `validation_errors = '[]'`); durum `content_ready`; etkin onay varsa `revoke_reason = 'content_changed'` ve `approved_content_version_id = NULL` |
 | Saklanabilir son `invalid` taslak (LLM) | yalnız yeni `content_versions` satırı (`status = 'invalid'`, `source = 'llm'`, `validation_errors` dolu); `campaigns` ve `approvals` satırlarına dokunulmaz |
 | Diğer son `invalid` sonuçları, kopan akış, 422 ile reddedilen düzenleme | hiçbir yazma yok |
 | Onay | yeni `approvals` satırı (`content_status = 'validated'`), `approved_content_version_id` = sürüm, durum `approved` |
 | Aynı sürümün tekrar onayı (idempotent) | hiçbir yazma yok (`approved_at` değişmez) |
-| Üretim başlangıcı (segment veya içerik) | Durum ve kira aynı kilit altında denetlenir; süresi geçmemiş kira varsa 409 `generation_in_progress`, yoksa `generation_token`/`generation_expires_at` yazılır (süresi geçmiş kiranın üzerine). `updated_at` değişmez |
+| Uygulanamayan koşulların onayı (D67, `acknowledgeUnsupported`) | Sıra openapi'deki gibi: kira (`CheckNoGeneration`) → durum (`audience_ready`/`content_ready`/`approved`) → `segment_revision` = istekteki `revision` (değilse 409 `stale_segment`). Liste boşsa veya `segment_unsupported_ack_at` doluysa hiçbir yazma yok; aksi halde `segment_unsupported_ack_at = now`, `updated_at = now`. Durum, onay ve içerik sürümleri değişmez |
+| Üretim başlangıcı (segment veya içerik) | Durum ve kira aynı kilit altında denetlenir; süresi geçmemiş kira varsa 409 `generation_in_progress`; içerik üretiminde ardından `jsonb_array_length(segment_unsupported) > 0 AND segment_unsupported_ack_at IS NULL` ise 409 `unsupported_not_acknowledged` (D67; hiçbir yazma yok); yoksa `generation_token`/`generation_expires_at` yazılır (süresi geçmiş kiranın üzerine). `updated_at` değişmez |
 | LLM içerik sürümünün kaydı | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (son `invalid` olayı, `llm_unavailable`) |
 | Üretim sonu (başarı, hata, istemci kopması) | `generation_token = NULL, generation_expires_at = NULL WHERE generation_token = <kendi jetonu>` (tek ifade; başkasının kirasına dokunmaz) |
 | Gönderim (P5; anlık, veya `scheduled`'dan "şimdi gönder") | §3.7 / README ve openapi `sendCampaign`. Durum `approved` veya `scheduled` olmalı; teslimatlar (P9: `variant` aynı `INSERT … SELECT`'te, §3.7 ifadesiyle), `state = 'sending'`, `sending_started_at = now`, `scheduled_at = NULL` aynı transaction'da yazılır (kitle boşsa aynı transaction'da `completed`, `completed_at = now`) |

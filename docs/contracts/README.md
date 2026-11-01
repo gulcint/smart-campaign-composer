@@ -72,7 +72,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 
 `fields` yalnız `validation_failed` ve `llm_invalid_output`'ta bulunur (boş olmayan dizi). `message` asla sır, SQL veya DB hata metni içermez.
 
-### 5.1 Üst düzey `error.code` (kapalı liste, 16)
+### 5.1 Üst düzey `error.code` (kapalı liste, 18)
 
 | Kod | HTTP | Ne zaman |
 |---|---|---|
@@ -87,6 +87,8 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 | `stale_content_version` | 409 | En son sürüm olmayanı onaylama; onaylanandan farklı sürümle gönderim |
 | `content_edit_conflict` | 409 | `editContent`: `X-Expected-Version` güncel en son sürümle eşleşmiyor; gövde `error.current_version {id, version_number}` taşır |
 | `generation_in_progress` | 409 | Aynı kampanyada segment/içerik üretimi sürerken üretim, içerik düzenleme, onay veya gönderim isteği (kilit istemci koptuğunda veya en geç 120 sn sonra bırakılır) |
+| `unsupported_not_acknowledged` | 409 | D67: `generateContent`, segmentin uygulanamayan koşulları (`segment.unsupported`) varken ve pazarlamacı onaylamamışken (`acknowledgeUnsupported`) |
+| `stale_segment` | 409 | D67: `acknowledgeUnsupported` gövdesindeki `revision` güncel `segment.revision` değil (segment o arada yeniden üretildi) |
 | `payload_too_large` | 413 | Gövde > 64 KiB |
 | `validation_failed` | 422 | Brief, içerik, segment kuralı, sorgu parametresi (`invalid_value`, path `query.<ad>`), senaryo başlığı, onay-anı en kötü durum doğrulaması veya plan zamanı (`scheduled_at`) |
 | `llm_invalid_output` | 502 | Düzeltme denemesinden sonra da geçersiz LLM çıktısı (segment) |
@@ -133,7 +135,7 @@ P9 notu: `too_long` A/B açı etiketleri için de kullanılır (`angles.a` / `an
 |---|---|
 | `*validation.Error` | 422 `validation_failed` (fields = `Fields`) |
 | `campaign.ErrCampaignNotFound` / `ErrContentVersionNotFound` / `ErrCustomerNotFound` | 404 ilgili kod |
-| `campaign.ErrInvalidState` / `ErrContentNotValidated` / `ErrStaleContentVersion` / `ErrGenerationInProgress` | 409 ilgili kod |
+| `campaign.ErrInvalidState` / `ErrContentNotValidated` / `ErrStaleContentVersion` / `ErrGenerationInProgress` / `ErrUnsupportedNotAcknowledged` / `ErrStaleSegment` (D67) | 409 ilgili kod |
 | `*campaign.EditConflictError` (`errors.Is(err, campaign.ErrContentEditConflict)`) | 409 `content_edit_conflict` + `error.current_version` |
 | `composer.ErrInvalidOutput` | 502 `llm_invalid_output` (fields = son denemenin hataları) |
 | `llm.ErrUnavailable` | 502 `llm_unavailable` |
@@ -152,6 +154,7 @@ P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
 | | 404 `campaign_not_found` | bilinmeyen kampanya | sayfa |
 | | 409 `invalid_state` | `draft`, `scheduled`, `sending`, `completed` | toast + yeniden çek |
 | | 409 `generation_in_progress` | kilit tutuluyor | toast |
+| | 409 `unsupported_not_acknowledged` | D67: `generation_in_progress`'ten sonra; uygulanamayan koşullar onaylanmadı | toast + yeniden çek (arayüz bu durumda üretim düğmesini zaten kilitler) |
 | | 413 `payload_too_large` | gövde > 64 KiB | — |
 | | 422 `validation_failed` | `schema_violation` (gövdede `ab` dışında alan; yol = alan adı; P9: `ab` boolean değil, yol `ab`); `invalid_value` (`header.X-Mock-LLM-Scenario`) | `ErrorCard` |
 | | 502 `llm_unavailable` | stream açılmadan önce erişim yok | `ErrorCard` + "yeniden üret" |
@@ -166,6 +169,7 @@ P4 işlemleri (UI sunumu: [`ui.md` §4](ui.md#4-hata-kodu--sunum--i18n)):
 | | 422 `validation_failed` | `schema_violation` (eksik/fazla alan), `invalid_value` (`content_version_id` biçimsiz); `sms_too_long_worst_case` (`sms.body`), `subject_too_long_worst_case` (`email.subject`) | `ConfirmDialog` içinde |
 | `sendCampaign` | 400 (boş gövde dahil), 413; 422 `validation_failed`: `schema_violation` (eksik/fazla alan, `scheduled_at` string değil veya `null`), `invalid_value` (`content_version_id` biçimsiz, `scheduled_at` RFC 3339 değil/ofsetsiz), sonra `schedule_too_soon` / `schedule_too_far` (yol `scheduled_at`); 404 `campaign_not_found` › `content_version_not_found`; 409 `generation_in_progress` › `invalid_state` (`approved` ve `scheduled` dışı) › `stale_content_version` | gövde ve plan penceresi hataları 404/409'dan önce (REQ-SND-01, REQ-SCH-01); `scheduled_at` varsa planlar (202 `state: scheduled`), yoksa şimdi gönderir (`scheduled`'da planı düşürür) | toast; planlama 422'si `ConfirmDialog` içinde |
 | `cancelSchedule` | 404 `campaign_not_found`; 409 `invalid_state` (`scheduled` değil) | gövde okunmaz | toast + yeniden çek |
+| `acknowledgeUnsupported` (D67) | 400, 413; 422 `validation_failed`: `schema_violation` (`revision` eksik/tam sayı değil/`null`, fazla alan), `invalid_value` (`revision` < 1); 404 `campaign_not_found`; 409 `generation_in_progress` › `invalid_state` (`audience_ready`/`content_ready`/`approved` dışı) › `stale_segment` | gövde hataları 404/409'dan önce; boş listede ve ikinci onayda 200, yazma yok | onay kutusu geri alınır + toast; `stale_segment` → kampanya yeniden çekilir |
 | `previewContent` | 404 `campaign_not_found` › `content_version_not_found` › `customer_not_found` | `sample_index` ≥ eşleşen sayı → `customer_not_found` | toast (uyarı) |
 | | 409 `invalid_state` › `content_not_validated` | segment/doğrulanmış sürüm yok; verilen sürüm `invalid` | önizleme `empty` |
 | | 422 `validation_failed` | `invalid_value`: `query.sample_index`, `query.customer_id`, `query.content_version_id`, `query.language` (P8), `query.variant` (P9); P9: `variant_not_available` (`query.variant`, sürüm çözüldükten sonra) | — |
@@ -230,6 +234,7 @@ Test türleri ve konumları `.claude/skills/writing-tests/SKILL.md` §4'tedir. G
 | REQ-AUD-03 | openapi `Audience` (`matched`, `sms`, `email`); seed §5 `example_brief.audience`; segment-dsl §6; **ui.md §3.7** (`audience-count-*`) |
 | REQ-AUD-04 | segment-dsl §6; openapi `sendCampaign`, `listDeliveries` (`customer_id`); seed §3.3 gruplar; go-interfaces `Dispatcher.ProcessOnce` adım 1 (`recipient_unavailable`) |
 | REQ-AUD-05 | openapi `createCampaign` (422 `required`/`too_long`, 413); go-interfaces `campaign.NormalizeBrief`; ui.md §3.5 |
+| REQ-AUD-06 | schemas/llm/segment-rule.tool.json (`unsupported` zorunlu), schemas/segment-rule.schema.json `$defs/toolInput`, `unsupportedList`; llm-tools §1.5, §3.3, §3.5; segment-dsl §2.2; go-interfaces `segment.ParseToolInput`, `segment.Unsupported`, `composer.SegmentOutcome.Unsupported`, `campaign.Service.AcknowledgeUnsupported`, `ErrUnsupportedNotAcknowledged`, `ErrStaleSegment`; openapi `acknowledgeUnsupported`, `generateContent` (409), `Segment.unsupported`, `unsupported_acknowledged_at`; db-schema §3.4, §3.4.2 (`0011_segment_unsupported`); **ui.md §3.7c** `UnsupportedCriteriaNotice`, §3.24, §4; DESIGN.md `UnsupportedCriteriaNotice` (D67) |
 | REQ-CNT-01 | go-interfaces `content.Validate(c, Longest)` (doldurma **sonrası** uzunluk), `SMSMaxRunes`, `ErrSMSTooLong`, `RuneCount`; llm-tools §2; ui.md §3.13 |
 | REQ-CNT-02 | go-interfaces `content.Validate` (`SubjectMaxRunes`, `ErrSubjectTooLong`); ui.md §3.13 |
 | REQ-CNT-03 | go-interfaces `content.Variables`, `Render`, `EffectiveFirstName`, `FirstNameFallback`, `ErrUnknownVariable`, `ErrMalformedVariable`; openapi `previewContent`; seed `empty_first_name`; ui.md §3.12, §3.15 |

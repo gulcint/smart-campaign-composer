@@ -73,6 +73,10 @@ Model veya `POST /api/segments/count` çağıranı `Istanbul`, `istanbul`, `İST
 6. Şehir koşulu hiçbir aşamada kuraldan çıkarılmaz; bilinmeyen şehir (`Kars`) geçerlidir ve 0 kişiyle eşleşir.
 7. VARSAYIM: `customers.city` yalnız kanonik yazımı taşır (seed bunu garanti eder); kanonik listede olmayan bir şehrin müşteri verisi farklı yazılmışsa birebir eşleşme aranır.
 
+### 2.2 İfade edilemeyen koşullar (REQ-AUD-06, D67)
+
+Liste kapalı olduğu için brief'teki bazı kitle koşulları (yaş, cinsiyet, ürün kategorisi, cihaz, …) kurala yazılamaz. Model bunları kuraldan sessizce düşürmez; `emit_segment_rule` girdisinin zorunlu `unsupported` listesine yazar ([`llm-tools.md` §1.5](llm-tools.md#15-uygulanamayan-koşullar-d67-req-aud-06)). Bu liste **DSL'in parçası değildir**: kural ağacına, `segment.Compile`'a, SQL'e ve sayıma girmez; `POST /api/segments/count` gövdesinde kabul edilmez (`unsupported` → 422 `schema_violation`, yol `unsupported`). Kitle bu koşullar olmadan hesaplanır ve arayüz bunu açıkça söyler; içerik üretimi pazarlamacı onaylayana kadar bekler (openapi `acknowledgeUnsupported`). Yeni alan eklemek (ör. doğum tarihi) seed, şema ve DSL değişikliğidir; bu karar onu yapmaz.
+
 ## 3. Operatörler (tip başına)
 
 | Tip | İzinli operatörler | `value` biçimi |

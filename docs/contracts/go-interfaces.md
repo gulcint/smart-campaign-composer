@@ -262,6 +262,40 @@ func Parse(raw []byte) (Rule, error)
 // "ISTANBUL" -> "İstanbul", "  Bursa " -> "Bursa". Pure function, safe for concurrent use.
 func CanonicalCity(s string) string
 
+// ---- Unsupported brief criteria (D67, REQ-AUD-06; llm-tools.md §1.5) ----
+
+const (
+	MaxUnsupported               = 10  // items in the unsupported list
+	UnsupportedCriterionMaxRunes = 120 // after normalisation
+	UnsupportedReasonMaxRunes    = 200 // after normalisation
+)
+
+// Unsupported is one brief criterion the allowed fields cannot express. Display-only text: it never
+// reaches Compile, SQL or the content prompt. JSON encoding is openapi Segment.unsupported[i].
+type Unsupported struct {
+	Criterion string `json:"criterion"`
+	Reason    string `json:"reason"`
+}
+
+// ParseToolInput decodes the full emit_segment_rule tool input {"rule": <group>, "unsupported": [...]}
+// (schemas/segment-rule.schema.json#/$defs/toolInput). The "rule" member goes through exactly the same
+// checks and city rewrite as Parse (same paths, same limits). Then "unsupported", structurally
+// (validation.ErrSchemaViolation): key missing, null or not an array => path "unsupported"; item not an
+// object => "unsupported[i]"; criterion/reason missing or not a string => "unsupported[i].criterion" /
+// "unsupported[i].reason"; any other key in an item => "unsupported[i].<key>" (key rule of
+// segment-dsl.md §7.3); any other root key => schema_violation at the key, as Parse. Then each text:
+// NFC, every run of Unicode white space (unicode.IsSpace, newlines and tabs included) collapsed to one
+// U+0020, leading/trailing space trimmed; empty => validation.ErrRequired; criterion > 120 or reason >
+// 200 runes => validation.ErrTooLong (Limit, Actual); a remaining control character (unicode.IsControl)
+// => validation.ErrInvalidValue; more than MaxUnsupported items => validation.ErrTooLong at path
+// "unsupported" (Limit 10, Actual n; the items are not checked further). Errors: one *validation.Error
+// with the rule's errors first, then the unsupported errors (at most 20 in total); Rule and the slice
+// are zero on error. On success the returned slice holds the normalised items in input order (never
+// nil; empty for "unsupported": []); duplicates are kept. Validate is NOT called (the caller runs
+// Validate(rule) as before). Parse is unchanged: the POST /api/segments/count body still rejects
+// "unsupported" (schema_violation, path "unsupported").
+func ParseToolInput(raw []byte) (Rule, []Unsupported, error)
+
 // Validate performs semantic checks and returns nil or a *validation.Error with every problem
 // (segment-dsl.md §1.1, §3, §7.3). Field errors match these sentinels:
 func Validate(r Rule) error
@@ -777,11 +811,13 @@ package composer
 var ErrInvalidOutput = errors.New("composer: llm output invalid after repair")
 
 type SegmentOutcome struct {
-	Rule     segment.Rule
-	Attempts int // 1 or 2
+	Rule        segment.Rule
+	Unsupported []segment.Unsupported // D67: normalised, never nil (empty when everything was expressed)
+	Attempts    int                   // 1 or 2
 }
 
-// GenerateSegment runs attempt 1, validates (segment.Parse + segment.Validate), and on failure
+// GenerateSegment runs attempt 1, validates (D67: segment.ParseToolInput + segment.Validate; an
+// unsupported error is an invalid output like any other and triggers the repair turn), and on failure
 // runs exactly one repair attempt (llm-tools.md §2).
 // Errors: ErrInvalidOutput (wrapping *validation.Error), llm.ErrUnavailable, ctx errors.
 // Mapping of client errors to field errors (path ""): llm.ErrTruncated => "truncated_output",
@@ -951,6 +987,9 @@ var (
 	ErrStaleContentVersion    = errors.New("campaign: stale content version")     // 409 stale_content_version
 	ErrGenerationInProgress   = errors.New("campaign: generation in progress")    // 409 generation_in_progress
 	ErrContentEditConflict    = errors.New("campaign: content edit conflict")     // 409 content_edit_conflict
+	// D67 (REQ-AUD-06)
+	ErrUnsupportedNotAcknowledged = errors.New("campaign: unsupported criteria not acknowledged") // 409 unsupported_not_acknowledged
+	ErrStaleSegment               = errors.New("campaign: stale segment revision")                // 409 stale_segment
 )
 
 // ExpectedVersionNone is the X-Expected-Version value meaning "the editor saw no latest validated version".
@@ -1005,6 +1044,10 @@ type Segment struct {
 	Revision      int              `json:"revision"`
 	LLMAttempts   int              `json:"llm_attempts"`
 	GeneratedAt   time.Time        `json:"generated_at"`
+	// D67: campaigns.segment_unsupported; never nil (JSON [] when empty).
+	Unsupported []segment.Unsupported `json:"unsupported"`
+	// D67: campaigns.segment_unsupported_ack_at; nil (JSON null) when not acknowledged or Unsupported is empty.
+	UnsupportedAcknowledgedAt *time.Time `json:"unsupported_acknowledged_at"`
 }
 
 type ContentVersion struct {
@@ -1210,11 +1253,22 @@ type Service interface {
 	List(ctx context.Context, limit, offset int) (CampaignPage, error)
 	// GenerateSegment: ErrCampaignNotFound -> ErrInvalidState (scheduled, sending, completed) ->
 	// ErrGenerationInProgress -> llm.ErrUnavailable / composer.ErrInvalidOutput.
+	// D67: stores SegmentOutcome.Unsupported (campaigns.segment_unsupported) and resets
+	// segment_unsupported_ack_at to NULL in the same transaction as the rule.
 	GenerateSegment(ctx context.Context, id string) (SegmentResult, error)
+	// AcknowledgeUnsupported (D67, REQ-AUD-06; openapi acknowledgeUnsupported): ErrCampaignNotFound ->
+	// ErrGenerationInProgress -> ErrInvalidState (not audience_ready, content_ready or approved) ->
+	// ErrStaleSegment (revision != current segment revision). The handler answered 400/413/422 for the
+	// body ({"revision": int >= 1}) before calling. Success, in one transaction under the campaign row
+	// lock: Unsupported empty or already acknowledged => no write; else segment_unsupported_ack_at =
+	// updated_at = Clock.Now(). The state never changes. Returns the campaign as Get does.
+	AcknowledgeUnsupported(ctx context.Context, id string, revision int) (Campaign, error)
 	// StartContentGeneration performs every pre-stream check and connects LLM attempt 1. Errors here
 	// become JSON responses; after it returns a run, the handler writes HTTP 200 + SSE.
 	// Check order (first failure wins): ErrCampaignNotFound -> ErrInvalidState (draft, scheduled,
-	// sending, completed) -> ErrGenerationInProgress -> llm.ErrUnavailable. (The handler already answered
+	// sending, completed) -> ErrGenerationInProgress -> ErrUnsupportedNotAcknowledged (D67: the current
+	// segment has unsupported items and no acknowledgement; same row lock, nothing written, LLM not called)
+	// -> llm.ErrUnavailable. (The handler already answered
 	// 404 for a malformed id, 422 for an unknown X-Mock-LLM-Scenario and 400/413/422 for the body,
 	// in that order, before calling the Service: README §5.4.) Acquires the generation lock, which
 	// the returned run releases when Stream returns (any outcome) or when ctx is cancelled.
@@ -1925,7 +1979,7 @@ Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clo
 | `content` | `ErrSMSTooLong`, `ErrSubjectTooLong`, `ErrEmailBodyTooLong`, `ErrUnknownVariable`, `ErrMalformedVariable`, `ErrWorstCaseTooLong` |
 | `llm` | `ErrUnavailable`, `ErrTruncated`, `ErrNoToolCall`, `ErrInvalidMode`, `ErrMissingAPIKey`, `ErrRealClientForbidden`, `ErrUnknownScenario`, `ErrUnknownTool` |
 | `composer` | `ErrInvalidOutput` |
-| `campaign` | `ErrCampaignNotFound`, `ErrContentVersionNotFound`, `ErrCustomerNotFound`, `ErrInvalidState`, `ErrContentNotValidated`, `ErrStaleContentVersion`, `ErrGenerationInProgress`, `ErrContentEditConflict`, `ErrScheduleTooSoon`, `ErrScheduleTooFar`, `ErrInvalidSchedulerConfig` |
+| `campaign` | `ErrCampaignNotFound`, `ErrContentVersionNotFound`, `ErrCustomerNotFound`, `ErrInvalidState`, `ErrContentNotValidated`, `ErrStaleContentVersion`, `ErrGenerationInProgress`, `ErrContentEditConflict`, `ErrUnsupportedNotAcknowledged`, `ErrStaleSegment` (D67), `ErrScheduleTooSoon`, `ErrScheduleTooFar`, `ErrInvalidSchedulerConfig` |
 | `delivery` | `ErrLeaseLost`, `ErrInvalidConfig` |
 | `provider` | `ErrTimeout`, `ErrConnection` |
 | `mockprovider` | `ErrInvalidConfig` |

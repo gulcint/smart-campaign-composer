@@ -138,8 +138,52 @@ export interface paths {
          *     `audience_ready`, `segment.revision` increments, any active approval is revoked
          *     (`segment_changed`) and `latest_content_version` becomes null (older versions are stale).
          *     On any error the campaign (state, previous segment) is unchanged.
+         *
+         *     D67 (REQ-AUD-06): the tool input also carries `unsupported`, the brief criteria the allowed fields
+         *     cannot express (e.g. age). It is validated with the rule (missing key => `schema_violation`, path
+         *     `unsupported`; repair attempt as for any invalid output), stored as `segment.unsupported` and every
+         *     successful generation resets `segment.unsupported_acknowledged_at` to null. A non-empty list does not
+         *     change the status code (200); it blocks content generation until acknowledged (acknowledgeUnsupported).
          */
         post: operations["generateSegment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/campaigns/{campaign_id}/segment/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                campaign_id: components["parameters"]["CampaignId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge that the audience was computed without the unsupported brief criteria (REQ-AUD-06, D67)
+         * @description The marketer's explicit "continue without these criteria" decision for the CURRENT segment revision.
+         *     Body `{"revision": n}` = the `segment.revision` the marketer saw. No LLM call; the state never changes.
+         *     Checks, in this order (first failure wins):
+         *     0. body: unreadable/not JSON 400, > 65536 bytes 413; missing `revision`, a non-integer `revision`
+         *        (`null`, `"3"`, `1.5` included) or any other property => 422 `schema_violation` (path `revision`
+         *        or the key); `revision` < 1 => 422 `invalid_value` (path `revision`);
+         *     1. campaign exists, else 404 `campaign_not_found`;
+         *     2. no generation running for the campaign, else 409 `generation_in_progress`;
+         *     3. state is `audience_ready`, `content_ready` or `approved`, else 409 `invalid_state` (`draft`: no
+         *        segment; `scheduled`, `sending`, `completed`: frozen);
+         *     4. `revision` equals the current `segment.revision`, else 409 `stale_segment` (the segment was
+         *        regenerated after the marketer looked at it; nothing is written).
+         *     Success (200, the Campaign), in one transaction under the campaign row lock:
+         *     - `segment.unsupported` empty => nothing is written, `unsupported_acknowledged_at` stays null;
+         *     - already acknowledged => idempotent, nothing is written, the first timestamp is kept;
+         *     - otherwise `unsupported_acknowledged_at` = now (`campaigns.segment_unsupported_ack_at`), `updated_at` = now.
+         *     The acknowledgement is reset to null by the next successful generateSegment.
+         */
+        post: operations["acknowledgeUnsupported"];
         delete?: never;
         options?: never;
         head?: never;
@@ -198,7 +242,9 @@ export interface paths {
          *     Allowed states: audience_ready, content_ready, approved. Errors detected before the stream
          *     opens are returned as JSON with the status codes below (no SSE); use-case order: 404
          *     `campaign_not_found`, 409 `invalid_state` (draft, scheduled, sending, completed), 409
-         *     `generation_in_progress`, 502 `llm_unavailable`.
+         *     `generation_in_progress`, 409 `unsupported_not_acknowledged` (D67: `segment.unsupported` is non-empty
+         *     and `segment.unsupported_acknowledged_at` is null; checked under the same row lock as the generation
+         *     lock, nothing is written, the LLM is not called), 502 `llm_unavailable`.
          *     After HTTP 200 the equivalent of 502 is the final `invalid` event. HTTP 200 is written only
          *     after LLM attempt 1 is connected; headers: `Content-Type: text/event-stream; charset=utf-8`,
          *     `Cache-Control: no-cache`, `X-Accel-Buffering: no`. The `Accept` header is not negotiated
@@ -631,6 +677,11 @@ export interface components {
             /** @description true => also generate variant B and the two angles (A/B test, REQ-ABT-02). Not a boolean => 422 schema_violation (path ab). */
             ab?: boolean;
         };
+        /** @description D67. Body of acknowledgeUnsupported: the segment revision whose unsupported criteria the marketer saw. */
+        AcknowledgeUnsupportedRequest: {
+            /** @description Must equal the current segment.revision, else 409 stale_segment. Missing or not an integer => 422 schema_violation; < 1 => 422 invalid_value (path revision). */
+            revision: number;
+        };
         /** @description Body of countSegment; the single source is schemas/segment-rule.schema.json (root object with property `rule`). */
         SegmentRuleDocument: components["schemas"]["segment-rule.schema"];
         Segment: {
@@ -645,6 +696,17 @@ export interface components {
             llm_attempts: 1 | 2;
             /** Format: date-time */
             generated_at: string;
+            /**
+             * @description D67 (REQ-AUD-06). Brief criteria the rule could NOT express (e.g. `{"criterion": "25 yaş altı", "reason":
+             *     "Müşteri verisinde yaş bilgisi yok."}`); the audience was counted without them. Always present in new
+             *     responses (`[]` when everything was expressed, and for segments generated before D67). Display-only text.
+             */
+            unsupported?: components["schemas"]["unsupportedList"];
+            /**
+             * Format: date-time
+             * @description D67. When the marketer acknowledged `unsupported` for this revision (acknowledgeUnsupported); null when not acknowledged or when `unsupported` is empty. Reset to null by every new segment. Always present in new responses.
+             */
+            unsupported_acknowledged_at?: string | null;
         };
         /** @description Longest rune lengths over customers matched by the rule (before consent); first_name includes the fallback (empty matched set => 18/0/0). */
         LongestValues: {
@@ -1055,7 +1117,7 @@ export interface components {
         ErrorResponse: {
             error: {
                 /** @enum {string} */
-                code: "malformed_request" | "not_found" | "method_not_allowed" | "campaign_not_found" | "content_version_not_found" | "customer_not_found" | "invalid_state" | "content_not_validated" | "stale_content_version" | "content_edit_conflict" | "generation_in_progress" | "payload_too_large" | "validation_failed" | "llm_invalid_output" | "llm_unavailable" | "internal_error";
+                code: "malformed_request" | "not_found" | "method_not_allowed" | "campaign_not_found" | "content_version_not_found" | "customer_not_found" | "invalid_state" | "content_not_validated" | "stale_content_version" | "content_edit_conflict" | "generation_in_progress" | "payload_too_large" | "validation_failed" | "llm_invalid_output" | "llm_unavailable" | "internal_error" | "unsupported_not_acknowledged" | "stale_segment";
                 /** @description English; never contains secrets, SQL or DB error text */
                 message: string;
                 /** @description Present (non-empty) for validation_failed and llm_invalid_output; absent otherwise (pinned per response in components.responses). */
@@ -1110,6 +1172,14 @@ export interface components {
         } | {
             not: components["schemas"]["condition"] | components["schemas"]["group2"];
         };
+        unsupportedCriterion: {
+            /** @description Short quote or paraphrase of the brief criterion, e.g. "25 yaş altı". NFC, whitespace runs collapsed to one space, trimmed; 1..120 runes after that. */
+            criterion: string;
+            /** @description Short Turkish reason, e.g. "Müşteri verisinde yaş bilgisi yok." Same normalisation; 1..200 runes. */
+            reason: string;
+        };
+        /** @description D67. Brief criteria that the allowed fields cannot express (e.g. age, gender, product category, device). Empty when every criterion is in the rule. Display-only text: never part of SQL, never rendered as HTML. */
+        unsupportedList: components["schemas"]["unsupportedCriterion"][];
         /**
          * CampaignContent
          * @description Input of the emit_campaign_content tool AND request body of POST /api/campaigns/{campaign_id}/content-versions (human edit). Both go through the same backend validator (content.Validate). Length limits (sms.body <= 160, email.subject <= 80, email.body <= 5000 Unicode code points of the template text) and template-variable rules are NOT expressed as maxLength/pattern here on purpose: the backend reports them with specific field error codes (sms_too_long, subject_too_long, email_body_too_long, unknown_variable, malformed_variable). `minLength: 1` documents that empty is invalid, but content.Parse checks structure and types only: an empty or whitespace-only value is reported by content.Validate as field code `required` (never schema_violation), a missing key or unknown key as schema_violation. See llm-tools.md and go-interfaces.md#content. P8 (D63): the optional `en` block is the English version for English-speaking customers; sms/email stay the Turkish main copy. When `en` is present it must be complete (sms.body, email.subject, email.body) and every unknown or missing key inside it is a schema_violation at its path (en, en.sms, en.email.subject, en.html). The same limits and variable rules apply to every language version; field paths are prefixed with `en.` (en.sms.body, en.email.subject, en.email.body). P9 (D64): the optional `b` block is variant B of an A/B test (the top-level sms/email/en are variant A) and `angles` names what each variant tries. `b` and `angles` are present together or not at all (a missing one is a schema_violation at its own path: `angles` or `b`). Inside `b` the language set equals variant A's: `b.en` is required when the top-level `en` is present and forbidden when it is absent (schema_violation at path `b.en`). Every variant x language version gets the same limits and variable rules; paths are prefixed with `b.` (b.sms.body, b.email.subject, b.email.body, b.en.sms.body, b.en.email.subject, b.en.email.body). `angles.a` / `angles.b` are plain labels (not templates): empty or whitespace-only => `required`, more than 60 Unicode characters => `too_long` (limit 60). Variant B whose sms.body, email.subject and email.body all equal variant A's (after NFC) => `variants_identical` at path `b`.
@@ -1174,7 +1244,7 @@ export interface components {
         } & (unknown & unknown);
         /**
          * SegmentRuleToolInput
-         * @description Input of the emit_segment_rule tool and body of POST /api/segments/count. Root is an object with a single 'rule' property. The rule tree is unrolled to depth 3 (group1 > group2 > group3); no recursion. Semantic limits that JSON Schema cannot express (max 10 conditions in total, operator-per-type table, value ranges, enum members) are enforced by the backend validator, see segment-dsl.md.
+         * @description Body of POST /api/segments/count and the 'rule' part of the emit_segment_rule tool input. Root is an object with a single 'rule' property. The full tool input (rule + unsupported) is #/$defs/toolInput (D67). The rule tree is unrolled to depth 3 (group1 > group2 > group3); no recursion. Semantic limits that JSON Schema cannot express (max 10 conditions in total, operator-per-type table, value ranges, enum members) are enforced by the backend validator, see segment-dsl.md.
          */
         "segment-rule.schema": {
             rule: components["schemas"]["group1"];
@@ -1218,6 +1288,19 @@ export interface components {
                     any: (components["schemas"]["condition"] | components["schemas"]["group2"])[];
                 } | {
                     not: components["schemas"]["condition"] | components["schemas"]["group2"];
+                };
+                /** @description D67. Full input of the emit_segment_rule tool: the rule plus the brief criteria the rule could not express. Validated by segment.ParseToolInput (+ segment.Validate for the rule). Not accepted by POST /api/segments/count (its body is the root of this file; 'unsupported' there => 422 schema_violation). */
+                toolInput: {
+                    rule: components["schemas"]["group1"];
+                    unsupported: components["schemas"]["unsupportedList"];
+                };
+                /** @description D67. Brief criteria that the allowed fields cannot express (e.g. age, gender, product category, device). Empty when every criterion is in the rule. Display-only text: never part of SQL, never rendered as HTML. */
+                unsupportedList: components["schemas"]["unsupportedCriterion"][];
+                unsupportedCriterion: {
+                    /** @description Short quote or paraphrase of the brief criterion, e.g. "25 yaş altı". NFC, whitespace runs collapsed to one space, trimmed; 1..120 runes after that. */
+                    criterion: string;
+                    /** @description Short Turkish reason, e.g. "Müşteri verisinde yaş bilgisi yok." Same normalisation; 1..200 runes. */
+                    reason: string;
                 };
             };
         };
@@ -1332,6 +1415,36 @@ export interface components {
                     error?: {
                         /** @enum {unknown} */
                         code?: "invalid_state" | "generation_in_progress";
+                        fields?: unknown;
+                    };
+                };
+            };
+        };
+        /** @description generateContent: `invalid_state`, `generation_in_progress` or (D67) `unsupported_not_acknowledged`. */
+        ContentGenerationConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"] & {
+                    error?: {
+                        /** @enum {unknown} */
+                        code?: "invalid_state" | "generation_in_progress" | "unsupported_not_acknowledged";
+                        fields?: unknown;
+                    };
+                };
+            };
+        };
+        /** @description acknowledgeUnsupported (D67): `generation_in_progress`, `invalid_state` or `stale_segment` (in this order). */
+        AcknowledgeConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"] & {
+                    error?: {
+                        /** @enum {unknown} */
+                        code?: "generation_in_progress" | "invalid_state" | "stale_segment";
                         fields?: unknown;
                     };
                 };
@@ -1754,6 +1867,38 @@ export interface operations {
             502: components["responses"]["BadGateway"];
         };
     };
+    acknowledgeUnsupported: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                campaign_id: components["parameters"]["CampaignId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcknowledgeUnsupportedRequest"];
+            };
+        };
+        responses: {
+            /** @description Acknowledged (or nothing to acknowledge). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Campaign"];
+                };
+            };
+            400: components["responses"]["MalformedRequest"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["AcknowledgeConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["ValidationFailed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     countSegment: {
         parameters: {
             query?: never;
@@ -1811,8 +1956,8 @@ export interface operations {
             };
             400: components["responses"]["MalformedRequest"];
             404: components["responses"]["NotFound"];
-            /** @description `invalid_state` (draft, scheduled, sending, completed) or `generation_in_progress` (lock released on client disconnect or after 120 s). */
-            409: components["responses"]["GenerationConflict"];
+            /** @description `invalid_state` (draft, scheduled, sending, completed), `generation_in_progress` (lock released on client disconnect or after 120 s) or `unsupported_not_acknowledged` (D67). */
+            409: components["responses"]["ContentGenerationConflict"];
             413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["ValidationFailed"];
             500: components["responses"]["InternalError"];

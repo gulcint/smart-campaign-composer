@@ -13,7 +13,7 @@ info:
     Invalid query parameter values (e.g. `status=foo`, `channel=fax`, `limit=0`) => 422 `validation_failed`
     with field code `invalid_value` and path `query.<name>` (e.g. `query.status`, `query.channel`).
     Per-campaign generation lock: while a segment or content generation runs, generateSegment,
-    generateContent, editContent, approveContent and sendCampaign return 409 `generation_in_progress`. The lock is
+    generateContent, editContent, approveContent, sendCampaign and acknowledgeUnsupported (D67) return 409 `generation_in_progress`. The lock is
     released when the generating request's context is cancelled (client disconnect) or at the latest
     after 120 s (campaign.MaxGenerationDuration, VARSAYIM).
     SSE event payloads are specified in sse-events.md and, machine-readably, by the components
@@ -182,6 +182,12 @@ paths:
         `audience_ready`, `segment.revision` increments, any active approval is revoked
         (`segment_changed`) and `latest_content_version` becomes null (older versions are stale).
         On any error the campaign (state, previous segment) is unchanged.
+
+        D67 (REQ-AUD-06): the tool input also carries `unsupported`, the brief criteria the allowed fields
+        cannot express (e.g. age). It is validated with the rule (missing key => `schema_violation`, path
+        `unsupported`; repair attempt as for any invalid output), stored as `segment.unsupported` and every
+        successful generation resets `segment.unsupported_acknowledged_at` to null. A non-empty list does not
+        change the status code (200); it blocks content generation until acknowledged (acknowledgeUnsupported).
       parameters:
         - $ref: '#/components/parameters/MockScenario'
       requestBody: { $ref: '#/components/requestBodies/EmptyBody' }
@@ -199,6 +205,49 @@ paths:
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
         '502': { $ref: '#/components/responses/BadGateway' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/campaigns/{campaign_id}/segment/acknowledge:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    post:
+      tags: [audience]
+      operationId: acknowledgeUnsupported
+      summary: Acknowledge that the audience was computed without the unsupported brief criteria (REQ-AUD-06, D67)
+      description: |
+        The marketer's explicit "continue without these criteria" decision for the CURRENT segment revision.
+        Body `{"revision": n}` = the `segment.revision` the marketer saw. No LLM call; the state never changes.
+        Checks, in this order (first failure wins):
+        0. body: unreadable/not JSON 400, > 65536 bytes 413; missing `revision`, a non-integer `revision`
+           (`null`, `"3"`, `1.5` included) or any other property => 422 `schema_violation` (path `revision`
+           or the key); `revision` < 1 => 422 `invalid_value` (path `revision`);
+        1. campaign exists, else 404 `campaign_not_found`;
+        2. no generation running for the campaign, else 409 `generation_in_progress`;
+        3. state is `audience_ready`, `content_ready` or `approved`, else 409 `invalid_state` (`draft`: no
+           segment; `scheduled`, `sending`, `completed`: frozen);
+        4. `revision` equals the current `segment.revision`, else 409 `stale_segment` (the segment was
+           regenerated after the marketer looked at it; nothing is written).
+        Success (200, the Campaign), in one transaction under the campaign row lock:
+        - `segment.unsupported` empty => nothing is written, `unsupported_acknowledged_at` stays null;
+        - already acknowledged => idempotent, nothing is written, the first timestamp is kept;
+        - otherwise `unsupported_acknowledged_at` = now (`campaigns.segment_unsupported_ack_at`), `updated_at` = now.
+        The acknowledgement is reset to null by the next successful generateSegment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AcknowledgeUnsupportedRequest' }
+      responses:
+        '200':
+          description: Acknowledged (or nothing to acknowledge).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Campaign' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/AcknowledgeConflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
         '500': { $ref: '#/components/responses/InternalError' }
 
   /api/segments/count:
@@ -251,7 +300,9 @@ paths:
         Allowed states: audience_ready, content_ready, approved. Errors detected before the stream
         opens are returned as JSON with the status codes below (no SSE); use-case order: 404
         `campaign_not_found`, 409 `invalid_state` (draft, scheduled, sending, completed), 409
-        `generation_in_progress`, 502 `llm_unavailable`.
+        `generation_in_progress`, 409 `unsupported_not_acknowledged` (D67: `segment.unsupported` is non-empty
+        and `segment.unsupported_acknowledged_at` is null; checked under the same row lock as the generation
+        lock, nothing is written, the LLM is not called), 502 `llm_unavailable`.
         After HTTP 200 the equivalent of 502 is the final `invalid` event. HTTP 200 is written only
         after LLM attempt 1 is connected; headers: `Content-Type: text/event-stream; charset=utf-8`,
         `Cache-Control: no-cache`, `X-Accel-Buffering: no`. The `Accept` header is not negotiated
@@ -279,8 +330,8 @@ paths:
         '400': { $ref: '#/components/responses/MalformedRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          $ref: '#/components/responses/GenerationConflict'
-          description: '`invalid_state` (draft, scheduled, sending, completed) or `generation_in_progress` (lock released on client disconnect or after 120 s).'
+          $ref: '#/components/responses/ContentGenerationConflict'
+          description: '`invalid_state` (draft, scheduled, sending, completed), `generation_in_progress` (lock released on client disconnect or after 120 s) or `unsupported_not_acknowledged` (D67).'
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
         '502':
@@ -812,6 +863,22 @@ components:
             allOf:
               - $ref: '#/components/schemas/ErrorResponse'
               - properties: { error: { properties: { code: { enum: [invalid_state, generation_in_progress] }, fields: { not: {} } } } }
+    ContentGenerationConflict:
+      description: 'generateContent: `invalid_state`, `generation_in_progress` or (D67) `unsupported_not_acknowledged`.'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { enum: [invalid_state, generation_in_progress, unsupported_not_acknowledged] }, fields: { not: {} } } } }
+    AcknowledgeConflict:
+      description: 'acknowledgeUnsupported (D67): `generation_in_progress`, `invalid_state` or `stale_segment` (in this order).'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorResponse'
+              - properties: { error: { properties: { code: { enum: [generation_in_progress, invalid_state, stale_segment] }, fields: { not: {} } } } }
     SendConflict:
       description: '`invalid_state` (neither approved nor scheduled, second send), `stale_content_version` or `generation_in_progress`.'
       content:
@@ -1032,6 +1099,14 @@ components:
           type: boolean
           description: 'true => also generate variant B and the two angles (A/B test, REQ-ABT-02). Not a boolean => 422 schema_violation (path ab).'
 
+    AcknowledgeUnsupportedRequest:
+      type: object
+      additionalProperties: false
+      required: [revision]
+      description: 'D67. Body of acknowledgeUnsupported: the segment revision whose unsupported criteria the marketer saw.'
+      properties:
+        revision: { type: integer, minimum: 1, description: 'Must equal the current segment.revision, else 409 stale_segment. Missing or not an integer => 422 schema_violation; < 1 => 422 invalid_value (path revision).' }
+
     SegmentRuleDocument:
       description: Body of countSegment; the single source is schemas/segment-rule.schema.json (root object with property `rule`).
       $ref: './schemas/segment-rule.schema.json'
@@ -1050,6 +1125,16 @@ components:
         revision: { type: integer, minimum: 1 }
         llm_attempts: { type: integer, enum: [1, 2] }
         generated_at: { type: string, format: date-time }
+        unsupported:
+          description: |
+            D67 (REQ-AUD-06). Brief criteria the rule could NOT express (e.g. `{"criterion": "25 yaş altı", "reason":
+            "Müşteri verisinde yaş bilgisi yok."}`); the audience was counted without them. Always present in new
+            responses (`[]` when everything was expressed, and for segments generated before D67). Display-only text.
+          $ref: './schemas/segment-rule.schema.json#/$defs/unsupportedList'
+        unsupported_acknowledged_at:
+          description: 'D67. When the marketer acknowledged `unsupported` for this revision (acknowledgeUnsupported); null when not acknowledged or when `unsupported` is empty. Reset to null by every new segment. Always present in new responses.'
+          type: [string, 'null']
+          format: date-time
 
     LongestValues:
       type: object
@@ -1571,7 +1656,8 @@ components:
               type: string
               enum: [malformed_request, not_found, method_not_allowed, campaign_not_found, content_version_not_found, customer_not_found,
                      invalid_state, content_not_validated, stale_content_version, content_edit_conflict, generation_in_progress,
-                     payload_too_large, validation_failed, llm_invalid_output, llm_unavailable, internal_error]
+                     payload_too_large, validation_failed, llm_invalid_output, llm_unavailable, internal_error,
+                     unsupported_not_acknowledged, stale_segment]
             message: { type: string, description: 'English; never contains secrets, SQL or DB error text' }
             fields:
               type: array
