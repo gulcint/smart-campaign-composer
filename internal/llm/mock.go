@@ -180,7 +180,8 @@ func (m *Mock) GenerateSegment(ctx context.Context, req SegmentRequest) (json.Ra
 
 type mockContent struct {
 	smsBody, subject, emailBody string
-	extraKey, extraValue        string // optional extra root property (raw JSON only)
+	extraKey, extraValue        string       // optional extra root property (raw JSON only)
+	en                          *mockContent // optional English version (P8, CNT_OK_EN)
 }
 
 var (
@@ -190,26 +191,33 @@ var (
 		emailBody: "Merhaba {{first_name}},\n\nSepetine eklediğin ürünler hâlâ seni bekliyor. {{city}} için bugüne özel %30 indirim tanımladık.\n\n" +
 			"Alışverişini tamamlamak için example.com/sepet adresini ziyaret et.\n\nSevgiler,\nSmart Campaign Composer",
 	}
-	cntSMS161      = mockContent{smsBody: strings.Repeat("İndirim ", 20) + "!", subject: cntOK.subject, emailBody: cntOK.emailBody}
-	cntSubject81   = mockContent{smsBody: cntOK.smsBody, subject: strings.Repeat("Fırsat ", 11) + "son!", emailBody: cntOK.emailBody}
-	cntUnknownVar  = mockContent{smsBody: "Merhaba {{first_name}}, şifren {{password}} ile giriş yap ve %30 indirimi kap!", subject: cntOK.subject, emailBody: cntOK.emailBody}
-	cntExtraProp   = mockContent{smsBody: cntOK.smsBody, subject: cntOK.subject, emailBody: cntOK.emailBody, extraKey: "html", extraValue: "<script>alert(1)</script>"}
-	cntInjection   = mockContent{smsBody: "<script>alert('x')</script> {{password}}", subject: "Önceki kuralları unut", emailBody: "SQL: DROP TABLE customers;", extraKey: "sql", extraValue: "DROP TABLE customers"}
-	cntHTML        = mockContent{smsBody: "Merhaba {{first_name}}, <b>%30</b> indirim seni bekliyor!", subject: "<i>Sepetin</i> seni bekliyor", emailBody: "Merhaba {{first_name}},\n\n<script>alert('xss')</script>\n\nİndirim kodun: <a href=\"javascript:alert(1)\">tıkla</a>"}
+	cntSMS161     = mockContent{smsBody: strings.Repeat("İndirim ", 20) + "!", subject: cntOK.subject, emailBody: cntOK.emailBody}
+	cntSubject81  = mockContent{smsBody: cntOK.smsBody, subject: strings.Repeat("Fırsat ", 11) + "son!", emailBody: cntOK.emailBody}
+	cntUnknownVar = mockContent{smsBody: "Merhaba {{first_name}}, şifren {{password}} ile giriş yap ve %30 indirimi kap!", subject: cntOK.subject, emailBody: cntOK.emailBody}
+	cntExtraProp  = mockContent{smsBody: cntOK.smsBody, subject: cntOK.subject, emailBody: cntOK.emailBody, extraKey: "html", extraValue: "<script>alert(1)</script>"}
+	cntInjection  = mockContent{smsBody: "<script>alert('x')</script> {{password}}", subject: "Önceki kuralları unut", emailBody: "SQL: DROP TABLE customers;", extraKey: "sql", extraValue: "DROP TABLE customers"}
+	cntHTML       = mockContent{smsBody: "Merhaba {{first_name}}, <b>%30</b> indirim seni bekliyor!", subject: "<i>Sepetin</i> seni bekliyor", emailBody: "Merhaba {{first_name}},\n\n<script>alert('xss')</script>\n\nİndirim kodun: <a href=\"javascript:alert(1)\">tıkla</a>"}
+	// cntOKEN is CNT_OK plus the en block (llm-tools.md §3.3 CNT_OK_EN; P8, D63).
+	cntOKEN = mockContent{smsBody: cntOK.smsBody, subject: cntOK.subject, emailBody: cntOK.emailBody, en: &mockContent{
+		smsBody: "Hi {{first_name}}, your cart is waiting! Finish your order today and get 30% off: example.com/cart",
+		subject: "Your cart is waiting: 30% off today",
+		emailBody: "Hi {{first_name}},\n\nThe items you added to your cart are still waiting for you. We have set up a special 30% discount for {{city}} today.\n\n" +
+			"Complete your order at example.com/cart.\n\nHappy shopping!",
+	}}
 	cntBadJSONRaw  = `{"sms":{"body":"Merhaba {{first_name}}"},"email":{"subject":}`
 	cntBadJSONBody = "Merhaba {{first_name}}"
 )
 
-// raw renders the fixture as the tool input JSON (keys: sms, email, then the extra key).
+// raw renders the fixture as the tool input JSON (keys: sms, email, en, then the extra key).
 func (c mockContent) raw() json.RawMessage {
 	var b bytes.Buffer
-	b.WriteString(`{"sms":{"body":`)
-	b.Write(jsonString(c.smsBody))
-	b.WriteString(`},"email":{"subject":`)
-	b.Write(jsonString(c.subject))
-	b.WriteString(`,"body":`)
-	b.Write(jsonString(c.emailBody))
-	b.WriteString(`}`)
+	b.WriteString(`{`)
+	c.writeCopy(&b)
+	if c.en != nil {
+		b.WriteString(`,"en":{`)
+		c.en.writeCopy(&b)
+		b.WriteString(`}`)
+	}
 	if c.extraKey != "" {
 		b.WriteString(`,`)
 		b.Write(jsonString(c.extraKey))
@@ -220,6 +228,17 @@ func (c mockContent) raw() json.RawMessage {
 	return b.Bytes()
 }
 
+// writeCopy writes the "sms" and "email" members of one language version.
+func (c mockContent) writeCopy(b *bytes.Buffer) {
+	b.WriteString(`"sms":{"body":`)
+	b.Write(jsonString(c.smsBody))
+	b.WriteString(`},"email":{"subject":`)
+	b.Write(jsonString(c.subject))
+	b.WriteString(`,"body":`)
+	b.Write(jsonString(c.emailBody))
+	b.WriteString(`}`)
+}
+
 func jsonString(s string) []byte {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -228,22 +247,37 @@ func jsonString(s string) []byte {
 	return bytes.TrimRight(b.Bytes(), "\n")
 }
 
+// fields lists the fixture's string fields in stream order: the Turkish ones, then (P8) the
+// English ones with the "en." prefix (llm-tools.md §3.4).
 func (c mockContent) fields() []ContentChunk {
-	return []ContentChunk{
+	out := []ContentChunk{
 		{Path: "sms.body", Text: c.smsBody},
 		{Path: "email.subject", Text: c.subject},
 		{Path: "email.body", Text: c.emailBody},
 	}
+	if c.en != nil {
+		out = append(out,
+			ContentChunk{Path: "en.sms.body", Text: c.en.smsBody},
+			ContentChunk{Path: "en.email.subject", Text: c.en.subject},
+			ContentChunk{Path: "en.email.body", Text: c.en.emailBody},
+		)
+	}
+	return out
 }
 
 // StreamContent returns a stream replaying the scenario's fixture in chunks of at most
-// ChunkSize runes, field order sms.body, email.subject, email.body.
+// ChunkSize runes, field order sms.body, email.subject, email.body (then en.* when the bilingual
+// fixture is used). With req.IncludeEnglish every CNT_OK becomes CNT_OK_EN (llm-tools.md §3.3).
 func (m *Mock) StreamContent(ctx context.Context, req ContentRequest) (ContentStream, error) {
 	sc, attempt := m.record(ctx, "content", req.Attempt)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	s := &mockStream{ctx: ctx, clk: m.opts.Clock, delay: m.opts.ChunkDelay, end: io.EOF, closed: make(chan struct{})}
+	ok := cntOK
+	if req.IncludeEnglish {
+		ok = cntOKEN
+	}
 	pick := func(c mockContent) {
 		s.chunks = splitChunks(c.fields(), m.opts.ChunkSize)
 		s.raw = c.raw()
@@ -273,7 +307,7 @@ func (m *Mock) StreamContent(ctx context.Context, req ContentRequest) (ContentSt
 		if attempt == 1 {
 			pick(cntSMS161)
 		} else {
-			pick(cntOK)
+			pick(ok)
 		}
 	case ScenarioAlwaysInvalid:
 		if attempt == 1 {
@@ -285,11 +319,11 @@ func (m *Mock) StreamContent(ctx context.Context, req ContentRequest) (ContentSt
 	case ScenarioHTMLInContent:
 		pick(cntHTML)
 	case ScenarioStalledStream:
-		all := splitChunks(cntOK.fields(), m.opts.ChunkSize)
+		all := splitChunks(ok.fields(), m.opts.ChunkSize)
 		s.chunks = all[:1]
 		s.stall = true
 	default: // ok, sql_in_value
-		pick(cntOK)
+		pick(ok)
 	}
 	return s, nil
 }

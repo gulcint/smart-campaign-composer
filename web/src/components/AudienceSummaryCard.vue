@@ -31,6 +31,8 @@ const state = computed(() => {
   return props.audience.matched === 0 ? 'empty' : 'ready'
 })
 
+const LANGUAGES = ['tr', 'en'] as const
+
 const share = (n: number) =>
   props.audience && props.audience.matched > 0 ? Math.round((n / props.audience.matched) * 100) : 0
 
@@ -138,6 +140,42 @@ const channels = computed(() => {
           </dd>
         </div>
       </dl>
+
+      <section
+        v-if="audience.languages"
+        data-testid="audience-languages"
+        :aria-label="t('audience.languages')"
+        class="flex flex-col gap-2 border-t border-border-default pt-4"
+      >
+        <h3 class="text-h4 text-accent-heading">{{ t('audience.languages') }}</h3>
+        <dl class="flex flex-col gap-2">
+          <div
+            v-for="c in channels"
+            :key="c.key"
+            class="grid grid-cols-[4.5rem_1fr] items-baseline gap-3 sm:grid-cols-[5rem_1fr]"
+          >
+            <dt class="flex items-center gap-2 text-body-sm font-medium text-ink-700">
+              <span :class="['size-2 rounded-full', c.dot]" aria-hidden="true" />
+              {{ c.label }}
+            </dt>
+            <dd class="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+              <span
+                v-for="l in LANGUAGES"
+                :key="l"
+                class="flex min-w-32 items-baseline gap-1.5 text-body-sm text-ink-600"
+              >
+                {{ t(l === 'tr' ? 'language.tr' : 'language.en') }}
+                <span
+                  :data-testid="`audience-lang-${c.key}-${l}`"
+                  :data-value="audience.languages[c.key][l]"
+                  class="text-numeral-sm tabular-nums text-ink-900"
+                  >{{ formatNumber(audience.languages[c.key][l]) }}</span
+                >
+              </span>
+            </dd>
+          </div>
+        </dl>
+      </section>
     </template>
 
     <p data-testid="audience-consent-note" class="flex items-start gap-2 text-body-sm text-ink-500">

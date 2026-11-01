@@ -41,10 +41,11 @@ func (s *CampaignStore) CreateCampaign(ctx context.Context, c campaign.Campaign)
 const campaignSelect = `
 	SELECT c.id::text, c.brief, c.state, c.segment_rule, c.segment_reference_time, c.segment_revision,
 		c.segment_llm_attempts, c.segment_generated_at, c.audience_matched, c.audience_sms, c.audience_email,
-		c.longest_first_name, c.longest_last_name, c.longest_city, c.scheduled_at, c.sending_started_at, c.completed_at,
+		c.audience_languages, c.longest_first_name, c.longest_last_name, c.longest_city, c.scheduled_at, c.sending_started_at, c.completed_at,
 		c.created_at, c.updated_at,
 		cv.id::text, cv.version_number, cv.segment_revision, cv.status, cv.source, cv.sms_body, cv.email_subject,
 		cv.email_body, cv.validation_errors, cv.llm_attempts, cv.worst_case_sms_runes, cv.worst_case_subject_runes,
+		cv.en_sms_body, cv.en_email_subject, cv.en_email_body, cv.worst_case_en_sms_runes, cv.worst_case_en_subject_runes,
 		cv.created_at,
 		a.id::text, a.content_version_id::text, a.approved_at
 	FROM campaigns c
@@ -100,6 +101,13 @@ func (s *CampaignStore) SaveSegment(ctx context.Context, id string, w campaign.S
 	if err != nil {
 		return campaign.Campaign{}, fmt.Errorf("postgres: save segment: %w", err)
 	}
+	// P8 (D63): the per-channel language split, NULL when the counter did not provide it.
+	var languages []byte
+	if w.Audience.Languages != nil {
+		if languages, err = json.Marshal(w.Audience.Languages); err != nil {
+			return campaign.Campaign{}, fmt.Errorf("postgres: save segment: %w", err)
+		}
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return campaign.Campaign{}, fmt.Errorf("postgres: save segment: %w", err)
@@ -129,11 +137,12 @@ func (s *CampaignStore) SaveSegment(ctx context.Context, id string, w campaign.S
 			segment_llm_attempts = $5, segment_generated_at = $6,
 			audience_matched = $7, audience_sms = $8, audience_email = $9,
 			longest_first_name = $10, longest_last_name = $11, longest_city = $12,
+			audience_languages = $13::jsonb,
 			approved_content_version_id = NULL, updated_at = $6
 		WHERE id = $1`,
 		id, string(next), string(rule), w.ReferenceTime, w.LLMAttempts, w.GeneratedAt,
 		w.Audience.Matched, w.Audience.SMS, w.Audience.Email,
-		w.LongestValues.FirstName, w.LongestValues.LastName, w.LongestValues.City); err != nil {
+		w.LongestValues.FirstName, w.LongestValues.LastName, w.LongestValues.City, nullableJSON(languages)); err != nil {
 		return campaign.Campaign{}, fmt.Errorf("postgres: save segment: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -170,11 +179,14 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 		revision                                    int
 		llmAttempts                                 *int
 		matched, sms, email                         *int
+		audienceLanguages                           []byte
 		longFirst, longLast, longCity               *int
 
 		cvID, cvStatus, cvSource, cvSMS, cvSubject, cvBody *string
 		cvNumber, cvRevision, cvAttempts, cvWCSMS, cvWCSub *int
 		cvErrors                                           []byte
+		cvENSMS, cvENSubject, cvENBody                     *string
+		cvWCENSMS, cvWCENSub                               *int
 		cvCreated                                          *time.Time
 
 		apID, apVersion *string
@@ -182,10 +194,11 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 	)
 	err := row.Scan(&c.ID, &c.Brief, &state, &rule, &refTime, &revision,
 		&llmAttempts, &generatedAt, &matched, &sms, &email,
-		&longFirst, &longLast, &longCity, &scheduledAt, &sendingAt, &completeAt,
+		&audienceLanguages, &longFirst, &longLast, &longCity, &scheduledAt, &sendingAt, &completeAt,
 		&c.CreatedAt, &c.UpdatedAt,
 		&cvID, &cvNumber, &cvRevision, &cvStatus, &cvSource, &cvSMS, &cvSubject,
 		&cvBody, &cvErrors, &cvAttempts, &cvWCSMS, &cvWCSub,
+		&cvENSMS, &cvENSubject, &cvENBody, &cvWCENSMS, &cvWCENSub,
 		&cvCreated,
 		&apID, &apVersion, &apAt)
 	if err != nil {
@@ -207,6 +220,13 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 			Revision:      revision,
 			LLMAttempts:   deref(llmAttempts),
 		}
+		if len(audienceLanguages) > 0 {
+			var langs segment.AudienceLanguages
+			if err := json.Unmarshal(audienceLanguages, &langs); err != nil {
+				return campaign.Campaign{}, fmt.Errorf("postgres: read audience languages: %w", err)
+			}
+			c.Segment.Audience.Languages = &langs
+		}
 		if generatedAt != nil {
 			c.Segment.GeneratedAt = generatedAt.UTC()
 		}
@@ -219,6 +239,7 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 			Content: content.Content{
 				SMS:   content.SMS{Body: deref(cvSMS)},
 				Email: content.Email{Subject: deref(cvSubject), Body: deref(cvBody)},
+				EN:    englishOf(cvENSMS, cvENSubject, cvENBody),
 			},
 			ValidationErrors: []validation.FieldError{},
 			LLMAttempts:      cvAttempts,
@@ -228,6 +249,9 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 		}
 		if cvWCSMS != nil && cvWCSub != nil {
 			v.WorstCase = &content.WorstCase{SMSRunes: *cvWCSMS, SubjectRunes: *cvWCSub}
+			if cvWCENSMS != nil && cvWCENSub != nil {
+				v.WorstCase.EN = &content.WorstCaseLang{SMSRunes: *cvWCENSMS, SubjectRunes: *cvWCENSub}
+			}
 		}
 		if len(cvErrors) > 0 {
 			if err := json.Unmarshal(cvErrors, &v.ValidationErrors); err != nil {
@@ -260,6 +284,22 @@ func canonicalRule(stored []byte) json.RawMessage {
 		return json.RawMessage(stored)
 	}
 	return buf.Bytes()
+}
+
+// englishOf rebuilds Content.EN from the en_* columns (all NULL or all set: 0009 check).
+func englishOf(sms, subject, body *string) *content.English {
+	if sms == nil || subject == nil || body == nil {
+		return nil
+	}
+	return &content.English{SMS: content.SMS{Body: *sms}, Email: content.Email{Subject: *subject, Body: *body}}
+}
+
+// nullableJSON maps an empty document to SQL NULL.
+func nullableJSON(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return string(b)
 }
 
 func deref[T any](p *T) T {

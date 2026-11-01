@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 
 	"github.com/gulcint/smart-campaign-composer/internal/content"
 	"github.com/gulcint/smart-campaign-composer/internal/llm"
@@ -14,12 +15,14 @@ import (
 	"github.com/gulcint/smart-campaign-composer/internal/validation"
 )
 
-// DeltaEvent is one streamed text chunk of one field (SSE event "delta").
+// DeltaEvent is one streamed text chunk of one field (SSE event "delta"). Language is "en" for the
+// English version's chunks and empty (no JSON key) for the Turkish ones (P8, sse-events.md §1.1).
 type DeltaEvent struct {
-	Attempt int    `json:"attempt"`
-	Channel string `json:"channel"` // "sms" | "email"
-	Field   string `json:"field"`   // "body" | "subject"
-	Text    string `json:"text"`
+	Attempt  int    `json:"attempt"`
+	Language string `json:"language,omitempty"` // "" (Turkish) | "en"
+	Channel  string `json:"channel"`            // "sms" | "email"
+	Field    string `json:"field"`              // "body" | "subject"
+	Text     string `json:"text"`
 }
 
 // InvalidEvent reports a failed attempt (SSE event "invalid"). ContentVersionID is always encoded,
@@ -66,6 +69,8 @@ type ContentSession struct {
 }
 
 // OpenContent starts attempt 1. req.Longest is used both as model hint and for content.Validate.
+// req.IncludeEnglish (set by the caller from Audience.WantsEnglish; P8, D63) is kept for the repair
+// attempt; validation covers the English version when present.
 // Errors: llm.ErrUnavailable, ctx errors.
 func OpenContent(ctx context.Context, c llm.Client, req llm.ContentRequest) (*ContentSession, error) {
 	req.Attempt, req.Previous = 1, nil
@@ -164,11 +169,15 @@ func (s *ContentSession) consume(stream llm.ContentStream, attempt int, emit fun
 	for {
 		chunk, err := stream.Recv()
 		if err == nil {
-			channel, field, ok := splitPath(chunk.Path)
+			language, path := "", chunk.Path
+			if rest, isEN := strings.CutPrefix(path, content.LangEN+"."); isEN {
+				language, path = content.LangEN, rest
+			}
+			channel, field, ok := splitPath(path)
 			if !ok || chunk.Text == "" {
 				continue
 			}
-			if err := emit(DeltaEvent{Attempt: attempt, Channel: channel, Field: field, Text: chunk.Text}); err != nil {
+			if err := emit(DeltaEvent{Attempt: attempt, Language: language, Channel: channel, Field: field, Text: chunk.Text}); err != nil {
 				return nil, nil, false, err
 			}
 			continue

@@ -77,6 +77,7 @@ Sabit gruplar index 0'dan başlayarak **önce** üretilir; sayıları `--users`'
 | `long_first_name` | 3 | `cart_add` `ref − 7 gün`; `first_name = "Şükriye Gülizar Çağla Ayşegül İpek Öykü Nilüfer Su"` (tam 50 karakter) | evet | evet | evet |
 | `shared_contact` | 2 | `cart_add` `ref − 7 gün`; ikisi de `phone = "+905000009999"`, `email = "shared.contact@example.test"` | evet | evet | evet |
 | `non_istanbul_cart_add` | 10 | `city = Ankara`, `cart_add` `ref − 3 gün` | hayır | hayır | hayır |
+| `english_recipients` | 6 | `city = İstanbul`, `language = en`, `cart_add` `ref − 7 gün`; hem SMS hem email izinli, `phone` ve `email` dolu (P8, REQ-SEED-01) | evet | evet | evet |
 
 Garantiler: veri kümesindeki en uzun `first_name` 50 karakterdir (yalnız `long_first_name`); `+905000009999` ve `shared.contact@example.test` yalnız `shared_contact` grubunda geçer.
 
@@ -148,15 +149,21 @@ Biçim: 2 boşluk girinti, anahtarlar aşağıdaki sırada, sonda tek `\n`. Grup
     },
     "groups": {
       "type": "object",
-      "required": ["cart_add_29d", "cart_add_30d", "cart_add_31d", "cart_add_then_purchase", "purchase_before_cart_add", "istanbul_no_consent", "istanbul_sms_only", "istanbul_email_only", "sms_consent_missing_phone", "email_consent_missing_email", "empty_first_name", "long_first_name", "shared_contact", "non_istanbul_cart_add"],
-      "propertyNames": { "enum": ["cart_add_29d", "cart_add_30d", "cart_add_31d", "cart_add_then_purchase", "purchase_before_cart_add", "istanbul_no_consent", "istanbul_sms_only", "istanbul_email_only", "sms_consent_missing_phone", "email_consent_missing_email", "empty_first_name", "long_first_name", "shared_contact", "non_istanbul_cart_add"] },
+      "required": ["cart_add_29d", "cart_add_30d", "cart_add_31d", "cart_add_then_purchase", "purchase_before_cart_add", "istanbul_no_consent", "istanbul_sms_only", "istanbul_email_only", "sms_consent_missing_phone", "email_consent_missing_email", "empty_first_name", "long_first_name", "shared_contact", "non_istanbul_cart_add", "english_recipients"],
+      "propertyNames": { "enum": ["cart_add_29d", "cart_add_30d", "cart_add_31d", "cart_add_then_purchase", "purchase_before_cart_add", "istanbul_no_consent", "istanbul_sms_only", "istanbul_email_only", "sms_consent_missing_phone", "email_consent_missing_email", "empty_first_name", "long_first_name", "shared_contact", "non_istanbul_cart_add", "english_recipients"] },
       "additionalProperties": { "$ref": "#/$defs/group" }
     }
   },
   "$defs": {
     "audience": {
       "type": "object", "additionalProperties": false, "required": ["matched", "sms", "email"],
-      "properties": { "matched": { "type": "integer" }, "sms": { "type": "integer" }, "email": { "type": "integer" } }
+      "properties": { "matched": { "type": "integer" }, "sms": { "type": "integer" }, "email": { "type": "integer" },
+        "languages": { "description": "P8. Required in example_brief.audience (tr + en = the channel count); absent elsewhere", "type": "object", "additionalProperties": false, "required": ["sms", "email"],
+          "properties": { "sms": { "$ref": "#/$defs/languageCounts" }, "email": { "$ref": "#/$defs/languageCounts" } } } }
+    },
+    "languageCounts": {
+      "type": "object", "additionalProperties": false, "required": ["tr", "en"],
+      "properties": { "tr": { "type": "integer" }, "en": { "type": "integer" } }
     },
     "consentBreakdown": {
       "type": "object", "additionalProperties": false, "required": ["both", "sms_only", "email_only", "none"],
@@ -185,4 +192,5 @@ Grup değerleri §3.3 tablosuyla birebir aynıdır (`count`, `matches_example_br
 - `groups.purchase_before_cart_add` teslimat almaz ("alışveriş yapmayan" = son 30 günde satın alma yok; segment-dsl §7.1).
 - `groups.shared_contact.customer_ids` (2 kişi) her biri bir `sms` ve bir `email` teslimatı alır (REQ-SND-03).
 - `example_brief.longest_values` = `POST /segment` yanıtındaki `segment.longest_values`; `first_name` = 50 → içerik doğrulamasında ve onayda en kötü durum hesabı (REQ-CNT-01, REQ-CNT-05).
+- `example_brief.audience.languages` (P8) = `POST /segment` yanıtındaki `audience.languages`; `groups.english_recipients` (6 kişi) iki kanalda da teslimat alır ve alıcı dili `en`dir (REQ-LNG-03).
 - `groups.empty_first_name` önizlemesinde `Değerli müşterimiz` (REQ-CNT-03).

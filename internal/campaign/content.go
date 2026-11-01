@@ -70,6 +70,8 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 
 	sess, err := composer.OpenContent(genCtx, s.d.LLM, llm.ContentRequest{
 		Brief: c.Brief, Rule: c.Segment.Rule, Longest: c.Segment.LongestValues,
+		// P8 (D63): English only when the current audience has English-speaking customers.
+		IncludeEnglish: c.Segment.Audience.WantsEnglish(),
 	})
 	if err != nil {
 		timedOut := errors.Is(context.Cause(genCtx), errGenerationTimeout)
@@ -360,6 +362,11 @@ func (s *service) Preview(ctx context.Context, id string, q PreviewQuery) (Previ
 	if !ok {
 		return Preview{}, ErrCampaignNotFound
 	}
+	if q.Language != "" && q.Language != content.LangTR && q.Language != content.LangEN {
+		return Preview{}, &validation.Error{Fields: []validation.FieldError{{
+			Path: "query.language", Code: validation.CodeInvalidValue, Message: "language must be tr or en",
+		}}}
+	}
 	c, err := s.d.Store.GetCampaign(ctx, id)
 	if err != nil {
 		return Preview{}, err
@@ -402,18 +409,24 @@ func (s *service) Preview(ctx context.Context, id string, q PreviewQuery) (Previ
 		return Preview{}, err
 	}
 	cu := sample.Customer
-	r, err := content.RenderContent(v.Content, content.Recipient{FirstName: cu.FirstName, LastName: cu.LastName, City: cu.City})
+	// P8 (D63): the requested language, or the sample customer's own.
+	lang := q.Language
+	if lang == "" {
+		lang = cu.Language
+	}
+	r, err := content.RenderContent(v.Content, content.Recipient{FirstName: cu.FirstName, LastName: cu.LastName, City: cu.City, Language: lang})
 	if err != nil {
 		return Preview{}, fmt.Errorf("campaign: render validated version: %w", err)
 	}
 	smsRunes, subjectRunes := content.RuneCount(r.SMSText), content.RuneCount(r.EmailSubject)
 	return Preview{
 		CampaignID: id, ContentVersionID: v.ID, SampleIndex: sample.Index, SampleCount: sample.Count, Customer: cu,
+		Language: r.Language, Fallback: r.Fallback,
 		SMS: PreviewSMS{Text: r.SMSText, Runes: smsRunes, Limit: content.SMSMaxRunes, WithinLimit: smsRunes <= content.SMSMaxRunes},
 		Email: PreviewEmail{
 			Subject: r.EmailSubject, SubjectRunes: subjectRunes, SubjectLimit: content.SubjectMaxRunes,
 			WithinLimit: subjectRunes <= content.SubjectMaxRunes, Text: r.EmailText,
-			HTML: content.RenderEmailHTML(r.EmailSubject, r.EmailText),
+			HTML: content.RenderEmailHTMLLang(r.Language, r.EmailSubject, r.EmailText),
 		},
 	}, nil
 }

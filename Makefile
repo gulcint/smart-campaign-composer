@@ -54,7 +54,7 @@ lint: ## golangci-lint over the whole module
 	@$(MAKE) --no-print-directory check-contract-copies
 
 check-tool-schemas: ## The embedded LLM tool schemas must equal the contract copies
-	@for f in segment-rule content; do \
+	@for f in segment-rule content content-en; do \
 	  cmp -s docs/contracts/schemas/llm/$$f.tool.json internal/llm/schemas/$$f.tool.json \
 	  || { echo "internal/llm/schemas/$$f.tool.json differs from docs/contracts/schemas/llm/$$f.tool.json"; exit 1; }; \
 	done

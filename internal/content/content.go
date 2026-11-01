@@ -29,13 +29,25 @@ const (
 	SubjectMaxRunes   = 80
 	EmailBodyMaxRunes = 5000
 	FirstNameFallback = "Değerli müşterimiz"
+	// P8 (D63)
+	FirstNameFallbackEN = "Dear customer" // 13 runes
+	LangTR              = "tr"
+	LangEN              = "en"
 )
 
 // AllowedVariables are the only template placeholders (REQ-CNT-03).
 var AllowedVariables = []string{"first_name", "last_name", "city"}
 
-// Content is one SMS + email copy (content.schema.json).
+// Content is one SMS + email copy (content.schema.json). SMS and Email are the Turkish main copy;
+// EN is the optional English version (nil = no English version; P8, D63).
 type Content struct {
+	SMS   SMS      `json:"sms"`
+	Email Email    `json:"email"`
+	EN    *English `json:"en,omitempty"`
+}
+
+// English is the English version of a Content (P8, D63).
+type English struct {
 	SMS   SMS   `json:"sms"`
 	Email Email `json:"email"`
 }
@@ -54,6 +66,13 @@ type Email struct {
 // WorstCase are the post-substitution lengths reported on every content version whose template
 // syntax is valid (API field ContentVersion.worst_case).
 type WorstCase struct {
+	SMSRunes     int            `json:"sms_runes"`
+	SubjectRunes int            `json:"subject_runes"`
+	EN           *WorstCaseLang `json:"en,omitempty"` // P8: nil iff Content.EN == nil
+}
+
+// WorstCaseLang are the worst-case lengths of one extra language version (P8).
+type WorstCaseLang struct {
 	SMSRunes     int `json:"sms_runes"`
 	SubjectRunes int `json:"subject_runes"`
 }
@@ -69,6 +88,8 @@ type Longest struct {
 // Recipient is the personalisation data of one customer.
 type Recipient struct {
 	FirstName, LastName, City string
+	// Language is customers.language ("tr" | "en"; "" is treated as "tr"). P8 (D63).
+	Language string
 }
 
 // Rendered is a Content with every variable substituted for one recipient.
@@ -76,6 +97,10 @@ type Rendered struct {
 	SMSText      string
 	EmailSubject string
 	EmailText    string
+	// Language of the rendered text ("tr" | "en") and whether English was wanted but the content has
+	// no English version (the Turkish main copy was used). P8 (D63).
+	Language string
+	Fallback bool
 }
 
 // Field errors of the content validator match these sentinels (empty fields match validation.ErrRequired).
@@ -108,6 +133,18 @@ func EffectiveFirstName(s string) string {
 	return FirstNameFallback
 }
 
+// EffectiveFirstNameLang is EffectiveFirstName with the fallback by language: FirstNameFallbackEN
+// for lang == LangEN, FirstNameFallback otherwise.
+func EffectiveFirstNameLang(s, lang string) string {
+	if t := strings.TrimSpace(s); t != "" {
+		return t
+	}
+	if lang == LangEN {
+		return FirstNameFallbackEN
+	}
+	return FirstNameFallback
+}
+
 // ---- Parse ----
 
 // maxKeyRunes / invalidKey: an unknown property name is echoed into a field-error path only if it
@@ -135,22 +172,38 @@ func Parse(raw []byte) (Content, error) {
 	if !ok {
 		return Content{}, &validation.Error{Fields: []validation.FieldError{violation("", "content must be a JSON object")}}
 	}
-	errs = append(errs, unknownKeys(root, "", "sms", "email")...)
+	errs = append(errs, unknownKeys(root, "", "sms", "email", "en")...)
 
 	var c Content
-	if sms, ok := member(root, "", "sms", &errs); ok {
-		errs = append(errs, unknownKeys(sms, "sms", "body")...)
-		c.SMS.Body, _ = stringMember(sms, "sms", "body", &errs)
-	}
-	if email, ok := member(root, "", "email", &errs); ok {
-		errs = append(errs, unknownKeys(email, "email", "subject", "body")...)
-		c.Email.Subject, _ = stringMember(email, "email", "subject", &errs)
-		c.Email.Body, _ = stringMember(email, "email", "body", &errs)
+	c.SMS, c.Email = parseCopy(root, "", &errs)
+	if _, present := root["en"]; present {
+		if en, ok := member(root, "", "en", &errs); ok {
+			errs = append(errs, unknownKeys(en, "en", "sms", "email")...)
+			var e English
+			e.SMS, e.Email = parseCopy(en, "en", &errs)
+			c.EN = &e
+		}
 	}
 	if len(errs) > 0 {
 		return Content{}, &validation.Error{Fields: errs}
 	}
 	return c, nil
+}
+
+// parseCopy decodes the sms and email objects of one language version under parent.
+func parseCopy(m map[string]json.RawMessage, parent string, errs *[]validation.FieldError) (SMS, Email) {
+	var sms SMS
+	var email Email
+	if obj, ok := member(m, parent, "sms", errs); ok {
+		*errs = append(*errs, unknownKeys(obj, join(parent, "sms"), "body")...)
+		sms.Body, _ = stringMember(obj, join(parent, "sms"), "body", errs)
+	}
+	if obj, ok := member(m, parent, "email", errs); ok {
+		*errs = append(*errs, unknownKeys(obj, join(parent, "email"), "subject", "body")...)
+		email.Subject, _ = stringMember(obj, join(parent, "email"), "subject", errs)
+		email.Body, _ = stringMember(obj, join(parent, "email"), "body", errs)
+	}
+	return sms, email
 }
 
 func violation(path, msg string) validation.FieldError {
@@ -349,13 +402,23 @@ type fieldSpec struct {
 	recheckAtApp bool // re-checked at approval (CheckWorstCase)
 }
 
+// fieldsOf lists the checked fields: the three Turkish ones, then (P8) the English ones with the
+// "en." path prefix.
 func fieldsOf(c Content) []fieldSpec {
+	fields := langFields("", "", c.SMS, c.Email)
+	if c.EN != nil {
+		fields = append(fields, langFields("en.", "English ", c.EN.SMS, c.EN.Email)...)
+	}
+	return fields
+}
+
+func langFields(prefix, labelPrefix string, sms SMS, email Email) []fieldSpec {
 	return []fieldSpec{
-		{path: pathSMSBody, label: "SMS body", value: c.SMS.Body, limit: SMSMaxRunes, code: validation.CodeSMSTooLong,
+		{path: prefix + pathSMSBody, label: labelPrefix + "SMS body", value: sms.Body, limit: SMSMaxRunes, code: validation.CodeSMSTooLong,
 			worstCode: validation.CodeSMSTooLongWorstCase, err: ErrSMSTooLong, recheckAtApp: true},
-		{path: pathEmailSubject, label: "email subject", value: c.Email.Subject, limit: SubjectMaxRunes, code: validation.CodeSubjectTooLong,
+		{path: prefix + pathEmailSubject, label: labelPrefix + "email subject", value: email.Subject, limit: SubjectMaxRunes, code: validation.CodeSubjectTooLong,
 			worstCode: validation.CodeSubjectTooLongWorstCase, err: ErrSubjectTooLong, recheckAtApp: true},
-		{path: pathEmailBody, label: "email body", value: c.Email.Body, limit: EmailBodyMaxRunes, code: validation.CodeEmailBodyTooLong,
+		{path: prefix + pathEmailBody, label: labelPrefix + "email body", value: email.Body, limit: EmailBodyMaxRunes, code: validation.CodeEmailBodyTooLong,
 			err: ErrEmailBodyTooLong},
 	}
 }
@@ -403,19 +466,24 @@ func Validate(c Content, l Longest) error {
 }
 
 // MeasureWorstCase computes WorstCase with the same substitution as Validate.
-// Errors: ErrMalformedVariable, ErrUnknownVariable (any of the three fields).
+// Errors: ErrMalformedVariable, ErrUnknownVariable (any of the three Turkish fields or, when
+// c.EN != nil, any of the three English ones; the wrapped message names the en.-prefixed path).
 func MeasureWorstCase(c Content, l Longest) (WorstCase, error) {
-	var lengths [2]int
-	for i, f := range fieldsOf(c) {
+	// fieldsOf order: sms, subject, body per language version.
+	fs := fieldsOf(c)
+	lengths := make([]int, len(fs))
+	for i, f := range fs {
 		parts, err := checkedParts(f.value)
 		if err != nil {
 			return WorstCase{}, fmt.Errorf("%s: %w", f.path, err)
 		}
-		if i < len(lengths) {
-			lengths[i] = worstLength(parts, l)
-		}
+		lengths[i] = worstLength(parts, l)
 	}
-	return WorstCase{SMSRunes: lengths[0], SubjectRunes: lengths[1]}, nil
+	wc := WorstCase{SMSRunes: lengths[0], SubjectRunes: lengths[1]}
+	if c.EN != nil {
+		wc.EN = &WorstCaseLang{SMSRunes: lengths[3], SubjectRunes: lengths[4]}
+	}
+	return wc, nil
 }
 
 // CheckWorstCase is the approval-time RE-check (REQ-CNT-05) with Longest recomputed at approval
@@ -445,7 +513,7 @@ func CheckWorstCase(c Content, l Longest) error {
 
 // ---- Render ----
 
-// Render substitutes {{first_name}} (EffectiveFirstName), {{last_name}} and {{city}} (raw,
+// Render substitutes {{first_name}} (EffectiveFirstNameLang by r.Language), {{last_name}} and {{city}} (raw,
 // possibly empty). Substituted values are not processed again. Errors: ErrMalformedVariable,
 // ErrUnknownVariable.
 func Render(tmpl string, r Recipient) (string, error) {
@@ -459,7 +527,7 @@ func Render(tmpl string, r Recipient) (string, error) {
 		case "":
 			b.WriteString(p.text)
 		case "first_name":
-			b.WriteString(EffectiveFirstName(r.FirstName))
+			b.WriteString(EffectiveFirstNameLang(r.FirstName, r.Language))
 		case "last_name":
 			b.WriteString(r.LastName)
 		case "city":
@@ -469,25 +537,39 @@ func Render(tmpl string, r Recipient) (string, error) {
 	return b.String(), nil
 }
 
-// RenderContent renders the three fields of c for r.
+// RenderContent renders the three fields of c for r in r's language: r.Language == "en" and
+// c.EN != nil => the English version (Language "en"); otherwise the Turkish main copy (Language
+// "tr"), with Fallback = true when English was wanted but c has no English version. The fallback
+// first name follows the language of the text used.
 func RenderContent(c Content, r Recipient) (Rendered, error) {
-	sms, err := Render(c.SMS.Body, r)
-	if err != nil {
-		return Rendered{}, fmt.Errorf("%s: %w", pathSMSBody, err)
+	lang, prefix, sms0, email0, fallback := LangTR, "", c.SMS, c.Email, false
+	if r.Language == LangEN {
+		if c.EN != nil {
+			lang, prefix, sms0, email0 = LangEN, "en.", c.EN.SMS, c.EN.Email
+		} else {
+			fallback = true
+		}
 	}
-	subject, err := Render(c.Email.Subject, r)
+	r.Language = lang
+	sms, err := Render(sms0.Body, r)
 	if err != nil {
-		return Rendered{}, fmt.Errorf("%s: %w", pathEmailSubject, err)
+		return Rendered{}, fmt.Errorf("%s: %w", prefix+pathSMSBody, err)
 	}
-	body, err := Render(c.Email.Body, r)
+	subject, err := Render(email0.Subject, r)
 	if err != nil {
-		return Rendered{}, fmt.Errorf("%s: %w", pathEmailBody, err)
+		return Rendered{}, fmt.Errorf("%s: %w", prefix+pathEmailSubject, err)
 	}
-	return Rendered{SMSText: sms, EmailSubject: subject, EmailText: body}, nil
+	body, err := Render(email0.Body, r)
+	if err != nil {
+		return Rendered{}, fmt.Errorf("%s: %w", prefix+pathEmailBody, err)
+	}
+	return Rendered{SMSText: sms, EmailSubject: subject, EmailText: body, Language: lang, Fallback: fallback}, nil
 }
 
 // CheckRendered is the per-recipient send-time check (REQ-CNT-05): sms_too_long /
-// subject_too_long on the rendered text. nil or *validation.Error.
+// subject_too_long on the rendered text. nil or *validation.Error. The error paths are always the
+// unprefixed "sms.body" / "email.subject", even when r is the English version (r.Language "en"):
+// at send time only the failure reason content_too_long is recorded, never the path.
 func CheckRendered(r Rendered) error {
 	var errs []validation.FieldError
 	if n := RuneCount(r.SMSText); n > SMSMaxRunes {
@@ -515,9 +597,20 @@ const emailBodyStyle = "margin:0;padding:0 16px;font-family:'Figtree Variable',F
 // RenderEmailHTML builds the escaped HTML document used for the provider and the preview.
 // Paragraphs are separated by one or more blank lines; a single newline inside a paragraph becomes
 // "<br>". Every text fragment goes through html.EscapeString; the only tags are the skeleton's.
+// It is RenderEmailHTMLLang(LangTR, subject, bodyText).
 func RenderEmailHTML(subject, bodyText string) string {
+	return RenderEmailHTMLLang(LangTR, subject, bodyText)
+}
+
+// RenderEmailHTMLLang is RenderEmailHTML with <html lang="..."> by language: "en" for LangEN, "tr"
+// for anything else (P8, D63). The lang value is a constant, never taken from content.
+func RenderEmailHTMLLang(lang, subject, bodyText string) string {
+	htmlLang := LangTR
+	if lang == LangEN {
+		htmlLang = LangEN
+	}
 	var b strings.Builder
-	b.WriteString(`<!doctype html><html lang="tr"><head><meta charset="utf-8">`)
+	b.WriteString(`<!doctype html><html lang="` + htmlLang + `"><head><meta charset="utf-8">`)
 	b.WriteString(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">`)
 	b.WriteString("<title>")
 	b.WriteString(html.EscapeString(subject))

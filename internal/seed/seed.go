@@ -324,6 +324,11 @@ func (g *generator) fixedGroups() {
 		c.city = "Ankara"
 		g.addEvent(c, "cart_add", ref.Add(-3*day))
 	})
+	// P8 (REQ-SEED-01, REQ-LNG-03): English-speaking members of the example audience on both channels.
+	add("english_recipients", 6, func(c *customer) {
+		g.addEvent(c, "cart_add", ref.Add(-7*day))
+		c.language = "en"
+	})
 }
 
 // randomCustomer draws one member of the random population (seed.md §3.2).

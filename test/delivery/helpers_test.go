@@ -293,9 +293,12 @@ type step struct {
 	hang       bool // never answer (client timeout)
 }
 
+// provReq is one request the provider saw. body is the SMS text; subject, text and html are the
+// email fields (provider bodies of REQ-MOCK-01: {"to","body"} and {"to","subject","text","html"}).
 type provReq struct {
-	key, path, to string
-	replayed      bool
+	key, path, to             string
+	body, subject, text, html string
+	replayed                  bool
 }
 
 type fakeProvider struct {
@@ -351,21 +354,27 @@ func (p *fakeProvider) messageID(key string) string {
 func (p *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	var body struct {
-		To string `json:"to"`
+		To      string `json:"to"`
+		Body    string `json:"body"`
+		Subject string `json:"subject"`
+		Text    string `json:"text"`
+		HTML    string `json:"html"`
 	}
 	_ = json.Unmarshal(raw, &body)
 	key := r.Header.Get("Idempotency-Key")
 	channel := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/"), "/messages")
+	seen := provReq{key: key, path: r.URL.Path, to: body.To, body: body.Body, subject: body.Subject, text: body.Text, html: body.HTML}
 
 	p.mu.Lock()
 	if mid, ok := p.accepted[key]; ok {
-		p.reqs = append(p.reqs, provReq{key: key, path: r.URL.Path, to: body.To, replayed: true})
+		seen.replayed = true
+		p.reqs = append(p.reqs, seen)
 		p.mu.Unlock()
 		w.Header().Set("Idempotent-Replayed", "true")
 		writeAccepted(w, mid, channel, key, true)
 		return
 	}
-	p.reqs = append(p.reqs, provReq{key: key, path: r.URL.Path, to: body.To})
+	p.reqs = append(p.reqs, seen)
 	st := step{status: http.StatusAccepted}
 	if q := p.scripts[key]; len(q) > 0 {
 		st, p.scripts[key] = q[0], q[1:]

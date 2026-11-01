@@ -185,6 +185,10 @@ export interface paths {
          *     `validated` exactly as in sse-events.md §1; the stream always ends with `validated` or
          *     `invalid` with `final: true` (unless the client disconnects).
          *
+         *     P8 (D63): the generation also asks for the English version iff the campaign's current segment has
+         *     English-speaking recipients (`segment.audience.languages.sms.en + email.en > 0`, REQ-LNG-02);
+         *     English chunks carry `language: "en"`.
+         *
          *     Allowed states: audience_ready, content_ready, approved. Errors detected before the stream
          *     opens are returned as JSON with the status codes below (no SSE); use-case order: 404
          *     `campaign_not_found`, 409 `invalid_state` (draft, scheduled, sending, completed), 409
@@ -221,11 +225,13 @@ export interface paths {
         put?: never;
         /**
          * Human edit — creates a new validated content version (REQ-APR-01, REQ-APR-02, REQ-APR-03)
-         * @description Body follows schemas/content.schema.json (full content: sms.body, email.subject, email.body).
-         *     Goes through exactly the same content.Parse + content.Validate(c, segment.longest_values) as LLM
+         * @description Body follows schemas/content.schema.json (full content: sms.body, email.subject, email.body, and
+         *     the optional English block `en`; P8, D63). A body without `en` creates a version without an
+         *     English version: the previous version's `en` is not carried over. Goes through exactly the same content.Parse + content.Validate(c, segment.longest_values) as LLM
          *     output: lengths are measured AFTER substituting every variable with the current segment's
          *     longest values (REQ-CNT-01/05). Invalid content => 422 and NOTHING is stored; field paths are
-         *     `sms.body`, `email.subject`, `email.body` (a missing or unknown key is `schema_violation` at that
+         *     `sms.body`, `email.subject`, `email.body` and, for the English block, `en.sms.body`,
+         *     `en.email.subject`, `en.email.body` (a missing or unknown key is `schema_violation` at that
          *     path, an empty/whitespace-only value is `required`; at most one error per field).
          *     Optimistic concurrency (owner decision, DECISIONS D40): the REQUIRED header `X-Expected-Version`
          *     names the version the editor is based on: the id of the campaign's latest content version
@@ -510,7 +516,7 @@ export interface paths {
          *     deterministic: same query, same stored data, same output. `sms.text` and `email.subject`/`email.text`
          *     are plain text (never HTML); `email.html` is the only HTML and is escaped. `email.html` is content.RenderEmailHTML output: every
          *     template and variable fragment is HTML-escaped, it contains no element other than the
-         *     fixed skeleton (no script element), and the UI shows it only in a sandboxed iframe.
+         *     fixed skeleton (no script element), and the UI shows it only in a sandboxed iframe. P8: `email.html` is `content.RenderEmailHTMLLang(language, subject, text)`, so `<html lang>` follows the shown language.
          */
         get: operations["previewContent"];
         put?: never;
@@ -590,6 +596,20 @@ export interface components {
             sms: number;
             /** @description matched AND email_opt_in AND email present */
             email: number;
+            /**
+             * @description P8 (D63). Per-channel split of `sms` / `email` by `customers.language` (`tr` + `en` = the channel count).
+             *     Always present in new responses; absent only for a campaign whose segment was generated before P8.
+             *     English content is generated only when `languages.sms.en + languages.email.en > 0` (REQ-LNG-02).
+             */
+            languages?: components["schemas"]["AudienceLanguages"];
+        };
+        AudienceLanguages: {
+            sms: components["schemas"]["LanguageCounts"];
+            email: components["schemas"]["LanguageCounts"];
+        };
+        LanguageCounts: {
+            tr: number;
+            en: number;
         };
         EmptyObject: Record<string, never>;
         /** @description Body of countSegment; the single source is schemas/segment-rule.schema.json (root object with property `rule`). */
@@ -617,6 +637,11 @@ export interface components {
         WorstCase: {
             sms_runes: number;
             subject_runes: number;
+            /** @description P8. Same two lengths for the English version; the key is absent when the version has no `en` block. */
+            en?: {
+                sms_runes: number;
+                subject_runes: number;
+            };
         };
         SegmentResult: {
             /** Format: uuid */
@@ -644,6 +669,16 @@ export interface components {
                 subject: string;
                 body: string;
             };
+            /** @description P8. English version (optional); same shape and the same empty-value allowance as the Turkish main copy. */
+            en?: {
+                sms: {
+                    body: string;
+                };
+                email: {
+                    subject: string;
+                    body: string;
+                };
+            };
         };
         ContentVersion: {
             /** Format: uuid */
@@ -667,13 +702,18 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
-        /** @description Data of SSE event `delta` (sse-events.md §1.1). Valid (channel, field) pairs are (sms, body), (email, subject), (email, body). */
+        /** @description Data of SSE event `delta` (sse-events.md §1.1). Valid (channel, field) pairs are (sms, body), (email, subject), (email, body); with `language` = `en` the same three pairs of the English version. */
         ContentDeltaEvent: {
             /**
              * @description 2 = repair attempt
              * @enum {integer}
              */
             attempt: 1 | 2;
+            /**
+             * @description P8 (D63). Present only on English chunks (two-language generation); the key is absent on Turkish chunks.
+             * @constant
+             */
+            language?: "en";
             channel: components["schemas"]["Channel"];
             /** @enum {string} */
             field: "body" | "subject";
@@ -879,7 +919,19 @@ export interface components {
                 first_name: string;
                 last_name: string;
                 city: string;
+                /**
+                 * @description P8. The sample customer's own language (customers.language). Always returned by the server.
+                 * @enum {string}
+                 */
+                language?: "tr" | "en";
             };
+            /**
+             * @description P8. Language of the rendered text. Always returned by the server.
+             * @enum {string}
+             */
+            language?: "tr" | "en";
+            /** @description P8. True iff English was wanted (language=en, or the sample customer is English and no language was given) but the version has no `en` block, so the Turkish main copy is shown. Always returned by the server. */
+            fallback?: boolean;
             sms: {
                 /** @description Rendered plain text (fallback "Değerli müşterimiz" for empty first_name) */
                 text: string;
@@ -971,7 +1023,7 @@ export interface components {
         };
         /**
          * CampaignContent
-         * @description Input of the emit_campaign_content tool AND request body of POST /api/campaigns/{campaign_id}/content-versions (human edit). Both go through the same backend validator (content.Validate). Length limits (sms.body <= 160, email.subject <= 80, email.body <= 5000 Unicode code points of the template text) and template-variable rules are NOT expressed as maxLength/pattern here on purpose: the backend reports them with specific field error codes (sms_too_long, subject_too_long, email_body_too_long, unknown_variable, malformed_variable). `minLength: 1` documents that empty is invalid, but content.Parse checks structure and types only: an empty or whitespace-only value is reported by content.Validate as field code `required` (never schema_violation), a missing key or unknown key as schema_violation. See llm-tools.md and go-interfaces.md#content.
+         * @description Input of the emit_campaign_content tool AND request body of POST /api/campaigns/{campaign_id}/content-versions (human edit). Both go through the same backend validator (content.Validate). Length limits (sms.body <= 160, email.subject <= 80, email.body <= 5000 Unicode code points of the template text) and template-variable rules are NOT expressed as maxLength/pattern here on purpose: the backend reports them with specific field error codes (sms_too_long, subject_too_long, email_body_too_long, unknown_variable, malformed_variable). `minLength: 1` documents that empty is invalid, but content.Parse checks structure and types only: an empty or whitespace-only value is reported by content.Validate as field code `required` (never schema_violation), a missing key or unknown key as schema_violation. See llm-tools.md and go-interfaces.md#content. P8 (D63): the optional `en` block is the English version for English-speaking customers; sms/email stay the Turkish main copy. When `en` is present it must be complete (sms.body, email.subject, email.body) and every unknown or missing key inside it is a schema_violation at its path (en, en.sms, en.email.subject, en.html). The same limits and variable rules apply to every language version; field paths are prefixed with `en.` (en.sms.body, en.email.subject, en.email.body).
          */
         "content.schema": {
             sms: {
@@ -983,6 +1035,19 @@ export interface components {
                 subject: string;
                 /** @description Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters. */
                 body: string;
+            };
+            /** @description English version (optional). Same structure and limits as the Turkish main copy. */
+            en?: {
+                sms: {
+                    /** @description Plain-text SMS template. At most 160 Unicode characters after personalization. Allowed variables: {{first_name}}, {{last_name}}, {{city}}. */
+                    body: string;
+                };
+                email: {
+                    /** @description Plain-text email subject template. At most 80 Unicode characters after personalization. */
+                    subject: string;
+                    /** @description Plain-text email body template (no HTML; blank line = new paragraph). The backend renders it to escaped HTML. At most 5000 Unicode characters. */
+                    body: string;
+                };
             };
         };
         /**
@@ -1904,6 +1969,12 @@ export interface operations {
             query?: {
                 customer_id?: string;
                 content_version_id?: string;
+                /**
+                 * @description P8 (D63). `tr` | `en`. Default: the sample customer's own language. `tr` always renders the Turkish main copy.
+                 *     `en` renders the English version of the content, or the Turkish main copy with `fallback: true` when the
+                 *     version has no `en` block. Any other value => 422 `invalid_value` (path `query.language`).
+                 */
+                language?: "tr" | "en";
                 /** @description >= 0, default 0. Negative => 422 invalid_value (path query.sample_index). */
                 sample_index?: number;
             };

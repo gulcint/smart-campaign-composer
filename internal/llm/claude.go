@@ -23,6 +23,12 @@ const (
 	contentToolDescription = "Return the SMS and email copy for the campaign in Turkish. SMS body at most 160 " +
 		"characters and email subject at most 80 characters AFTER personalization; the longest recipient values " +
 		"are given in the prompt. Allowed variables: {{first_name}}, {{last_name}}, {{city}}. Plain text only, no HTML."
+	// contentENToolDescription is the bilingual tool's description (llm-tools.md §1.3; P8, D63).
+	contentENToolDescription = "Return the SMS and email copy for the campaign in Turkish as the main copy and an " +
+		"English version of the same message for English-speaking customers (the `en` object): same intent and tone, " +
+		"not a word-for-word translation. For BOTH languages: SMS body at most 160 characters and email subject at " +
+		"most 80 characters AFTER personalization; the longest recipient values are given in the prompt. Allowed " +
+		"variables in both languages: {{first_name}}, {{last_name}}, {{city}}. Plain text only, no HTML."
 
 	segmentSystemPrompt = "You turn a marketer's campaign brief into a structured audience segment rule. " +
 		"Always answer by calling the emit_segment_rule tool exactly once. " +
@@ -45,6 +51,12 @@ const (
 		"enough (about 100 characters) that the total stays at most 160. Aim for an email subject of at most 60 characters. " +
 		"Keep the email body to a few short paragraphs. No emojis. " +
 		"Count the characters of each field before calling the tool and shorten any field that is over its limit."
+	// contentENSystemSuffix extends contentSystemPrompt for the bilingual tool (llm-tools.md §1.3).
+	contentENSystemSuffix = " Also write an English version of the same message in the en object, for English-speaking " +
+		"customers: same intent and tone (friendly and short), not a word-for-word translation. The limits apply " +
+		"separately to each language version: Turkish SMS body at most 160, Turkish email subject at most 80, Turkish " +
+		"email body at most 5000; English SMS body at most 160, English email subject at most 80, English email body " +
+		"at most 5000. Keep the plain text of the English SMS about 100 characters as well."
 
 	repairToolUseID = "toolu_scc_previous_attempt"
 )
@@ -83,8 +95,8 @@ func newClaude(cfg FactoryConfig) *claudeClient {
 	return &claudeClient{api: api, model: model, maxTokens: maxTokens, timeout: timeout}
 }
 
-func (c *claudeClient) params(tool, description, system string, messages []anthropic.MessageParam) (anthropic.MessageNewParams, error) {
-	schema, err := toolInputSchema(tool)
+func (c *claudeClient) params(tool string, rawSchema json.RawMessage, description, system string, messages []anthropic.MessageParam) (anthropic.MessageNewParams, error) {
+	schema, err := toolInputSchema(tool, rawSchema)
 	if err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
@@ -109,12 +121,8 @@ func (c *claudeClient) params(tool, description, system string, messages []anthr
 	}, nil
 }
 
-// toolInputSchema converts the embedded strict schema into the SDK's input_schema parameter.
-func toolInputSchema(tool string) (anthropic.ToolInputSchemaParam, error) {
-	raw, err := ToolSchema(tool)
-	if err != nil {
-		return anthropic.ToolInputSchemaParam{}, err
-	}
+// toolInputSchema converts an embedded strict schema into the SDK's input_schema parameter.
+func toolInputSchema(tool string, raw json.RawMessage) (anthropic.ToolInputSchemaParam, error) {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return anthropic.ToolInputSchemaParam{}, fmt.Errorf("llm: tool schema %s: %w", tool, err)
@@ -187,7 +195,11 @@ func unavailable(ctx context.Context, err error) error {
 
 func (c *claudeClient) GenerateSegment(ctx context.Context, req SegmentRequest) (json.RawMessage, error) {
 	user := "<brief>\n" + req.Brief + "\n</brief>"
-	p, err := c.params(ToolEmitSegmentRule, segmentToolDescription, segmentSystemPrompt,
+	schema, err := ToolSchema(ToolEmitSegmentRule)
+	if err != nil {
+		return nil, err
+	}
+	p, err := c.params(ToolEmitSegmentRule, schema, segmentToolDescription, segmentSystemPrompt,
 		conversation(user, ToolEmitSegmentRule, req.Previous))
 	if err != nil {
 		return nil, err
@@ -229,7 +241,14 @@ func (c *claudeClient) StreamContent(ctx context.Context, req ContentRequest) (C
 		req.Brief, rule,
 		req.Longest.FirstName, req.Longest.LastName, req.Longest.City,
 		req.Longest.FirstName, req.Longest.LastName, req.Longest.City)
-	p, err := c.params(ToolEmitCampaignContent, contentToolDescription, contentSystemPrompt,
+	// P8 (D63): the bilingual tool when the audience has English-speaking customers; the same choice
+	// for the repair attempt (the caller keeps IncludeEnglish).
+	description, system, paths := contentToolDescription, contentSystemPrompt, []string{"sms.body", "email.subject", "email.body"}
+	if req.IncludeEnglish {
+		description, system = contentENToolDescription, contentSystemPrompt+contentENSystemSuffix
+		paths = append(paths, "en.sms.body", "en.email.subject", "en.email.body")
+	}
+	p, err := c.params(ToolEmitCampaignContent, ContentToolSchema(req.IncludeEnglish), description, system,
 		conversation(user, ToolEmitCampaignContent, req.Previous))
 	if err != nil {
 		return nil, err
@@ -240,7 +259,7 @@ func (c *claudeClient) StreamContent(ctx context.Context, req ContentRequest) (C
 		ctx:     ctx,
 		cancel:  cancel,
 		stream:  stream,
-		scanner: newFieldScanner("sms.body", "email.subject", "email.body"),
+		scanner: newFieldScanner(paths...),
 		toolIdx: -1,
 	}
 	// Pull the first event so that connection errors surface as start errors.

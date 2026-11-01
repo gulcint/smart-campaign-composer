@@ -213,7 +213,7 @@ func TestE2E_CountSegment(t *testing.T) {
 			t.Fatalf("status = %d, want 200; body: %s", status, body)
 		}
 		got := decodeObject(t, body)
-		if diff := cmp.Diff(map[string]any{"matched": 0.0, "sms": 0.0, "email": 0.0}, got["audience"]); diff != "" {
+		if diff := cmp.Diff(map[string]any{"matched": 0.0, "sms": 0.0, "email": 0.0}, audienceCounts(t, got["audience"])); diff != "" {
 			t.Fatalf("audience mismatch (-want +got):\n%s", diff)
 		}
 		assertExampleCount(t, api, m)
@@ -526,7 +526,7 @@ func assertSegment(t *testing.T, seg map[string]any, m manifestDoc, want segment
 		t.Fatalf("segment.rule mismatch (-want +got):\n%s", diff)
 	}
 	wantAudience := map[string]any{"matched": float64(want.audience.Matched), "sms": float64(want.audience.SMS), "email": float64(want.audience.Email)}
-	if diff := cmp.Diff(wantAudience, seg["audience"]); diff != "" {
+	if diff := cmp.Diff(wantAudience, audienceCounts(t, seg["audience"])); diff != "" {
 		t.Fatalf("segment.audience mismatch (-want +got):\n%s", diff)
 	}
 	wantLongest := map[string]any{"first_name": float64(want.longest.FirstName), "last_name": float64(want.longest.LastName), "city": float64(want.longest.City)}
@@ -575,7 +575,7 @@ func assertExampleCount(t *testing.T, api string, m manifestDoc) {
 	}
 	a := m.ExampleBrief.Audience
 	want := map[string]any{"matched": float64(a.Matched), "sms": float64(a.SMS), "email": float64(a.Email)}
-	if diff := cmp.Diff(want, got["audience"]); diff != "" {
+	if diff := cmp.Diff(want, audienceCounts(t, got["audience"])); diff != "" {
 		t.Fatalf("count audience mismatch with manifest (-want +got):\n%s", diff)
 	}
 	assertTimeEquals(t, "reference_time", got["reference_time"], m.Params.RefTime)

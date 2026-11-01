@@ -43,6 +43,22 @@ describe('SmsPreview (REQ-APR-01, REQ-CNT-03)', () => {
   })
 })
 
+// REQ-LNG-04 C4: the preview roots carry the shown language (preview.language).
+describe('SmsPreview / EmailPreview data-language (REQ-LNG-04 C4)', () => {
+  it.each(['tr', 'en'] as const)(
+    'preview.language=%s is the data-language of both roots',
+    (language) => {
+      const p = preview({ language, fallback: false } as never)
+      expect(mountSms({ preview: p }).get(sel('sms-preview')).attributes('data-language')).toBe(
+        language,
+      )
+      expect(mountEmail({ preview: p }).get(sel('email-preview')).attributes('data-language')).toBe(
+        language,
+      )
+    },
+  )
+})
+
 describe('EmailPreview (REQ-UI-01)', () => {
   it('shows the backend HTML in a fully sandboxed iframe, verbatim', () => {
     const p = preview()

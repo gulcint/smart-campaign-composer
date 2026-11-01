@@ -13,29 +13,95 @@ Pazarlamacı ne istediğini doğal dille yazar. Claude hedef kitleyi ve SMS ile 
 | Bonus: zamanlanmış gönderim | ✅ Tamam |
 | Bonus: CI pipeline | ✅ Tamam |
 | Bonus: A/B varyantları | ⬜ Yapılmadı |
-| Bonus: kullanıcının diline göre içerik | ⬜ Yapılmadı |
+| Bonus: kullanıcının diline göre içerik | ✅ Tamam |
 
 Kullanılan teknolojiler: Vue 3 (arayüz), Go (backend), Claude API, PostgreSQL (veritabanı ve kuyruk).
 
 ## Nasıl çalıştırılır
 
-Docker ve make yeterli.
+**Önkoşullar**
+- **Docker** ve **Docker Compose v2** (`docker compose` komutu). Docker çalışır durumda olmalı; Docker Desktop kullanıyorsan uygulamayı açık tut.
+- **make**. Yalnızca `make test` ve `make help` için gerekir.
+- **API key gerekmez.** Key yoksa sistem sahte Claude ile çalışır.
+
+**1. Projeyi klonla ve klasöre gir**
 
 ```sh
-docker compose up      # veritabanı, sahte veri, api, worker, mock servis ve arayüz
-make test              # tüm testler, konteynerde, API key gerekmez
+git clone https://github.com/gulcint/smart-campaign-composer.git
+cd smart-campaign-composer
 ```
 
+Komutları klonlanan klasörün içinde çalıştır; başka klasörde `docker compose up` `no configuration file provided` hatası verir.
+
+**2. (İsteğe bağlı) `.env` dosyasını hazırla**
+
+```sh
+cp .env.example .env
+```
+
+- `ANTHROPIC_API_KEY`: boş bırakırsan sahte Claude kullanılır. Sahte Claude brief'i okumaz; hep aynı örnek kitleyi ve metni döner. Gerçek Claude için key'i buraya yaz.
+- `LLM_PROVIDER`: `auto` (varsayılan) key varsa Claude'u, yoksa sahte Claude'u seçer. `mock` key olsa bile sahteyi zorlar. `real` key yoksa başlamaz.
+
+`.env` dosyası git'e girmez. Dosyayı değiştirdikten sonra `docker compose up` komutunu yeniden çalıştır.
+
+**3. Başlat**
+
+```sh
+docker compose up
+```
+
+İlk açılışta imajlar derlenir, bu yüzden uzun sürer. Servisler şu sırayla açılır:
+
+| Servis | Ne yapar |
+|---|---|
+| `db` | PostgreSQL 16'yı açar, `scc` veritabanını ve `scc_migrator`, `scc_app` rollerini oluşturur |
+| `migrate` | Tabloları kurar, sonra çıkar |
+| `seed` | 5000 sahte kullanıcıyı yükler (ad, email, telefon, şehir, kanal izinleri, sepet ve satın alma geçmişi), sonra çıkar |
+| `api`, `worker`, `mockprovider` | API, gönderim işçisi ve sahte SMS/email servisi çalışır |
+| `web` | Arayüzü sunar; `/api` isteklerini API'ye yönlendirir |
+
+Veri yalnızca ilk açılışta yüklenir. Sonraki açılışlarda `seed` mevcut veriyi bozmadan çıkar.
+
+`docker compose up` terminalde açık kalır. Ctrl+C ile durdurursun; konteynerler kalır ve aynı komutla devam eder.
+
+**4. Hazır olduğunu kontrol et**
+
 - Arayüz: <http://127.0.0.1:8081>
-- Sağlık kontrolü: <http://127.0.0.1:8080/readyz>
+- Sağlık kontrolü: <http://127.0.0.1:8080/readyz>. `200` ve `"status":"ready"` dönerse API hazırdır. `503` ve `not_ready` dönerse veritabanı henüz hazır değildir; birkaç saniye bekleyip tekrar dene.
+- `docker compose ps -a` çıktısında `migrate` ve `seed` `exited (0)`, diğer servisler `running` görünmelidir.
+
+**`port is already allocated` hatası alırsan:** 8080 başka bir programda kullanılıyordur. `API_PORT=18080 docker compose up` ile başlat; sağlık kontrolü o zaman <http://127.0.0.1:18080/readyz> olur. Arayüz portu doluysa `WEB_PORT=18081` de ekle.
+
+**5. Testleri çalıştır**
+
+```sh
+make test
+```
+
+Testler kendi konteynerlerinde, ayrı geçici bir veritabanıyla çalışır (Compose projesi `scc-test`). Geliştirme veritabanına dokunmaz, port de yayımlamaz; yani arayüz açıkken de çalışır.
+
+**Durdurma**
+
+```sh
+docker compose down      # konteynerleri durdurur ve kaldırır; veri korunur
+docker compose down -v   # ayrıca veritabanı volume'unu (pgdata) siler
+```
+
+`down -v` sonrası bir sonraki `docker compose up` veritabanını ve 5000 sahte kullanıcıyı baştan kurar.
 
 **Denemek için:** aşağıdaki örnek brief'i yapıştır, kitle → metin → onay adımlarını izle, "Gönder"e bas. Takip ekranı "Kampanya tamamlandı" ile bitmeli. Birkaç mesajın başarısız olması normaldir; mock servis bilerek hata verir.
 
 **Ayarlar**
-- Gerçek Claude için `.env` dosyasına `ANTHROPIC_API_KEY` yaz (örnek: `.env.example`). Key yoksa sahte Claude kullanılır; o brief'i okumaz, hep aynı örnek kitleyi ve metni döner.
-- `LLM_PROVIDER=mock` key olsa bile sahteyi zorlar.
-- Port doluysa `.env` içinde `WEB_PORT` ve `API_PORT` değiştirilebilir.
+- Port değişkenleri (`API_PORT`, `WEB_PORT`) `.env` içine de yazılabilir.
 - Kod geliştirecekseniz önce `make hooks` çalıştırın. Diğer komutlar için `make help`.
+
+**Sorun giderme**
+- **`no configuration file provided`:** Komutu klonlanan klasörün dışında çalıştırdın. `cd smart-campaign-composer` yapıp tekrar dene.
+- **`port is already allocated`:** Port başka bir programda. Yukarıdaki port notuna bak.
+- **Docker komutu bağlanamıyor:** Docker çalışmıyor. Docker Desktop'ı aç ya da Docker servisini başlat.
+- **`readyz` `503` dönüyor:** Veritabanı ya da `migrate` hata verdi. `docker compose ps -a` ile durumlara, `docker compose logs migrate seed` ile hatalara bak.
+- **Sahte Claude çalışıyor:** `.env` yok ya da `ANTHROPIC_API_KEY` boş. API loglarında `"llm_provider":"mock"` görünür (`docker compose logs api`).
+- **Veriyi sıfırlamak istiyorsan:** `docker compose down -v`, ardından `docker compose up`.
 
 ## Kullanıcı akışı
 
@@ -51,7 +117,7 @@ make test              # tüm testler, konteynerde, API key gerekmez
 
 ![Tamamlanmış bir kampanyanın takip ekranı](docs/img/tracking-completed.png)
 
-Kampanya şu durumlardan geçer: `draft` → `audience_ready` → `content_ready` → `approved` → `sending` → `completed`. Kitle ya da metin değişirse kampanya bir önceki uygun duruma döner ve yeniden onay gerekir.
+Kampanya şu durumlardan geçer: `draft` → `audience_ready` → `content_ready` → `approved` → `sending` → `completed`. İleri tarihe planlanan kampanya `approved` ile `sending` arasında `scheduled` durumunda bekler. Kitle ya da metin değişirse kampanya bir önceki uygun duruma döner ve yeniden onay gerekir.
 
 ## Case isterleri ve nasıl karşılandı
 
@@ -107,9 +173,9 @@ flowchart LR
 
 Yetiştirilemeyenler ve bilinçli ödünler:
 
-- **A/B varyantları ve dile göre içerik yapılmadı** (seed'de `language` alanı hazır).
+- **A/B varyantları yapılmadı.** Dile göre içerik yalnız `tr` ve `en` içindir; İngilizce sürümün dil kalitesini sistem ölçmez, insan onayı tek güvencedir (D63).
 - **Ölçek:** kitle Go belleğine yüklenir, kuyruk PostgreSQL'dedir. 5000 kişi için yeterli, milyonlar için değil (D1).
-- **Hız:** elle denemede kanal başına yaklaşık 50 mesaj/sn ölçüldü (limit 100). Otomatik hız testi yok.
+- **Hız:** elle denemede kanal başına yaklaşık 50 mesaj/sn ölçüldü (limit 100). 100/sn sınırı sahte saatle çalışan bir testte doğrulanır; gerçek zamanlı yük testi yok.
 - **SMS uzunluğu** karakter olarak sayılır. Türkçe harf içeren gerçek bir SMS parçası 70 karakterdir (D10).
 - **Gönderimde uzunluk kontrolü** bir kişinin SMS ve emailini birlikte değerlendirir; biri uzarsa diğeri de `content_too_long` ile düşer.
 - **Brief kampanya açıldıktan sonra değişmez;** "Brief'i düzenle" yeni kampanya başlatır.
@@ -123,6 +189,7 @@ Tüm liste ve gerekçeleri için [`DECISIONS.md`](DECISIONS.md).
 ## Bonuslar
 
 - **Zamanlanmış gönderim (D62):** onaylı kampanya 1 dakika ile 30 gün sonrasına planlanır; plan değiştirilebilir, iptal edilebilir ya da hemen gönderilebilir.
+- **Kullanıcının diline göre içerik (D63):** kitlede İngilizce konuşan alıcı varsa Claude Türkçe metnin yanında İngilizce sürümü de yazar. İçerik ve onay ekranlarında TR/EN sekmeleri vardır. Her alıcıya kendi dilindeki metin gider; İngilizce sürüm yoksa Türkçe gider.
 - **CI (GitHub Actions):** `main`'e girmek için `ci-ok` kontrolü yeşil olmalı (lint, `make test`, gitleaks, govulncheck, API sözleşmesi kontrolü).
 
 ## Teslim edilenler

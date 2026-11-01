@@ -19,7 +19,7 @@ Entegrasyon testleri yalnızca burada adı geçen tablo, kolon, constraint, fonk
 - Dizin: `migrations/`. Ad: `NNNN_snake_case_name.up.sql` + `NNNN_snake_case_name.down.sql`; `NNNN` 4 haneli, 0001'den artan, boşluksuz ve çakışmasız.
 - Her `up` için `down` zorunlu; `up → down → up` sonrası şema diff'i boş olmalı (`make db-roundtrip`).
 - Takip tablosu: `schema_migrations(version bigint PRIMARY KEY, dirty boolean NOT NULL)` (golang-migrate biçimi).
-- Planlanan ilk set (VARSAYIM, adlar bağlayıcı değil): `0001_customers_events`, `0002_customer_stats_fn`, `0003_campaigns_content_approvals`, `0004_deliveries`, `0005_seed_runs`. Sonradan eklenenler: `0006_revoke_schema_migrations`, `0007_campaign_generation_lease` (D52), `0008_campaign_schedule` (P7a, D62; §3.4.1).
+- Planlanan ilk set (VARSAYIM, adlar bağlayıcı değil): `0001_customers_events`, `0002_customer_stats_fn`, `0003_campaigns_content_approvals`, `0004_deliveries`, `0005_seed_runs`. Sonradan eklenenler: `0006_revoke_schema_migrations`, `0007_campaign_generation_lease` (D52), `0008_campaign_schedule` (P7a, D62; §3.4.1), `0009_content_en` (P8, D63; §3.4, §3.5).
 - `migrations/embed.go` (`package migrations`, `var FS embed.FS`) dosyaları gömer.
 
 ## 3. Tablolar
@@ -91,6 +91,7 @@ Her müşteri için tam bir satır döner (olayı olmayanlar dahil; sayılar 0, 
 | `segment_llm_attempts` | integer | NULL, 1..2 |
 | `segment_generated_at` | timestamptz | NULL |
 | `audience_matched`, `audience_sms`, `audience_email` | integer | NULL, ≥ 0 |
+| `audience_languages` | jsonb | NULL (0009, D63); segment üretiminde `{"sms":{"tr":n,"en":m},"email":{"tr":n,"en":m}}` (kanal kitlesinin `customers.language` dağılımı, izin ve iletişim bilgisi süzgeci sonrası; `tr + en` = `audience_sms` / `audience_email`). NULL = segmenti P8 öncesi üretilmiş kampanya. `campaigns_audience_languages_check`: `audience_languages IS NULL OR (audience_matched IS NOT NULL AND jsonb_typeof(audience_languages) = 'object')` |
 | `longest_first_name`, `longest_last_name`, `longest_city` | integer | NULL, ≥ 0; segment üretiminde `content.Longest` (eşleşen küme, izinden önce; `first_name` yedek metin dahil, boş küme → 18/0/0) |
 | `approved_content_version_id` | uuid | NULL, FK → `content_versions(id)` |
 | `scheduled_at` | timestamptz | NULL; planlanan gönderim anı (0008, D62). Mikrosaniye hassasiyet, UTC yazılır |
@@ -157,6 +158,8 @@ Geçiş tetikleyicisi `campaigns_state_transition_trg` (BEFORE UPDATE OF state):
 | `validation_errors` | jsonb | NOT NULL DEFAULT `'[]'`; `FieldError` dizisi |
 | `llm_attempts` | integer | NULL (`source='edit'` ise NULL) |
 | `worst_case_sms_runes`, `worst_case_subject_runes` | integer | NULL; şablon söz dizimi geçerliyse oluşturma anındaki segmentin `longest_*` değerleriyle `content.MeasureWorstCase` sonucu |
+| `en_sms_body`, `en_email_subject`, `en_email_body` | text | NULL (0009, D63); İngilizce sürüm (NFC normalize şablon metni). `content_versions_en_all_or_none_check`: üçü birlikte NULL ya da üçü birlikte NOT NULL (boş dize olabilir: `invalid` taslak). NULL = sürümde İngilizce yok |
+| `worst_case_en_sms_runes`, `worst_case_en_subject_runes` | integer | NULL (0009); İngilizce sürümün `MeasureWorstCase` sonucu, aynı `longest_*` ile. `content_versions_worst_case_en_check`: `en_sms_body IS NULL` ⇒ ikisi de NULL; İngilizce söz dizimi geçersizse NULL |
 | `created_at` | timestamptz | NOT NULL |
 
 - `content_versions_campaign_version_key`: `UNIQUE (campaign_id, version_number)`
@@ -237,9 +240,9 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 
 | İşlem | Aynı transaction'daki yazmalar |
 |---|---|
-| Segment üretimi (P3) | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (kira sona erip başkasına geçti; D52). Aksi halde `segment_*`/`audience_*`/`longest_*` yazılır, `segment_revision + 1`; etkin onay varsa `revoked_at`, `revoke_reason = 'segment_changed'` ve `approved_content_version_id = NULL`; durum `audience_ready` |
+| Segment üretimi (P3) | Satır hâlâ bu üretimin `generation_token`'ını taşımıyorsa hiçbir yazma yok (kira sona erip başkasına geçti; D52). Aksi halde `segment_*`/`audience_*` (P8: `audience_languages` dahil)/`longest_*` yazılır, `segment_revision + 1`; etkin onay varsa `revoked_at`, `revoke_reason = 'segment_changed'` ve `approved_content_version_id = NULL`; durum `audience_ready` |
 | `editContent` ön koşulu | Satır kilidi altında, ekleme ile **aynı** transaction'da: `X-Expected-Version` = güncel `segment_revision`'daki en yüksek `version_number`'lı `validated` satırın `id`'si (satır yoksa `none`) değilse hiçbir yazma yapılmaz ve 409 `content_edit_conflict` döner (karşılaştırma ile ekleme arasına başka yazma giremez) |
-| İçerik `validated` (LLM `validated` olayı veya `editContent`) | yeni `content_versions` satırı (`status = 'validated'`, `source` = `llm`/`edit`, `segment_revision` = güncel, `worst_case_*` dolu, `validation_errors = '[]'`); durum `content_ready`; etkin onay varsa `revoke_reason = 'content_changed'` ve `approved_content_version_id = NULL` |
+| İçerik `validated` (LLM `validated` olayı veya `editContent`) | yeni `content_versions` satırı (`status = 'validated'`, `source` = `llm`/`edit`, `segment_revision` = güncel, `worst_case_*` dolu (P8: içerikte `en` varsa `en_*` ve `worst_case_en_*` de dolu, yoksa NULL), `validation_errors = '[]'`); durum `content_ready`; etkin onay varsa `revoke_reason = 'content_changed'` ve `approved_content_version_id = NULL` |
 | Saklanabilir son `invalid` taslak (LLM) | yalnız yeni `content_versions` satırı (`status = 'invalid'`, `source = 'llm'`, `validation_errors` dolu); `campaigns` ve `approvals` satırlarına dokunulmaz |
 | Diğer son `invalid` sonuçları, kopan akış, 422 ile reddedilen düzenleme | hiçbir yazma yok |
 | Onay | yeni `approvals` satırı (`content_status = 'validated'`), `approved_content_version_id` = sürüm, durum `approved` |

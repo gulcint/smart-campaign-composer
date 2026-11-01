@@ -238,6 +238,10 @@ paths:
         `validated` exactly as in sse-events.md §1; the stream always ends with `validated` or
         `invalid` with `final: true` (unless the client disconnects).
 
+        P8 (D63): the generation also asks for the English version iff the campaign's current segment has
+        English-speaking recipients (`segment.audience.languages.sms.en + email.en > 0`, REQ-LNG-02);
+        English chunks carry `language: "en"`.
+
         Allowed states: audience_ready, content_ready, approved. Errors detected before the stream
         opens are returned as JSON with the status codes below (no SSE); use-case order: 404
         `campaign_not_found`, 409 `invalid_state` (draft, scheduled, sending, completed), 409
@@ -305,11 +309,13 @@ paths:
       operationId: editContent
       summary: Human edit — creates a new validated content version (REQ-APR-01, REQ-APR-02, REQ-APR-03)
       description: |
-        Body follows schemas/content.schema.json (full content: sms.body, email.subject, email.body).
-        Goes through exactly the same content.Parse + content.Validate(c, segment.longest_values) as LLM
+        Body follows schemas/content.schema.json (full content: sms.body, email.subject, email.body, and
+        the optional English block `en`; P8, D63). A body without `en` creates a version without an
+        English version: the previous version's `en` is not carried over. Goes through exactly the same content.Parse + content.Validate(c, segment.longest_values) as LLM
         output: lengths are measured AFTER substituting every variable with the current segment's
         longest values (REQ-CNT-01/05). Invalid content => 422 and NOTHING is stored; field paths are
-        `sms.body`, `email.subject`, `email.body` (a missing or unknown key is `schema_violation` at that
+        `sms.body`, `email.subject`, `email.body` and, for the English block, `en.sms.body`,
+        `en.email.subject`, `en.email.body` (a missing or unknown key is `schema_violation` at that
         path, an empty/whitespace-only value is `required`; at most one error per field).
         Optimistic concurrency (owner decision, DECISIONS D40): the REQUIRED header `X-Expected-Version`
         names the version the editor is based on: the id of the campaign's latest content version
@@ -624,7 +630,7 @@ paths:
         deterministic: same query, same stored data, same output. `sms.text` and `email.subject`/`email.text`
         are plain text (never HTML); `email.html` is the only HTML and is escaped. `email.html` is content.RenderEmailHTML output: every
         template and variable fragment is HTML-escaped, it contains no element other than the
-        fixed skeleton (no script element), and the UI shows it only in a sandboxed iframe.
+        fixed skeleton (no script element), and the UI shows it only in a sandboxed iframe. P8: `email.html` is `content.RenderEmailHTMLLang(language, subject, text)`, so `<html lang>` follows the shown language.
       parameters:
         - name: customer_id
           in: query
@@ -634,6 +640,14 @@ paths:
           in: query
           required: false
           schema: { type: string, format: uuid }
+        - name: language
+          in: query
+          required: false
+          description: |
+            P8 (D63). `tr` | `en`. Default: the sample customer's own language. `tr` always renders the Turkish main copy.
+            `en` renders the English version of the content, or the Turkish main copy with `fallback: true` when the
+            version has no `en` block. Any other value => 422 `invalid_value` (path `query.language`).
+          schema: { type: string, enum: [tr, en] }
         - name: sample_index
           in: query
           required: false
@@ -951,6 +965,28 @@ components:
         matched: { type: integer, minimum: 0, description: 'Customers matched by the rule, consent ignored' }
         sms: { type: integer, minimum: 0, description: 'matched AND sms_opt_in AND phone present' }
         email: { type: integer, minimum: 0, description: 'matched AND email_opt_in AND email present' }
+        languages:
+          description: |
+            P8 (D63). Per-channel split of `sms` / `email` by `customers.language` (`tr` + `en` = the channel count).
+            Always present in new responses; absent only for a campaign whose segment was generated before P8.
+            English content is generated only when `languages.sms.en + languages.email.en > 0` (REQ-LNG-02).
+          $ref: '#/components/schemas/AudienceLanguages'
+
+    AudienceLanguages:
+      type: object
+      additionalProperties: false
+      required: [sms, email]
+      properties:
+        sms: { $ref: '#/components/schemas/LanguageCounts' }
+        email: { $ref: '#/components/schemas/LanguageCounts' }
+
+    LanguageCounts:
+      type: object
+      additionalProperties: false
+      required: [tr, en]
+      properties:
+        tr: { type: integer, minimum: 0 }
+        en: { type: integer, minimum: 0 }
 
     EmptyObject:
       type: object
@@ -994,6 +1030,14 @@ components:
       properties:
         sms_runes: { type: integer }
         subject_runes: { type: integer }
+        en:
+          description: P8. Same two lengths for the English version; the key is absent when the version has no `en` block.
+          type: object
+          additionalProperties: false
+          required: [sms_runes, subject_runes]
+          properties:
+            sms_runes: { type: integer }
+            subject_runes: { type: integer }
 
     SegmentResult:
       type: object
@@ -1038,6 +1082,25 @@ components:
           properties:
             subject: { type: string }
             body: { type: string }
+        en:
+          description: P8. English version (optional); same shape and the same empty-value allowance as the Turkish main copy.
+          type: object
+          additionalProperties: false
+          required: [sms, email]
+          properties:
+            sms:
+              type: object
+              additionalProperties: false
+              required: [body]
+              properties:
+                body: { type: string }
+            email:
+              type: object
+              additionalProperties: false
+              required: [subject, body]
+              properties:
+                subject: { type: string }
+                body: { type: string }
 
     ContentVersion:
       type: object
@@ -1075,12 +1138,13 @@ components:
           validation_errors: { minItems: 1 }
 
     ContentDeltaEvent:
-      description: Data of SSE event `delta` (sse-events.md §1.1). Valid (channel, field) pairs are (sms, body), (email, subject), (email, body).
+      description: Data of SSE event `delta` (sse-events.md §1.1). Valid (channel, field) pairs are (sms, body), (email, subject), (email, body); with `language` = `en` the same three pairs of the English version.
       type: object
       additionalProperties: false
       required: [attempt, channel, field, text]
       properties:
         attempt: { type: integer, enum: [1, 2], description: '2 = repair attempt' }
+        language: { type: string, const: en, description: 'P8 (D63). Present only on English chunks (two-language generation); the key is absent on Turkish chunks.' }
         channel: { $ref: '#/components/schemas/Channel' }
         field: { type: string, enum: [body, subject] }
         text: { type: string, minLength: 1, description: 'Non-empty chunk; concatenated in order per (attempt, channel, field).' }
@@ -1323,6 +1387,9 @@ components:
             first_name: { type: string, description: Raw value (may be empty) }
             last_name: { type: string }
             city: { type: string }
+            language: { type: string, enum: [tr, en], description: 'P8. The sample customer''s own language (customers.language). Always returned by the server.' }
+        language: { type: string, enum: [tr, en], description: 'P8. Language of the rendered text. Always returned by the server.' }
+        fallback: { type: boolean, description: 'P8. True iff English was wanted (language=en, or the sample customer is English and no language was given) but the version has no `en` block, so the Turkish main copy is shown. Always returned by the server.' }
         sms:
           type: object
           additionalProperties: false

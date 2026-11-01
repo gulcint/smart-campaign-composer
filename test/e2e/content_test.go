@@ -79,11 +79,14 @@ type worstCaseDoc struct {
 	SubjectRunes int `json:"subject_runes"`
 }
 
+// deltaData is one delta event; Language is "en" for English fields and absent ("") for Turkish
+// (REQ-LNG-02 C7).
 type deltaData struct {
-	Attempt int    `json:"attempt"`
-	Channel string `json:"channel"`
-	Field   string `json:"field"`
-	Text    string `json:"text"`
+	Attempt  int    `json:"attempt"`
+	Channel  string `json:"channel"`
+	Field    string `json:"field"`
+	Text     string `json:"text"`
+	Language string `json:"language"`
 }
 
 type invalidData struct {
@@ -164,11 +167,35 @@ type genResult struct {
 	final     *invalidData
 }
 
-// text concatenates the delta texts of one attempt per (channel, field).
-func (g genResult) text(attempt int) contentDoc {
+// text concatenates the Turkish delta texts (no language key) of one attempt per (channel, field).
+func (g genResult) text(attempt int) contentDoc { return g.textLang(attempt, "") }
+
+// textEN concatenates the English delta texts (language "en") of one attempt (REQ-LNG-02 C7).
+func (g genResult) textEN(attempt int) contentDoc { return g.textLang(attempt, "en") }
+
+// validatedEN is content.en of the validated event (nil when absent).
+func (g genResult) validatedEN(t *testing.T) *contentDoc {
+	t.Helper()
+	for i := len(g.events) - 1; i >= 0; i-- {
+		if g.events[i].Name != "validated" {
+			continue
+		}
+		var v struct {
+			Content struct {
+				EN *contentDoc `json:"en"`
+			} `json:"content"`
+		}
+		mustUnmarshal(t, g.events[i].Data, &v)
+		return v.Content.EN
+	}
+	return nil
+}
+
+// textLang groups the deltas of one attempt by (language, channel, field); "" is Turkish.
+func (g genResult) textLang(attempt int, lang string) contentDoc {
 	var sms, subj, body strings.Builder
 	for _, d := range g.deltas {
-		if d.Attempt != attempt {
+		if d.Attempt != attempt || d.Language != lang {
 			continue
 		}
 		switch d.Channel + "." + d.Field {
@@ -493,9 +520,9 @@ func readGroups(t *testing.T) groupsDoc {
 
 // ---- generateContent ----
 
-// REQ-CNT-04, REQ-AI-01, REQ-CNT-05, REQ-AUD-04
+// REQ-CNT-04, REQ-AI-01, REQ-CNT-05, REQ-AUD-04, REQ-LNG-02 C1, C4, C7
 // Scenario ok end to end: deltas then validated (attempt 1); the deltas of each field concatenate
-// to the validated content (CNT_OK); worst_case uses the manifest's longest first name; the version
+// to the validated content (CNT_OK_EN: Turkish CNT_OK plus en, grouped by language); worst_case uses the manifest's longest first name; the version
 // is stored (validated, source llm) and is the campaign's latest; the state is content_ready; the
 // audience (consent filtered) is untouched by content.
 func TestE2E_ContentGenerateValidated(t *testing.T) {
@@ -514,6 +541,15 @@ func TestE2E_ContentGenerateValidated(t *testing.T) {
 	}
 	if diff := cmp.Diff(okDoc(), v.Content); diff != "" {
 		t.Fatalf("validated content mismatch (-want +got):\n%s", diff)
+	}
+	// REQ-LNG-02 C1, C4, C7: the example audience has English recipients => CNT_OK_EN; the English
+	// deltas concatenate to content.en.
+	en := g.validatedEN(t)
+	if en == nil {
+		t.Fatalf("validated content has no en; the example audience has English recipients")
+	}
+	if diff := cmp.Diff(*en, g.textEN(1)); diff != "" {
+		t.Fatalf("English delta concatenation mismatch with content.en (-want +got):\n%s", diff)
 	}
 	wantWC := worstCaseDoc{SMSRunes: e2eSMSVarFree + m.ExampleBrief.LongestValues.FirstName, SubjectRunes: utf8.RuneCountInString(e2eOKSubject)}
 	if v.WorstCase != wantWC || v.VersionNumber != 1 || v.Attempt != 1 {
@@ -548,7 +584,7 @@ func TestE2E_ContentGenerateValidated(t *testing.T) {
 	assertExampleCount(t, api, m)
 }
 
-// REQ-CNT-04, REQ-AI-01
+// REQ-CNT-04, REQ-AI-01, REQ-LNG-02 C8
 // then_ok_after_repair: attempt 1 fails (non-final invalid, sms.body sms_too_long 161, null id),
 // the deltas restart with attempt 2 and the stream ends with validated attempt 2; one stored
 // version with llm_attempts 2. The request body {} is accepted like no body.
@@ -575,6 +611,14 @@ func TestE2E_ContentRepairAttempt(t *testing.T) {
 	}
 	if diff := cmp.Diff(okDoc(), g.text(2)); diff != "" {
 		t.Fatalf("attempt 2 delta concatenation mismatch (-want +got):\n%s", diff)
+	}
+	// REQ-LNG-02 C8: attempt 2 regenerates both language versions.
+	en := g.validatedEN(t)
+	if en == nil {
+		t.Fatalf("validated content has no en; the example audience has English recipients")
+	}
+	if diff := cmp.Diff(*en, g.textEN(2)); diff != "" {
+		t.Fatalf("attempt 2 English delta concatenation mismatch with content.en (-want +got):\n%s", diff)
 	}
 	list := listVersions(t, api, id)
 	if len(list) != 1 || list[0].LLMAttempts == nil || *list[0].LLMAttempts != 2 || list[0].Status != "validated" {

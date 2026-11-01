@@ -39,17 +39,28 @@ export function fieldKeyOfPath(path: string): FieldKey | null {
   }
 }
 
-/** Splits field errors by field; `""` (and unmapped) paths are added to every field. */
-export function routeFieldErrors(errors: readonly FieldError[]): Record<FieldKey, FieldError[]> {
+const isEnPath = (path: string) => path === 'en' || path.startsWith('en.')
+
+/**
+ * Splits field errors by field for one language (P8, ui.md §5.2); `""` (and unmapped) paths
+ * are added to every field. `en.`-prefixed paths belong to `en` only, other mapped paths to `tr`.
+ */
+export function routeFieldErrors(
+  errors: readonly FieldError[],
+  language: 'tr' | 'en' = 'tr',
+): Record<FieldKey, FieldError[]> {
   const out: Record<FieldKey, FieldError[]> = {
     'sms-body': [],
     'email-subject': [],
     'email-body': [],
   }
   for (const e of errors) {
-    const key = fieldKeyOfPath(e.path)
-    if (key) out[key].push(e)
-    else for (const k of FIELD_KEYS) out[k].push(e)
+    const en = isEnPath(e.path)
+    if (language === 'tr' && en) continue
+    const key = fieldKeyOfPath(language === 'en' && en ? e.path.slice(3) : e.path)
+    if (key) {
+      if ((language === 'en') === en) out[key].push(e)
+    } else for (const k of FIELD_KEYS) out[k].push(e)
   }
   return out
 }
@@ -81,6 +92,12 @@ function asValidated(d: unknown): ContentValidatedEvent | null {
   if (!isObj(c) || !isObj(c.sms) || !isObj(c.email)) return null
   if (typeof c.sms.body !== 'string') return null
   if (typeof c.email.subject !== 'string' || typeof c.email.body !== 'string') return null
+  if (c.en !== undefined) {
+    const en = c.en
+    if (!isObj(en) || !isObj(en.sms) || !isObj(en.email)) return null
+    if (typeof en.sms.body !== 'string') return null
+    if (typeof en.email.subject !== 'string' || typeof en.email.body !== 'string') return null
+  }
   const wc = d.worst_case
   if (!isObj(wc) || typeof wc.sms_runes !== 'number' || typeof wc.subject_runes !== 'number') {
     return null
@@ -97,6 +114,13 @@ export function useContentGeneration() {
     'email-subject': { text: '', phase: 'idle', errors: [] },
     'email-body': { text: '', phase: 'idle', errors: [] },
   })
+  /** P8: English version; stays idle/empty when the run has no `language: "en"` chunks. */
+  const enFields = reactive<Record<FieldKey, FieldState>>({
+    'sms-body': { text: '', phase: 'idle', errors: [] },
+    'email-subject': { text: '', phase: 'idle', errors: [] },
+    'email-body': { text: '', phase: 'idle', errors: [] },
+  })
+  const hasEnglish = ref(false)
   const versionStatus = ref<VersionStatus>('none')
   const versionId = ref<string | null>(null)
   const worstCase = ref<WorstCase | null>(null)
@@ -109,18 +133,23 @@ export function useContentGeneration() {
   let run = 0
   let disposed = false
 
+  /** The field sets of the languages in play: English only once it has shown up. */
+  const groups = () => (hasEnglish.value ? [fields, enFields] : [fields])
+
   function setAll(phase: ContentPhase, clearText: boolean) {
-    for (const k of FIELD_KEYS) {
-      fields[k].phase = phase
-      fields[k].errors = []
-      if (clearText) fields[k].text = ''
+    for (const g of groups()) {
+      for (const k of FIELD_KEYS) {
+        g[k].phase = phase
+        g[k].errors = []
+        if (clearText) g[k].text = ''
+      }
     }
   }
 
   function interrupt() {
-    for (const k of FIELD_KEYS) {
-      if (fields[k].phase !== 'validated' && fields[k].phase !== 'invalid') {
-        fields[k].phase = 'interrupted'
+    for (const g of groups()) {
+      for (const k of FIELD_KEYS) {
+        if (g[k].phase !== 'validated' && g[k].phase !== 'invalid') g[k].phase = 'interrupted'
       }
     }
     versionStatus.value = 'interrupted'
@@ -141,6 +170,12 @@ export function useContentGeneration() {
     const live = () => token === run && !disposed
 
     setAll('streaming', true)
+    for (const k of FIELD_KEYS) {
+      enFields[k].phase = 'idle'
+      enFields[k].errors = []
+      enFields[k].text = ''
+    }
+    hasEnglish.value = false
     versionStatus.value = 'streaming'
     versionId.value = null
     worstCase.value = null
@@ -214,8 +249,10 @@ export function useContentGeneration() {
         attempt.value = data.attempt as number
         const key = DELTA_FIELD[`${String(data.channel)}:${String(data.field)}`]
         if (!key) return
-        fields[key].text += data.text
-        fields[key].phase = 'streaming'
+        const target = data.language === 'en' ? enFields : fields
+        if (data.language === 'en') hasEnglish.value = true
+        target[key].text += data.text
+        target[key].phase = 'streaming'
       } else if (m.event === 'invalid') {
         const ev = asInvalid(data)
         if (!ev) {
@@ -228,10 +265,17 @@ export function useContentGeneration() {
           return
         }
         terminal = true
+        // A malformed `en` block (no English deltas) still needs its tab and errors.
+        if (ev.errors.some((e) => isEnPath(e.path))) hasEnglish.value = true
         const routed = routeFieldErrors(ev.errors)
+        const routedEn = routeFieldErrors(ev.errors, 'en')
         for (const k of FIELD_KEYS) {
           fields[k].phase = 'invalid'
           fields[k].errors = routed[k]
+          if (hasEnglish.value) {
+            enFields[k].phase = 'invalid'
+            enFields[k].errors = routedEn[k]
+          }
         }
         versionId.value = ev.content_version_id
         versionStatus.value = 'invalid'
@@ -246,6 +290,12 @@ export function useContentGeneration() {
         fields['sms-body'].text = ev.content.sms.body
         fields['email-subject'].text = ev.content.email.subject
         fields['email-body'].text = ev.content.email.body
+        if (ev.content.en) {
+          hasEnglish.value = true
+          enFields['sms-body'].text = ev.content.en.sms.body
+          enFields['email-subject'].text = ev.content.en.email.subject
+          enFields['email-body'].text = ev.content.en.email.body
+        }
         setAll('validated', false)
         versionId.value = ev.content_version_id
         worstCase.value = ev.worst_case
@@ -295,5 +345,16 @@ export function useContentGeneration() {
     })
   }
 
-  return { start, abort, fields, versionStatus, versionId, worstCase, attempt, error }
+  return {
+    start,
+    abort,
+    fields,
+    enFields,
+    hasEnglish,
+    versionStatus,
+    versionId,
+    worstCase,
+    attempt,
+    error,
+  }
 }
