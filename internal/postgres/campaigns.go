@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -346,10 +347,15 @@ func (v *variantCols) apply(c *content.Content, wc *content.WorstCase) {
 	}
 }
 
-// variantArgs are the INSERT values of variantColumnNames for c (NULL without variant B).
-func variantArgs(c content.Content, wc *content.WorstCase) []any {
+// variantArgs are the INSERT values of variantColumnNames for c (NULL without variant B). B
+// without angles (or angles without B) is an error: content.Parse never yields it, and storing
+// it would silently drop variant B.
+func variantArgs(c content.Content, wc *content.WorstCase) ([]any, error) {
+	if (c.B == nil) != (c.Angles == nil) {
+		return nil, errors.New("postgres: variant B and angles must be set together")
+	}
 	var v variantCols
-	if b := c.B; b != nil && c.Angles != nil {
+	if b := c.B; b != nil {
 		v.sms, v.subject, v.body = &b.SMS.Body, &b.Email.Subject, &b.Email.Body
 		v.angleA, v.angleB = &c.Angles.A, &c.Angles.B
 		if b.EN != nil {
@@ -363,7 +369,7 @@ func variantArgs(c content.Content, wc *content.WorstCase) []any {
 		}
 	}
 	return []any{v.sms, v.subject, v.body, v.angleA, v.angleB, v.enSMS, v.enSubject, v.enBody,
-		v.wcSMS, v.wcSub, v.wcENSMS, v.wcENSub}
+		v.wcSMS, v.wcSub, v.wcENSMS, v.wcENSub}, nil
 }
 
 // nullableJSON maps an empty document to SQL NULL.

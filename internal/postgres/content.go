@@ -271,7 +271,11 @@ func (s *CampaignStore) writeContentVersion(ctx context.Context, id string, deci
 	args := []any{w.ID, id, number, lc.SegmentRevision, string(w.Status), string(w.Source),
 		w.Content.SMS.Body, w.Content.Email.Subject, w.Content.Email.Body, string(errJSON), w.LLMAttempts,
 		wcSMS, wcSub, enSMS, enSub, enBody, wcENSMS, wcENSub, w.CreatedAt}
-	args = append(args, variantArgs(w.Content, w.WorstCase)...)
+	vargs, err := variantArgs(w.Content, w.WorstCase)
+	if err != nil {
+		return campaign.ContentVersion{}, err
+	}
+	args = append(args, vargs...)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO content_versions (id, campaign_id, version_number, segment_revision, status, source,
 			sms_body, email_subject, email_body, validation_errors, llm_attempts,
