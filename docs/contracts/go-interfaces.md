@@ -248,7 +248,19 @@ func (r Rule) MarshalJSON() ([]byte, error)
 // group over MaxDepth, as Validate), more than MaxConditions+1 conditions => max_conditions_exceeded
 // (path "rule"). At most 20 field errors. Errors: *validation.Error matching
 // validation.ErrInvalidJSON or validation.ErrSchemaViolation (or those two limit sentinels).
+// After the structural checks pass, Parse rewrites every "city" condition with op eq/neq/in/not_in:
+// a string value -> CanonicalCity(value); an array whose elements are ALL strings -> CanonicalCity of
+// each element, then exact duplicates removed (first occurrence kept, order preserved). Any other
+// value is left untouched for Validate. Validate/Compile/Match and Rule.MarshalJSON therefore see the
+// canonical spelling (segment-dsl.md §2.1, D66). A Rule built in code bypasses this rewrite.
 func Parse(raw []byte) (Rule, error)
+
+// CanonicalCity returns the canonical seed spelling (segment-dsl.md §2: "İstanbul", "Ankara", "İzmir",
+// "Bursa", "Antalya", "Adana", "Konya", "Gaziantep", "Kayseri", "Eskişehir") when the fold of s
+// (NFC, strings.TrimSpace, then the rune table of segment-dsl.md §2.1) equals the fold of one of them;
+// otherwise it returns s after NFC + TrimSpace, unchanged. Never fails; "Kars" -> "Kars",
+// "ISTANBUL" -> "İstanbul", "  Bursa " -> "Bursa". Pure function, safe for concurrent use.
+func CanonicalCity(s string) string
 
 // Validate performs semantic checks and returns nil or a *validation.Error with every problem
 // (segment-dsl.md §1.1, §3, §7.3). Field errors match these sentinels:

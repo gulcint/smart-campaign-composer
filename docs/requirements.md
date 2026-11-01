@@ -84,6 +84,28 @@ Hata gövdesinin biçimi `docs/contracts/` içinde tanımlanır.
 - Geçerli kural kabul edilir.
 - Model çıktısı doğrulamayı geçemezse bir düzeltme denemesi yapılır (REQ-AI-01); yine geçemezse **502** döner ve kampanya durumu değişmez.
 - İzinli alanlar ve operatörler `docs/contracts/` içinde sabittir.
+- **Şehir yazımı kanonikleştirilir (D66).** `city` koşulunun değeri büyük/küçük harf ve Türkçe karakter farkına bakılmadan eşleşir: kural çözülürken (`segment.Parse`) değer kanonik yazıma çevrilir, veritabanı karşılaştırması kanonik değer üzerinde birebir kalır. Kanonik şehirler (seed'deki on değer): `İstanbul`, `Ankara`, `İzmir`, `Bursa`, `Antalya`, `Adana`, `Konya`, `Gaziantep`, `Kayseri`, `Eskişehir`.
+  - Go: `segment.CanonicalCity(s string) string`. Önce `s` Unicode NFC'ye getirilir ve baştaki/sondaki boşluklar (`unicode.IsSpace`) kırpılır; sonucun **katlaması** bir kanonik şehrin katlamasına eşitse o kanonik yazım, değilse kırpılmış NFC metin olduğu gibi döner (hata yok). Katlama (karşılaştırma anahtarı; hiçbir yerde saklanmaz, gösterilmez) NFC + kırpma sonrası rune rune şu tabloyla yapılır, tabloda olmayan rune `unicode.ToLower` ile küçültülür; iç boşluklar olduğu gibi kalır:
+
+    | Girdi rune'ları | Katlama |
+    |---|---|
+    | `I` U+0049, `i` U+0069, `İ` U+0130, `ı` U+0131, `Î` U+00CE, `î` U+00EE | `i` |
+    | `Ş` U+015E, `ş` U+015F | `s` |
+    | `Ğ` U+011E, `ğ` U+011F | `g` |
+    | `Ü` U+00DC, `ü` U+00FC, `Û` U+00DB, `û` U+00FB | `u` |
+    | `Ö` U+00D6, `ö` U+00F6 | `o` |
+    | `Ç` U+00C7, `ç` U+00E7 | `c` |
+    | `Â` U+00C2, `â` U+00E2 | `a` |
+    | U+0307 (birleşik üst nokta; `i̇` = `i` + U+0307) | silinir |
+
+  - Örnekler (`segment.CanonicalCity` girdisi → çıktısı): `Istanbul` → `İstanbul`; `istanbul` → `İstanbul`; `ISTANBUL` → `İstanbul`; `İSTANBUL` → `İstanbul`; `İstanbul` → `İstanbul`; `ıstanbul` → `İstanbul`; `i̇stanbul` (`i` + U+0307 + `stanbul`) → `İstanbul`; NFD `İstanbul` (`I` + U+0307 + `stanbul`) → `İstanbul` (NFC); `izmir` → `İzmir`; `IZMIR` → `İzmir`; `ESKISEHIR` → `Eskişehir`; `eskişehir` → `Eskişehir`; `Eskisehir` → `Eskişehir`; `gaziantep` → `Gaziantep`; `  Bursa ` → `Bursa`; `Kars` → `Kars`; `  Kars ` → `Kars`; `kars` → `kars` (kanonik karşılığı yok, yazıldığı gibi kalır); `İstanbul'da` → `İstanbul'da` (alt dizgi eşleşmesi yok); `Is tanbul` → `Is tanbul`; `"   "` → `""`.
+  - Kapsam: `city` alanının dört operatörü (`eq`, `neq`, `in`, `not_in`); `in`/`not_in` dizisinin **her** elemanı ayrı ayrı çevrilir. Yalnız string değer veya tamamı string olan dizi çevrilir; başka tipteki değer dokunulmadan bırakılır ve doğrulama onu bugünkü gibi `type_mismatch` ile reddeder. Diğer alanların değerleri değişmez.
+  - Tekilleştirme: çeviriden sonra dizide birebir aynı olan elemanlardan **ilki kalır, sıra korunur**: `{"field":"city","op":"in","value":["Istanbul","Ankara","İstanbul","istanbul"]}` → `["İstanbul","Ankara"]`. Kanonik karşılığı olmayan değerler yalnız birebir aynıysa tekilleşir (`["Kars","kars"]` iki eleman kalır).
+  - Doğrulama (`segment.Validate`) çevrilmiş kural üzerinde çalışır: uzunluk (1..100 karakter) ve dizi uzunluğu (1..20) çeviri ve tekilleştirme **sonrası** değere göre denetlenir; yalnız boşluktan oluşan değer (`"   "`) `""` olur ve `invalid_value` ile reddedilir.
+  - Çevrilmiş kural saklanır ve döner: `segment.Parse` çıktısının `Rule.MarshalJSON`'ı kanonik değeri taşır (`{"rule":{"all":[{"field":"city","op":"eq","value":"Istanbul"}]}}` → `{"all":[{"field":"city","op":"eq","value":"İstanbul"}]}`). Model çıktısı `Istanbul` içerdiğinde (test içi sahte `llm.Client`; yeni sahte LLM senaryo adı yoktur) `campaign.NewService` ile `GenerateSegment` sonrası `Get` ve `GET /api/campaigns/{campaign_id}` yanıtındaki `segment.rule` `İstanbul` taşır; arayüz kuralı "Şehir = İstanbul" gösterir.
+  - Kitle sayısı yazımdan bağımsızdır: seed üzerinde `POST /api/segments/count` ile `{"rule":{"all":[{"field":"city","op":"eq","value":"Istanbul"}]}}`, `istanbul`, `ISTANBUL` ve `İSTANBUL` için dönen `audience` (`matched`, `sms`, `email`) `İstanbul` ile aynıdır ve `matched > 0`'dır; `neq` ve `not_in` için de aynı eşitlik geçerlidir. `Kars` için yanıt **200** ve `matched = 0`'dır (422 değil).
+  - Şehir koşulu hiçbir zaman düşürülmez: backend bir `city` koşulunu kuraldan çıkarmaz ve bilinmeyen şehri hata saymaz; brief'teki şehrin kurala girmesi model yönlendirmesidir (sistem talimatı), backend doğrulamasının konusu değildir.
+  - SQL parametreli kalır (REQ-AUD-02): çeviri Go'da `segment.Compile`'dan önce yapılır; `Where` metninde şehir değeri bulunmaz, kanonik değer `Args` içinde yer alır; `lower()`, `unaccent` veya `ILIKE` kullanılmaz.
 
 ### REQ-AUD-02 — LLM çıktısı SQL olarak çalıştırılmaz · Faz P3 · [DOK]
 > "LLM çıktısı doğrudan SQL olarak çalıştırılmaz."
@@ -610,7 +632,7 @@ Her test fonksiyonu `// REQ-XXX-NN` yorumu taşır. Faz kapılarında testsiz RE
 | REQ | Test katmanı | Test dosyası | Test adı |
 |---|---|---|---|
 | REQ-AUD-00 | unit, integration, e2e | | |
-| REQ-AUD-01 | unit, e2e | | |
+| REQ-AUD-01 | unit, integration, e2e | | |
 | REQ-AUD-02 | unit, integration, e2e | | |
 | REQ-AUD-03 | integration, e2e, web-unit | | |
 | REQ-AUD-04 | integration, delivery, e2e | | |
