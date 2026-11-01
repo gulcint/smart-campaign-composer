@@ -148,6 +148,72 @@ paths:
         '422': { $ref: '#/components/responses/ValidationFailed' }
         '500': { $ref: '#/components/responses/InternalError' }
 
+  /api/campaign-summaries:
+    get:
+      tags: [campaigns]
+      operationId: listCampaignSummaries
+      summary: Campaign overview for the brief screen panel (REQ-DSH-01, P10, D65)
+      description: |
+        Read-only. One page of small campaign summaries (no segment rule, no content bodies, no recipient
+        address) plus `overview`, the counts over ALL campaigns (independent of `state`, `order`, `limit`,
+        `offset`). The page, the per-item delivery counts, `total` and `overview` are read in ONE read-only
+        REPEATABLE READ transaction, so a single response is one consistent snapshot: e.g. with
+        `state=scheduled`, `total` == `overview.campaigns.scheduled`. Delivery counts are variant-agnostic
+        (every delivery row counts once, A and B together; no `by_variant` here).
+        Query validation: every invalid parameter is reported in ONE 422 `validation_failed`, field code
+        `invalid_value`, `fields[]` in the order state, order, limit, offset (paths `query.state`,
+        `query.order`, `query.limit`, `query.offset`). A repeated parameter: only its first value is read.
+      parameters:
+        - name: state
+          in: query
+          required: false
+          description: |
+            Comma-separated list of CampaignState values (e.g. `state=sending,completed`; the comma may be
+            percent-encoded as `%2C`). Absent => no filter. Present but empty (`state=`), an empty element
+            (`state=sending,`, `state=,sending`, `state=sending,,completed`), an unknown or differently cased
+            value (`state=sent`, `state=Sending`) or surrounding spaces (`state=sending, completed`) => 422
+            invalid_value (path query.state). Duplicates are allowed and count once.
+          schema:
+            type: string
+            pattern: '^(draft|audience_ready|content_ready|approved|scheduled|sending|completed)(,(draft|audience_ready|content_ready|approved|scheduled|sending|completed))*$'
+          example: sending,completed
+        - name: order
+          in: query
+          required: false
+          description: |
+            `recent` (default) = created_at DESC, then id ASC. `scheduled_at` = scheduled_at ASC with NULLs
+            last, then id ASC. (`id` ASC = the lowercase UUID text order.) Unknown or empty value (`order=`) =>
+            422 invalid_value (path query.order).
+          schema: { type: string, enum: [recent, scheduled_at], default: recent }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: OK. `items` is always an array (empty past the end).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignSummaryPage' }
+              example:
+                items:
+                  - id: 7d0c1f9e-3b8a-4c52-9e41-2f6a8d1b5c30
+                    brief: "Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder."
+                    state: completed
+                    audience: { matched: 412, sms: 342, email: 361 }
+                    scheduled_at: null
+                    sending_started_at: '2026-11-02T09:15:04.120511Z'
+                    completed_at: '2026-11-02T09:15:21.904377Z'
+                    created_at: '2026-11-02T09:12:40.003154Z'
+                    updated_at: '2026-11-02T09:15:21.904377Z'
+                    deliveries: { total: 703, queued: 0, sending: 0, sent: 689, failed: 14 }
+                total: 1
+                limit: 5
+                offset: 0
+                overview:
+                  campaigns: { total: 9, draft: 2, audience_ready: 1, content_ready: 1, approved: 0, scheduled: 2, sending: 0, completed: 3 }
+                  deliveries: { total: 2104, queued: 0, sending: 0, sent: 2061, failed: 43 }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
   /api/campaigns/{campaign_id}:
     parameters:
       - $ref: '#/components/parameters/CampaignId'
@@ -1331,6 +1397,80 @@ components:
         total: { type: integer }
         limit: { type: integer }
         offset: { type: integer }
+
+    CampaignSummary:
+      type: object
+      additionalProperties: false
+      description: |
+        P10 (D65). One row of listCampaignSummaries. Reads the same columns as Campaign; deliberately has no
+        segment rule, no content version, no approval and no recipient address (REQ-SEC-01 spirit).
+      required: [id, brief, state, audience, scheduled_at, sending_started_at, completed_at, created_at, updated_at, deliveries]
+      properties:
+        id: { type: string, format: uuid }
+        brief: { type: string, description: 'Full stored brief (NFC, trimmed); the UI shortens it' }
+        state: { $ref: '#/components/schemas/CampaignState' }
+        audience:
+          description: Segment audience of the current segment (same numbers as Campaign.segment.audience); null iff the campaign has no segment (state draft).
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [matched, sms, email]
+              properties:
+                matched: { type: integer, minimum: 0 }
+                sms: { type: integer, minimum: 0 }
+                email: { type: integer, minimum: 0 }
+            - type: 'null'
+        scheduled_at: { $ref: '#/components/schemas/ScheduledAt' }
+        sending_started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        deliveries:
+          description: |
+            null in draft, audience_ready, content_ready, approved and scheduled. In sending and completed always
+            an object, equal to GET /api/campaigns/{campaign_id}/status `counts` at the same moment (all 0 for a
+            send whose two audiences were empty). Variant-agnostic (A + B).
+          oneOf: [ { $ref: '#/components/schemas/StatusCounts' }, { type: 'null' } ]
+
+    CampaignStateCounts:
+      type: object
+      additionalProperties: false
+      description: P10 (D65). Campaign count per state; every key always present (0 when none); total = sum of the seven states.
+      required: [total, draft, audience_ready, content_ready, approved, scheduled, sending, completed]
+      properties:
+        total: { type: integer, minimum: 0 }
+        draft: { type: integer, minimum: 0 }
+        audience_ready: { type: integer, minimum: 0 }
+        content_ready: { type: integer, minimum: 0 }
+        approved: { type: integer, minimum: 0 }
+        scheduled: { type: integer, minimum: 0 }
+        sending: { type: integer, minimum: 0 }
+        completed: { type: integer, minimum: 0 }
+
+    CampaignOverview:
+      type: object
+      additionalProperties: false
+      description: P10 (D65). Counts over ALL campaigns, independent of the request's filter and paging.
+      required: [campaigns, deliveries]
+      properties:
+        campaigns: { $ref: '#/components/schemas/CampaignStateCounts' }
+        deliveries:
+          description: Sum of every campaign's delivery counters (all delivery rows, both channels, both variants).
+          $ref: '#/components/schemas/StatusCounts'
+
+    CampaignSummaryPage:
+      type: object
+      additionalProperties: false
+      description: P10 (D65). Response of listCampaignSummaries.
+      required: [items, total, limit, offset, overview]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CampaignSummary' }
+        total: { type: integer, minimum: 0, description: 'Campaigns matching `state` (all campaigns without it), independent of limit and offset' }
+        limit: { type: integer, description: The effective limit (default 50) }
+        offset: { type: integer, description: The effective offset (default 0) }
+        overview: { $ref: '#/components/schemas/CampaignOverview' }
 
     VersionRef:
       type: object

@@ -1304,6 +1304,96 @@ type Deps struct {
 
 func NewService(d Deps) Service
 
+// ---- Campaign summaries: brief-screen overview panel (P10, D65; openapi listCampaignSummaries) ----
+
+// SummaryLister is a separate read-only port, NOT a method of Service: adding a method to Service
+// would break every fake Service of the existing httpapi tests (D65, P9 D64 item 3 pattern). The
+// handler of GET /api/campaign-summaries is its only HTTP caller (httpapi.Deps.Summaries).
+type SummaryLister interface {
+	// ListSummaries runs the page query, the per-item delivery counts, total and the overview in ONE
+	// read-only REPEATABLE READ transaction (one consistent snapshot). Expects a filter produced by
+	// ParseSummaryFilter (a zero Limit means DefaultPageLimit); it does not re-validate. Errors: only
+	// infrastructure errors (=> 500); an empty result is not an error.
+	ListSummaries(ctx context.Context, f SummaryFilter) (SummaryPage, error)
+}
+
+// NewSummaryLister builds the lister on the same Deps as NewService (only Deps.Store and Deps.Logger
+// are used). The concrete type behind NewService also implements SummaryLister; cmd/api passes
+// NewSummaryLister(deps) to httpapi.Deps.Summaries.
+func NewSummaryLister(d Deps) SummaryLister
+
+const (
+	SummaryOrderRecent      = "recent"       // created_at DESC, id ASC (default)
+	SummaryOrderScheduledAt = "scheduled_at" // scheduled_at ASC NULLS LAST, id ASC
+)
+
+// SummaryFilter: States empty = no filter (duplicates removed, order irrelevant).
+type SummaryFilter struct {
+	States        []State
+	Order         string // SummaryOrderRecent | SummaryOrderScheduledAt
+	Limit, Offset int
+}
+
+// ParseSummaryFilter turns the query of GET /api/campaign-summaries into a filter (pure; unit-testable).
+// Reads only the FIRST value of each parameter. Every invalid parameter yields one FieldError
+// {Path "query.<name>", Code validation.CodeInvalidValue}, collected in the order state, order,
+// limit, offset into ONE *validation.Error (handler => 422 validation_failed). Rules:
+//   - state absent => no filter; present: split on ","; the value "" or any empty element, an unknown
+//     or differently cased value, or an element with spaces => invalid; duplicates kept once.
+//   - order absent => SummaryOrderRecent; present: exactly "recent" | "scheduled_at" ("" is invalid).
+//   - limit absent or "" => DefaultPageLimit (50); otherwise an integer 1..MaxPageLimit (200).
+//   - offset absent or "" => 0; otherwise an integer >= 0. (Empty limit/offset as in listCampaigns.)
+func ParseSummaryFilter(q url.Values) (SummaryFilter, error)
+
+type SummaryAudience struct {
+	Matched int `json:"matched"`
+	SMS     int `json:"sms"`
+	Email   int `json:"email"`
+}
+
+// Summary is openapi CampaignSummary. Same columns as Campaign; no rule, content or addresses.
+type Summary struct {
+	ID               string           `json:"id"`
+	Brief            string           `json:"brief"`
+	State            State            `json:"state"`
+	Audience         *SummaryAudience `json:"audience"` // nil iff no segment (draft)
+	ScheduledAt      *time.Time       `json:"scheduled_at"`
+	SendingStartedAt *time.Time       `json:"sending_started_at"`
+	CompletedAt      *time.Time       `json:"completed_at"`
+	CreatedAt        time.Time        `json:"created_at"`
+	UpdatedAt        time.Time        `json:"updated_at"`
+	// Deliveries: nil (JSON null) in draft…approved and scheduled; non-nil in sending/completed (all
+	// zero for a send without deliveries), equal to Service.Status(id).Counts. Variant-agnostic.
+	Deliveries *StatusCounts `json:"deliveries"`
+}
+
+// StateCounts is openapi CampaignStateCounts: every state always present; Total = sum of the seven.
+type StateCounts struct {
+	Total         int `json:"total"`
+	Draft         int `json:"draft"`
+	AudienceReady int `json:"audience_ready"`
+	ContentReady  int `json:"content_ready"`
+	Approved      int `json:"approved"`
+	Scheduled     int `json:"scheduled"`
+	Sending       int `json:"sending"`
+	Completed     int `json:"completed"`
+}
+
+// Overview is openapi CampaignOverview: over ALL campaigns, independent of the filter and paging.
+type Overview struct {
+	Campaigns  StateCounts  `json:"campaigns"`
+	Deliveries StatusCounts `json:"deliveries"` // sum over every delivery row (both channels, both variants)
+}
+
+// SummaryPage is openapi CampaignSummaryPage. Items is never nil (JSON [] past the end).
+type SummaryPage struct {
+	Items    []Summary `json:"items"`
+	Total    int       `json:"total"` // matching the States filter, independent of Limit/Offset
+	Limit    int       `json:"limit"`
+	Offset   int       `json:"offset"`
+	Overview Overview  `json:"overview"`
+}
+
 // ---- Scheduler: starts due plans (cmd/worker, P7a, D62) ----
 
 type SchedulerConfig struct {
@@ -1858,6 +1948,9 @@ package httpapi
 
 type Deps struct {
 	Service     campaign.Service // fakeable
+	// Summaries serves GET /api/campaign-summaries (P10, D65; fakeable). Nil => that route answers
+	// 500 internal_error (the route is still registered, so Routes() is unchanged by Deps).
+	Summaries   campaign.SummaryLister
 	LLMProvider llm.Provider     // effective provider for GET /api/config and header gating
 	DB          health.Pinger
 	Metrics     http.Handler
@@ -1911,6 +2004,7 @@ Akış handler'larının normatif davranışı (unit test: sahte `Service`, `clo
 - **`GET /api/campaigns/{id}/events`:** önce `Service.Status` çağrılır (hata → JSON 404 vb.); sonra `retry: 3000` ve `snapshot` yazılır. Ardından döngü: `Clock.After(StatusPollInterval)` her tetiklendiğinde `Service.Status` yeniden çağrılır; sonuç son gönderilenden `updated_at` dışında farklıysa `status` olayı yazılır; `state == completed` ise `completed` yazılır ve akış kapanır. `Clock.After(HeartbeatInterval)` ile yorum satırı. İstemci kopunca (`ctx.Done`) veya `Deps.Shutdown` kapanınca döngü biter. `Service.Status` art arda 5 kez hata verirse akış kapanır (D54); hata günlüğe kesinti başına bir kez, toparlanınca bir kez yazılır. Sunucu tarafında `LISTEN/NOTIFY` kullanılmaz (VARSAYIM; tek mekanizma yoklama).
 - **`POST /api/campaigns/{id}/send`:** gövde (`SendRequest`) handler'da okunur (README §5.4 adım 3; alan hataları tek 422'de, openapi `sendCampaign` adım 2). `scheduled_at` **yoksa** `Service.Send(ctx, id, versionID)`, **varsa** `campaign.ParseScheduledAt` sonucu ile `Service.Schedule(ctx, id, versionID, at)` çağrılır; ikisi de 202 + `SendResult`. Pencere denetimi (`schedule_too_soon`/`schedule_too_far`) handler'da değil `Schedule`'dadır (servisin saati ve `Deps.ScheduleMinLead`); `*validation.Error` → 422.
 - **`DELETE /api/campaigns/{id}/schedule`:** gövde okunmaz; `Service.CancelSchedule` → 200 + `CancelScheduleResult`, hatalar README §5.3.
+- **`GET /api/campaign-summaries` (P10, D65):** gövde okunmaz; `campaign.ParseSummaryFilter(r.URL.Query())` → `*validation.Error` ise 422 `validation_failed` (alanlar state, order, limit, offset sırasıyla); sonra `Deps.Summaries.ListSummaries` → 200 + `SummaryPage`; altyapı hatası 500 `internal_error`. `Deps.Summaries` nil ise 500. Rota tabloda `{GET, "/api/campaign-summaries"}`; faz uygulanana kadar `listCampaignSummaries` `test/contract/allowlist.go`'da `"P10"` ile durur (sözleşme PR'ı ekler, P10 backend adımı siler).
 - **`GET /api/config`:** `limits.schedule_min_lead_seconds` = `Deps.ScheduleMinLead`'in tam saniyeye yukarı yuvarlanmışı, `limits.schedule_max_ahead_seconds` = 2592000.
 - **`POST /api/campaigns/{id}/content`:** gövde (yok, `{}` veya `GenerateContentRequest`) handler'da okunur (README §5.4 adım 3): `ab` boolean değilse (`null` dahil) 422 `schema_violation` yol `ab`, başka anahtar 422 `schema_violation` yol = anahtar. `ab: true` ise `ctx` `campaign.WithContentOptions(ctx, campaign.ContentOptions{AB: true})` ile sarılır; gövdesiz/`{}`/`ab: false` isteklerde `ctx` sarılmaz (P8 davranışı birebir; sahte `Service` testleri bunu `campaign.ContentOptionsFromContext` ile gözler). Sonra `Service.StartContentGeneration` hata dönerse JSON hata; dönmezse HTTP 200 + SSE başlıkları ve `ContentRun.Stream(ctx, emit)`; her `composer.Event` `event: <Name()>` + JSON olarak yazılır. Heartbeat aynı `HeartbeatInterval` ile.
 - `X-Mock-LLM-Scenario` başlığı yalnız `LLMProvider == mock` iken `llm.ParseScenario` ile okunur ve `llm.WithScenario` ile `ctx`'e konur.

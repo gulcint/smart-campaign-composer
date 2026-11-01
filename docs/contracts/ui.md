@@ -1,11 +1,11 @@
 # UI sözleşmesi (Vue 3 + TypeScript)
 
-Kapsam: REQ-AUD-03, REQ-AUD-05 (UI), REQ-CNT-01..05 (UI kısımları), REQ-APR-01..03, REQ-TRK-01, REQ-AI-03, REQ-UI-01, REQ-SCH-04 (P7a), REQ-LNG-04 (P8), REQ-ABT-04 (P9).
+Kapsam: REQ-AUD-03, REQ-AUD-05 (UI), REQ-CNT-01..05 (UI kısımları), REQ-APR-01..03, REQ-TRK-01, REQ-AI-03, REQ-UI-01, REQ-SCH-04 (P7a), REQ-LNG-04 (P8), REQ-ABT-04 (P9), REQ-DSH-02, REQ-DSH-03 (P10).
 Görsel dil ve ekran düzeni: kök dizindeki `DESIGN.md` (bağlayıcı değil; çelişkide bu dosya kazanır). API: [`openapi.yaml`](openapi.yaml), akışlar: [`sse-events.md`](sse-events.md).
 
 ## 0. Test kuralları ve modül yolları
 
-- Araçlar: Vitest + Vue Test Utils + jsdom. Seçiciler **yalnızca** `[data-testid="…"]`. Durum iddiaları yalnızca bu dosyada adı geçen öznitelikler (`data-state`, `data-status`, `data-phase`, `data-kind`, `data-code`, `data-value`, `data-count`, `data-variant`, `data-provider`, `data-reason`, `aria-*`, `sandbox`, `srcdoc`, `title`) ve `textContent` üzerinden yapılır; CSS sınıfı ve görünür Türkçe metin seçici olarak kullanılmaz.
+- Araçlar: Vitest + Vue Test Utils + jsdom. Seçiciler **yalnızca** `[data-testid="…"]`. Durum iddiaları yalnızca bu dosyada adı geçen öznitelikler (`data-state`, `data-status`, `data-phase`, `data-kind`, `data-code`, `data-value`, `data-count`, `data-variant`, `data-provider`, `data-reason`, `data-campaign-id` (P10), `data-loading`, `aria-*`, `role`, `href` (P10, satır linkleri), `sandbox`, `srcdoc`, `title`) ve `textContent` üzerinden yapılır; CSS sınıfı ve görünür Türkçe metin seçici olarak kullanılmaz.
 - Metin iddiaları gerektiğinde beklenen değer `t(id, params)` ile üretilir (Türkçe metin testte sabit yazılmaz).
 - Sayılar ekranda `Intl.NumberFormat('tr-TR')` ile biçimlenir (`1.482`); ham değer her zaman `data-value` özniteliğindedir — testler `data-value`'yu iddia eder.
 - Modül yolları (`@` = `web/src`), testlerin import edebileceği tek yollar:
@@ -19,7 +19,7 @@ Görsel dil ve ekran düzeni: kök dizindeki `DESIGN.md` (bağlayıcı değil; �
 | `@/api/client.ts` | `createApiClient`, `ApiClientKey` |
 | `@/api/errors.ts` | `ApiError`, `errorPresentation` (§4) |
 | `@/lib/schedule.ts` | Zamanlanmış gönderim saat yardımcıları (§3.26; TSİ = Europe/Istanbul) |
-| `@/api/types.ts` | OpenAPI şemalarının TS karşılıkları (aynı adlar: `Campaign`, `ContentVersion`, `Preview`, `CampaignStatus`, `Delivery`, `FieldError`, `WorstCase`, `Audience`, …); içerik akışı olay tipleri: `ContentDeltaEvent`, `ContentInvalidEvent`, `ContentValidatedEvent` (openapi bileşenleriyle aynı ad) |
+| `@/api/types.ts` | OpenAPI şemalarının TS karşılıkları (aynı adlar: `Campaign`, `ContentVersion`, `Preview`, `CampaignStatus`, `Delivery`, `FieldError`, `WorstCase`, `Audience`, P10: `CampaignSummary`, `CampaignSummaryPage`, `CampaignOverview`, `CampaignStateCounts`, …); içerik akışı olay tipleri: `ContentDeltaEvent`, `ContentInvalidEvent`, `ContentValidatedEvent` (openapi bileşenleriyle aynı ad) |
 | `@/i18n/index.ts` | `t(id: MessageId, params?: Record<string, string \| number>): string`, `messages: Record<MessageId, string>` |
 
 Bağımlılık enjeksiyonu (testlerde sahte verilir):
@@ -79,6 +79,8 @@ Kampanya durumu → yönlendirme ve adım erişimi (`CampaignStepper`):
 | `scheduled` (P7a) | `tracking` | tüm adımlar (1–3 salt okunur: editör `locked`; onay adımı §3.17 `scheduled` görünümü) | — |
 | `sending`, `completed` | `tracking` | tüm adımlar (1–4 salt okunur: editör `locked`) | — |
 
+P10 (D65): kampanya listesi için **yeni rota yoktur**; genel bakış `brief-new` rotasındaki `BriefPage`'in altındaki `CampaignPanel`'dir (§3.31). `AppHeader`'daki logo linki her ekrandan buraya döner; başlığa ayrıca link eklenmez, stepper bu rotada çizilmez.
+
 Kilitli bir adımın rotasına doğrudan gidilirse yönlendirme tablosundaki rotaya yönlendirilir. Bilinmeyen kampanya (404 `campaign_not_found`) → aynı rotada `EmptyState kind="campaign_not_found"`.
 
 Akış: Brief (`POST /api/campaigns` → `POST /segment`) → Kitle (`POST /content`, SSE) → İçerik (düzenleme `POST /content-versions`) → Onay (`POST /approve` → `POST /send`) → Takip (`GET /events` SSE + `GET /deliveries`).
@@ -96,6 +98,7 @@ Not: DESIGN.md §8'deki "görünür olduğu durumlar" tablosu ile bu tablo çeli
 | `ContentPage` | `content-to-approval` | `versionStatus === 'validated'`, editör `dirty` değil ve kampanya `content_ready` veya `approved` | `approval` rotasına geçer |
 | `ApprovalPage` | `approval-approve` / `approval-send` (§3.17) | §3.17 kuralları | `ConfirmDialog` (`approve` / `send`) → onayda `POST /approve` / `POST /send`; `send` başarılıysa `tracking` rotasına geçer. `send` diyaloğu plan kipini taşır (§3.18 `allowSchedule`): "İleri tarihte gönder" seçilirse `POST /send` gövdesine `scheduled_at` eklenir (§3.24) |
 | `ApprovalPage` | `approval-schedule-cancel` (§3.17 `scheduled`) | kampanya `scheduled` | `DELETE /api/campaigns/{id}/schedule` (onay diyaloğu yok; plan geri alınabilir bir karardır) |
+| `BriefPage` (`CampaignPanel`, P10) | `brief-scheduled-more` / `brief-sent-more`, `brief-scheduled-retry` / `brief-sent-retry`, `campaign-summary-item` (§3.31) | "daha fazla": bölümde gösterilen satır < `total`; yeniden deneme: bölümün son isteği hata verdi; satır linki her zaman | daha fazla: aynı `state`/`order`, `limit: 5`, `offset` = gösterilen satır sayısı, satırlar sona eklenir; yeniden deneme: başarısız isteği aynı sorguyla yineler; satır: `tracking` rotası |
 | `TrackingPage` | `schedule-cancel`, `schedule-send-now` (§3.25) | kampanya `scheduled` | iptal: `DELETE …/schedule` → `approval` rotası; şimdi gönder: `ConfirmDialog kind="send"` (`allowSchedule=false`) → `POST /send` (gövdede `scheduled_at` yok) |
 
 `useContentGeneration().start()` **yalnızca** şu iki durumda çağrılır: (a) `ContentPage` mount edildiğinde rota sorgusu `generate=1` ise — bir kez (P9: `ab=1` de varsa `content-ab-toggle` açık başlar ve `start(id, { ab: true })`), ardından `generate` ve `ab` sorguları `router.replace` ile kaldırılır; (b) `content-regenerate` (gerekiyorsa diyalog onayından sonra). `ContentPage` mount'ta başka hiçbir durumda üretim başlatmaz; `latest_content_version` varsa onu `validated` olarak gösterir (alan metinleri sürümden, `worstCase` sürümün `worst_case`'inden).
@@ -227,6 +230,22 @@ Props: `value: number`, `max: number`, `variant: 'single'|'segmented'`, `segment
 ### 3.20 `DeliveryCounters` (REQ-TRK-01)
 Props: `status: CampaignStatus|null`, `connection: ConnectionState`, `lastUpdatedAt: string|null`. Testid'ler: `delivery-counters` (`data-state`: `completed` (status.state = completed) › `scheduled` (status.state = scheduled, P7a: sayaç kartları, `delivery-card-*`, `delivery-count-*` ve `delivery-stale-note` render edilmez; plan `SchedulePanel`'dedir, §3.25) › `stale` (connection ≠ `open`) › `live`); kanal `<c>` ∈ `sms|email` için `delivery-card-<c>`, `delivery-bar-<c>` (`aria-valuenow` = sent+failed, `aria-valuemax` = total), `delivery-count-<c>-<k>` (`<k>` ∈ `total|queued|sending|sent|failed`, `data-value` = `status.by_channel.<c>.<k>`); toplam `delivery-count-total-<k>` (`data-value` = `status.counts.<k>`); `stale` iken `delivery-stale-note` — ilk bağlantı henüz kurulurken (`status` null ve `connection` `idle`/`connecting`) gösterilmez, ilk deneme başarısızsa (`error`) gösterilir; `status` null iken sayaç öğelerinde `data-value` yoktur (ekranda "—"); `completed` iken `delivery-completed-title` ve `failed > 0` ise `delivery-failed-link` (`?status=failed` filtresiyle teslimat listesine). Kampanya düzeyinde "başarısız" durumu gösterilmez.
 **P9 (REQ-ABT-04):** `TrackingPage`, `status.by_variant` dolu iken (`null` değil ve anahtar var) `delivery-counters`'ın altında `VariantBreakdown` (§3.30) gösterir; `scheduled` görünümünde göstermez. `DeliveryCounters`'ın kendisi değişmez.
+**P10 (REQ-DSH-03, D65; yeniden düzen, davranış aynı).** Props, `data-state` kuralı ve yukarıdaki **bütün** testid'ler, `data-value`'lar ve görünürlük kuralları aynen kalır (REQ-TRK-01/SCH-04/ABT-04 testleri değişmez); öğe yeri ve tipografi değişir (DESIGN.md §8.5). Yukarıdan aşağı:
+- **Genel durum kartı** (tek vurgulu kart: `--radius-card-lg` + gradient şerit): ilk başlık `h2` (`text-h2`, `--text-accent-heading`), metin `t('tracking.overallTitle')`. Başlık satırının sağında canlılık: `data-state="live"` iken `delivery-live` (pill, metin `t('delivery.live')`), `completed` iken `delivery-completed-title` (metin `t('delivery.completedTitle')`), `stale` iken `delivery-stale-note` (§3.20 kuralı). Durum cümlesi ("Kampanya gönderiliyor") ve bekleme metni artık başlık değildir.
+- Büyük sayı `delivery-percent` (`numeral-xl`, `--text-accent-numeral`; `data-value` = ⌊(sent + failed) / total × 100⌋ `status.counts` üzerinden; total 0 iken `completed`'da 100, aksi 0; metin `%` + değer). Yanında `delivery-processed` (`data-value` = sent + failed, metin `t('tracking.processed', { done, total })`); cümledeki toplam sayı `delivery-count-total-total` öğesidir. Altında `delivery-bar-total` (§3.20a, segmentli `ProgressBar`).
+- `delivery-results` (başlığı görsel `caption` `t('tracking.results')`): `delivery-count-total-sent`, `delivery-count-total-failed` (`numeral-md`; failed > 0 ise `--error` + etiket). `delivery-remaining` (`t('tracking.remaining')`): `delivery-count-total-sending`, `delivery-count-total-queued` (`numeral-sm`, `--ink-700`). İki grup da `<dl>`.
+- Kartın altında `delivery-last-updated` (`caption`): `lastUpdatedAt` doluyken her `data-state`'te (`live`/`stale`/`completed`) görünür, `data-value` = `lastUpdatedAt`, metin `t('delivery.lastUpdated', { time })`.
+- `status` null iken: sayaç öğelerinde `data-value` yok ("—"), `delivery-percent`/`delivery-processed`'de de yok; `Skeleton` blokları + `delivery-waiting` (görsel olarak gizli, `role="status"`, metin `t('delivery.waiting')`); `delivery-counters` içinde bu metni taşıyan başlık yoktur.
+- **Kanal kartları** `delivery-card-<c>`: başlık `h3` (`text-h3`, `--text-accent-heading`, kanal noktası + `t('tabs.sms')` / `t('tabs.email')`); kanal toplamı (`delivery-count-<c>-total`) ve `delivery-percent-<c>` (`data-value` = kanalın ⌊(sent + failed) / total × 100⌋, total 0 iken `completed`'da 100, aksi 0) aynı `numeral-md` boyunda çubuğun (`delivery-bar-<c>`) üstünde; dört durum (`delivery-count-<c>-<k>`) tek sütunlu `<dl>` (etiket `body-sm --ink-600`, sayı `numeral-sm` sağa hizalı, `tabular-nums`). ≥ 768 yan yana, < 768 alt alta.
+- `delivery-failed-link` aynı kural (§3.20), genel kartın sonunda.
+- Başlık düzeni: `delivery-counters` içinde önce bir `h2`, sonra kanal başına bir `h3`; başka başlık düzeyi yok.
+- **Bayatlıkta opaklık düşürülmez** (`opacity-*` sınıfı kaldırılır; kontrast korunur). Hareket kuralları (§5 DESIGN sayaç tween'i, reduced-motion) değişmez. Tek kart dili: `surface-card`, `--radius-card`, `--shadow-card` (kanal kartları, varyant tablosu, başarısız listesi); yalnız genel durum kartı `--radius-card-lg` + şerit.
+
+### 3.20b `TrackingPage` başlık bloğu (REQ-DSH-03, P10)
+`StepHeader` (§3.2b; `h1` `page-title` `t('tracking.title')`, tek durum rozeti `step-header-status`) korunur; genel alt başlık (`tracking.subtitle`) yerine varsayılan slot'a kampanyanın kimliği konur (kampanya yüklendikten sonra):
+- `tracking-campaign-brief` — `textContent` = `campaign.brief` (tam metin; `line-clamp-2`, `--ink-700` gövde metni, turuncu değil; `v-html` yok).
+- Meta satırı (`tracking-meta`, `<dl>`, ayraç " · "): segment varsa `tracking-audience-sms` / `tracking-audience-email` (`data-value` = `campaign.segment.audience.sms` / `.email`, metin `t('tracking.audience', { sms, email })` içinde); `tracking-started-at` (`data-value` = görünüm `sending_started_at`'i, metin `formatTsi`, etiket `t('tracking.startedAt')`); `tracking-completed-at` (aynı kural, `completed_at`, etiket `t('tracking.completedAt')`); `schedule-started-note` (§3.25 kuralı aynen) bu satırdadır.
+- "Görünüm" değeri: son alınan akış olayının (`snapshot`/`status`/`completed`) alanı, akıştan henüz olay yoksa `campaign`'in alanı (§3.25 "görünüm durumu" ile aynı kaynak). Değer `null` iken öğe DOM'da yoktur.
 
 ### 3.20a Başarısız teslimat listesi (`TrackingPage`, `?status=failed`)
 `delivery-failed-link` takip rotasına `?status=failed` sorgusuyla gider; `TrackingPage` bu sorgu varken `GET /api/campaigns/{id}/deliveries?status=failed&order=recent&limit=50` ile en çok **50** satır gösterir (toplam daha büyükse "ilk 50" notu). Testid'ler: `delivery-failed-list` (bölüm), her satır `delivery-failed-item` (`data-delivery-id`, `data-channel`, `data-reason` = `failure_reason`, null ise yok); toplam ilerleme çubuğu `delivery-bar-total` (`aria-valuenow` = sent+failed, `aria-valuemax` = total). Liste açılınca odak başlığına (`tabindex="-1"`), kapanınca (`Listeyi kapat`, sorgu kaldırılır) `delivery-failed-link`'e döner; bağlantı yoksa (başarısız yok veya kampanya tamamlanmadı) odak kaydırmadan `page-title`'a gider. Sorgu değişimi adım değişimi sayılmaz: `h1`'e odak taşınmaz, sayfa kaydırılmaz.
@@ -304,7 +323,7 @@ Unmount'ta interval temizlenir. Görsel (DESIGN.md token'ları): kart `--surface
 - **Görünüm durumu** = son alınan akış `status`'unun `state`'i, akış henüz bir şey getirmediyse `campaign.state`. Bu `scheduled` iken: `SchedulePanel` (`scheduledAt` = `status?.scheduled_at ?? campaign.scheduled_at`) `delivery-counters`'ın üstünde render edilir, `delivery-counters` `data-state="scheduled"` olur, `ActivityFeed` render edilmez. Canlı akış (`GET …/events`) bugünkü gibi açılır ve açık kalır; durum değişimi `status` olayıyla gelir (sse-events §2). Akıştan `state: "sending"` (veya `completed`) gelince panel kalkar ve sayaçlar normal görünür (`ActivityFeed` kapsam dışıdır, sahip kararı); `approved` gelirse (başka sekmede iptal) sayfa `approval` rotasına geçer.
 - **İptal:** `schedule-cancel` → `cancelling = true` → `DELETE /api/campaigns/{id}/schedule`. 200: `toast.scheduleCanceled` (info), `approval` rotasına geçilir. 409 `invalid_state` / 404: §4 toast, kampanya yeniden çekilir, `cancelling = false`; worker gönderimi bu arada başlattıysa (yeniden çekilen durum `sending`/`completed`) sayfa §1 tablosuna göre `tracking`'de kalır ve sayaç görünümüne geçer.
 - **Şimdi gönder:** `schedule-send-now` → `ConfirmDialog kind="send"` (`allowSchedule=false`, `counts` = `segment.audience.{sms,email}`) → `confirm` → `POST /send {content_version_id: campaign.approval.content_version_id}` (gövdede `scheduled_at` yok; plan aynı transaction'da düşer). 202: diyalog kapanır, rota değişmez; yanıtın `state`'i `sending`/`completed` ise görünüm durumu hemen ona geçer ve `sendingNow` false olur; aksi halde `sendingNow = true` akıştan `scheduled` dışı bir `state` gelene **veya** akış `stale` olana (bağlantı `open` değil) kadar kalır. 409/422: diyalog davranışı §3.24 gönderimdeki gibi.
-- **Başlamış planlı kampanya:** görünüm durumu `sending`/`completed` **ve** `scheduled_at` dolu iken `delivery-counters`'ın üstünde `schedule-started-note` görünür (metin `t('schedule.startedNote', { time: formatTsi(scheduled_at) })`, `data-value` = `scheduled_at`); `scheduled_at` null ise (anlık gönderim, "şimdi gönder") yoktur.
+- **Başlamış planlı kampanya:** görünüm durumu `sending`/`completed` **ve** `scheduled_at` dolu iken `schedule-started-note` görünür (P10'dan itibaren `delivery-counters`'ın üstünde ayrı satır değil, başlık bloğunun meta satırında, §3.20b; testid, `data-value`, metin ve görünürlük kuralı aynı) (metin `t('schedule.startedNote', { time: formatTsi(scheduled_at) })`, `data-value` = `scheduled_at`); `scheduled_at` null ise (anlık gönderim, "şimdi gönder") yoktur.
 
 ### 3.26 `@/lib/schedule.ts` (TSİ saat yardımcıları, saf fonksiyonlar)
 
@@ -337,6 +356,27 @@ Props: `modelValue: boolean`, `disabled: boolean` (false). Emits: `update:modelV
 
 ### 3.30 `VariantBreakdown` (REQ-ABT-04, P9)
 Props: `byVariant: VariantStatusCounts`, `angles: { a: string; b: string } | null`. Testid'ler: `variant-breakdown` (`<table>`, `<caption>` = `t('tracking.variantTitle')`), satırlar `variant-row-a`, `variant-row-b`; her satırda `variant-angle-<v>` (`textContent` = `angles[v]`, `angles` null ise "—"), ve kanal `<c>` ∈ `sms|email`, sayaç `<k>` ∈ `sent|failed|queued` için `variant-count-<v>-<c>-<k>` (`data-value` = `byVariant[v][c][k]`, metin tr-TR biçimli). Tablonun altında `variant-breakdown-note` (`role="note"`, metin `t('tracking.variantNote')`). Kazanan, oran karşılaştırması veya vurgu yoktur (sahip kararı: kazanan ölçülmez). `TrackingPage` `angles`'ı `campaign.latest_content_version?.content.angles`'tan verir (`sending`/`completed`'da içerik değişemez, bu onaylı sürümdür). Açı metni metin düğümüdür (`v-html` yok).
+
+### 3.31 `CampaignPanel` (REQ-DSH-02, P10)
+Brief giriş ekranındaki genel bakış. `BriefPage` onu yalnız `brief-new` rotasında, `BriefComposer` + `ErrorCard` + seed notunun **altında** ve yalnız brief gönderilmiyorken (`submitting` false; `AudienceLoadingPreview` görünürken yok) render eder (`v-if`; gizlenince unmount olur, zamanlayıcısı durur). Props yok; istemci `ApiClientKey`'den. Alt bileşenler serbesttir; sözleşme testid'lerdir.
+
+**İstekler** (`request('GET', '/api/campaign-summaries', { query })`, openapi `listCampaignSummaries`):
+
+| Bölüm | Mount'ta `query` | "Daha fazla göster" | Tazeleme (10 sn) |
+|---|---|---|---|
+| Planlanan (`scheduled`) | `{ state: 'scheduled', order: 'scheduled_at', limit: 5, offset: 0 }` | aynı `state`/`order`, `limit: 5`, `offset` = gösterilen satır | aynı `state`/`order`, `offset: 0`, `limit` = clamp(gösterilen, 5, 200) |
+| Gönderilen (`sent`) | `{ state: 'sending,completed', order: 'recent', limit: 5, offset: 0 }` | aynı | aynı |
+
+İki mount isteği birlikte ve composer'ı beklemeden gönderilir. **Tazeleme:** iki ilk istek de sonuçlandıktan sonra gösterilen satırlarda `state === 'sending'` varsa `setTimeout(10000)`; tetiklenince iki tazeleme isteği, yanıtlar sonrası koşul yeniden değerlendirilir (zincir, `setInterval` değil). Tazeleme yanıtı bölümün satırlarını, `total`'ını ve özet kartlarını yerinde değiştirir (iskelet yok, `data-state` `loading`'e dönmez); tazeleme hatası sessizdir. Unmount'ta zamanlayıcı temizlenir. Kampanya başına `EventSource` açılmaz.
+
+**Testid'ler:**
+- `brief-campaign-panel` — `<section aria-labelledby>`, başlık `h2` `t('briefPanel.title')`.
+- Özet kartları (`<dl>`, ≥ 1024 beş sütun, 768–1023 üç, < 768 iki): `campaign-kpi-total`, `campaign-kpi-scheduled`, `campaign-kpi-sent`, `campaign-kpi-messages-sent`, `campaign-kpi-messages-failed`; her biri sayıyı taşıyan `<dd>`, `data-value` = ham tamsayı (son başarılı yanıtın `overview`'ı: `campaigns.total`, `campaigns.scheduled`, `campaigns.sending + campaigns.completed`, `deliveries.sent`, `deliveries.failed`); hiç yanıt yokken öznitelik yok ve "—". Etiket `<dt>` `t('briefPanel.kpi.total|scheduled|sent|messagesSent|messagesFailed')`. Oran/yüzde yok (`%` karakteri yok). `messages-failed` > 0 ise sayı `--error` (etiket metni zaten "Başarısız mesaj").
+- Bölüm `<s>` ∈ `scheduled|sent`: `brief-<s>-summary` (`<section>`, `data-state` `loading` › `error` › `empty` › `ready`; başlık `h3` `t('briefPanel.scheduledTitle')` / `t('briefPanel.sentTitle')` + `brief-<s>-total` (`data-value` = `total`, metin " · n")); `brief-<s>-list` (`<ul>`); `brief-<s>-empty` (`total` = 0; `t('briefPanel.scheduledEmpty')` / `t('briefPanel.sentEmpty')`); `brief-<s>-more` (`Button` secondary `sm`, metin `t('briefPanel.more')`, gösterilen < `total` iken; istek sürerken `data-loading="true"`); `brief-<s>-error` (`InlineError` benzeri satır, `data-code` = `ApiError.code`, metin `t('briefPanel.error')`) + `brief-<s>-retry` (`Button` ghost, `t('briefPanel.retry')`), bölümün son mount/"daha fazla" isteği hata verdiyse.
+- Satır: `<li>` içinde tek link `campaign-summary-item` (`RouterLink` → `{ name: 'tracking', params: { campaignId } }`, `href` = `/campaigns/<id>/tracking`, `data-campaign-id`, `data-state`); içinde `campaign-summary-brief` (`textContent` = `brief.split('\n')[0]`; görsel `truncate`, < 640'ta `line-clamp-2`). Planlanan satırı: `campaign-summary-time` (`data-value` = `scheduled_at`, metin `formatTsi`), `campaign-summary-relative` (`data-value` = yükleme anında `remainingSeconds(scheduled_at, Date.now())`; metin göreli süre, ör. "2 saat sonra", `Intl.RelativeTimeFormat('tr-TR')`; saniyelik güncellenmez). Gönderilen satırı: `campaign-summary-state` (`StatusBadge kind="campaign"` `size="sm"`, `data-status`), `campaign-summary-bar` (`ProgressBar` `segmented`, `aria-valuenow` = sent + failed, `aria-valuemax` = total), `campaign-summary-sent` / `campaign-summary-failed` (`data-value`, metin `t('briefPanel.sentCounts', { sent, failed })` içinde), `campaign-summary-time` (`data-value` = `sending_started_at`, metin `formatTsi`).
+- `brief-panel-status` — görsel olarak gizli `role="status"`; yalnız "daha fazla" sonrası bir kez `t('briefPanel.moreLoaded', { n })`. Tazeleme duyurulmaz.
+
+**Davranış:** "daha fazla" yanıtındaki satırlar sona eklenir, kimliği zaten gösterilen satır atlanır; ekleme sonrası odak ilk yeni `campaign-summary-item`'a (`preventScroll` yok; satır görünür olsun). Bir bölümün hatası yalnız o bölümü etkiler; diğer bölüm, özet kartları (başarılı yanıttan) ve composer çalışmaya devam eder. Brief metni yalnız metin interpolasyonuyla (§6). < 640 px: satır iki satırlık kart (üstte brief, altta durum + sayılar/saat); Planlanan ve Gönderilen ≥ 1024 yan yana, altında alt alta; < 1024'te satır linki ve düğmeler ≥ 44 px.
 
 ## 4. Hata kodu → sunum → i18n
 
@@ -373,7 +413,7 @@ export function errorPresentation(e: ApiError, context?: ErrorContext): { displa
 
 Alan hata mesaj id'leri: `field_error.<code>` — 27 kodun her biri için (README §5.2; P9 ile `field_error.variants_identical`, `field_error.variant_not_available` eklendi): `field_error.required`, `field_error.too_long`, `field_error.invalid_value`, `field_error.invalid_json`, `field_error.schema_violation`, `field_error.truncated_output`, `field_error.no_tool_call`, `field_error.llm_unavailable`, `field_error.internal_error`, `field_error.sms_too_long`, `field_error.subject_too_long`, `field_error.email_body_too_long`, `field_error.sms_too_long_worst_case`, `field_error.subject_too_long_worst_case`, `field_error.unknown_variable`, `field_error.malformed_variable`, `field_error.unknown_field`, `field_error.unknown_operator`, `field_error.operator_not_allowed`, `field_error.type_mismatch`, `field_error.empty_group`, `field_error.max_depth_exceeded`, `field_error.max_conditions_exceeded`, `field_error.schedule_too_soon`, `field_error.schedule_too_far`, `field_error.variants_identical`, `field_error.variant_not_available`; ayrıca bilinmeyen kodlar için `field_error.unknown`.
 
-Diğer zorunlu `MessageId`'ler: `provider.mock`, `provider.claude`, `provider.unknown`; `status.content.{draft,validated,invalid,interrupted}`; `status.delivery.{queued,sending,sent,failed}`; `status.campaign.{draft,audience_ready,content_ready,approved,scheduled,sending,completed}`; `step.{brief,audience,content,approval,tracking}`; `audience.consentNote`, `audience.empty`; `counter.worstCase`; `audience.loading`, `audience.loading.claude`; `stream.retrying`, `stream.interrupted`, `stream.waiting`, `stream.waiting.claude`; `approval.reason.{no_content,streaming,invalid,interrupted,dirty,state}`, `approval.staleNote`; `confirm.{approve,send,regenerate}.title`; `preview.emailFrameTitle`, `preview.fallbackRecipient`, `preview.sample`; `feed.empty`, `feed.newItems`; `connection.lost`; `delivery.staleNote`, `delivery.completedTitle`; tüm `error.*` (16 kod + `error.network`); `editor.conflict.{title,reload,keepMine,keepMineWarning}`; `tabs.channels`; `content.{generate,regenerate,editDraft,empty}`; `content.live.{streaming,retrying,validated,invalid,interrupted}`; `approval.version`, `approval.edit`; `toast.contentSaved`, `toast.approved`; P7a: `confirm.schedule.{title,body,confirm,audienceNote}`, `confirm.sendMode.{label,now,later}`, `confirm.scheduledAt.{label,hint}`, `schedule.{tz,title,timeLabel,countdown,countdownDays,starting,cancel,sendNow,startedNote}`, `approval.scheduledNote`, `approval.toTracking`, `toast.scheduled`, `toast.scheduleCanceled`; P8: `audience.languages`, `tabs.languages`, `language.{tr,en}`, `preview.fallbackNote`; P9: `tabs.variants`, `variant.{a,b}`, `content.abToggle`, `content.abToggleHint`, `editor.angle`, `approval.abSplitNote`, `tracking.variantTitle`, `tracking.variantNote`. `messages` nesnesi bu id'lerin her birini boş olmayan bir metinle içerir (test: id kümesi bu listeyi kapsar).
+Diğer zorunlu `MessageId`'ler: `provider.mock`, `provider.claude`, `provider.unknown`; `status.content.{draft,validated,invalid,interrupted}`; `status.delivery.{queued,sending,sent,failed}`; `status.campaign.{draft,audience_ready,content_ready,approved,scheduled,sending,completed}`; `step.{brief,audience,content,approval,tracking}`; `audience.consentNote`, `audience.empty`; `counter.worstCase`; `audience.loading`, `audience.loading.claude`; `stream.retrying`, `stream.interrupted`, `stream.waiting`, `stream.waiting.claude`; `approval.reason.{no_content,streaming,invalid,interrupted,dirty,state}`, `approval.staleNote`; `confirm.{approve,send,regenerate}.title`; `preview.emailFrameTitle`, `preview.fallbackRecipient`, `preview.sample`; `feed.empty`, `feed.newItems`; `connection.lost`; `delivery.staleNote`, `delivery.completedTitle`; tüm `error.*` (16 kod + `error.network`); `editor.conflict.{title,reload,keepMine,keepMineWarning}`; `tabs.channels`; `content.{generate,regenerate,editDraft,empty}`; `content.live.{streaming,retrying,validated,invalid,interrupted}`; `approval.version`, `approval.edit`; `toast.contentSaved`, `toast.approved`; P7a: `confirm.schedule.{title,body,confirm,audienceNote}`, `confirm.sendMode.{label,now,later}`, `confirm.scheduledAt.{label,hint}`, `schedule.{tz,title,timeLabel,countdown,countdownDays,starting,cancel,sendNow,startedNote}`, `approval.scheduledNote`, `approval.toTracking`, `toast.scheduled`, `toast.scheduleCanceled`; P8: `audience.languages`, `tabs.languages`, `language.{tr,en}`, `preview.fallbackNote`; P9: `tabs.variants`, `variant.{a,b}`, `content.abToggle`, `content.abToggleHint`, `editor.angle`, `approval.abSplitNote`, `tracking.variantTitle`, `tracking.variantNote`; P10: `briefPanel.{title,scheduledTitle,sentTitle,scheduledEmpty,sentEmpty,more,moreLoaded,error,retry,sentCounts}`, `briefPanel.kpi.{total,scheduled,sent,messagesSent,messagesFailed}`, `tracking.{overallTitle,processed,results,remaining,startedAt,completedAt,audience}`. `messages` nesnesi bu id'lerin her birini boş olmayan bir metinle içerir (test: id kümesi bu listeyi kapsar).
 
 P7a metin önerileri (Türkçe; `web/src/i18n/tr.ts`'e arayüz dilimi yazar, bu sözleşme metni sabitlemez; testler `t(id)` kullanır):
 
@@ -420,6 +460,33 @@ P9 metin önerileri (aynı kural: arayüz dilimi yazar, testler `t(id)` kullanı
 | `tracking.variantNote` | Mock provider açılma veya tıklama ölçmez; bu tablo yalnız teslimat sonucudur, kazanan belirlemez. |
 | `field_error.variants_identical` | B varyantı A ile aynı; en az bir metni farklı yaz. |
 | `field_error.variant_not_available` | Bu sürümde B varyantı yok. |
+
+P10 metin önerileri (aynı kural):
+
+| `MessageId` | Önerilen metin |
+|---|---|
+| `briefPanel.title` | Kampanyaların |
+| `briefPanel.kpi.total` | Toplam kampanya |
+| `briefPanel.kpi.scheduled` | Planlanan |
+| `briefPanel.kpi.sent` | Gönderilen |
+| `briefPanel.kpi.messagesSent` | Gönderilen mesaj |
+| `briefPanel.kpi.messagesFailed` | Başarısız mesaj |
+| `briefPanel.scheduledTitle` | Planlanan |
+| `briefPanel.sentTitle` | Gönderilen |
+| `briefPanel.scheduledEmpty` | Planlanmış kampanya yok. |
+| `briefPanel.sentEmpty` | Henüz gönderilmiş kampanya yok. |
+| `briefPanel.more` | Daha fazla göster |
+| `briefPanel.moreLoaded` | {n} kampanya daha gösteriliyor. |
+| `briefPanel.error` | Kampanyalar yüklenemedi. |
+| `briefPanel.retry` | Tekrar dene |
+| `briefPanel.sentCounts` | gönderildi {sent} · başarısız {failed} |
+| `tracking.overallTitle` | Genel durum |
+| `tracking.processed` | {done} / {total} mesaj işlendi |
+| `tracking.results` | Sonuç |
+| `tracking.remaining` | Kalan iş |
+| `tracking.startedAt` | Başladı |
+| `tracking.completedAt` | Bitti |
+| `tracking.audience` | SMS {sms} · Email {email} |
 
 ## 5. SSE istemci davranışı
 
@@ -531,6 +598,8 @@ export function useActivityFeed(campaignId: Ref<string>, status: Ref<CampaignSta
    | `ChatBubble` | `text` | `chat-bubble-text` (`textContent`) |
    | `SegmentRuleView` | `rule` = `{"all":[{"field":"city","op":"eq","value":P}]}` | `segment-rule-json` (`textContent` = `JSON.stringify(rule, null, 2)`) ve `segment-rule-chip` (`textContent` `P`'yi içerir) |
    | `ActivityFeed` | `items[0].customerId` | `activity-item-customer` (`textContent`) |
+   | `CampaignPanel` (P10) | yanıttaki `items[0].brief` (sahte `ApiClient`) | `campaign-summary-brief` (`textContent`) |
+   | `TrackingPage` (P10) | `campaign.brief` (sahte `ApiClient`) | `tracking-campaign-brief` (`textContent`) |
 
    `InlineError` metin prop'u almaz: yalnız `path`, `code`, `limit`, `actual` alır ve metni `t('field_error.<code>', …)`'dan üretir; iddiası: `code = P` verildiğinde `inline-error-<pathKey>` altında `script`/`b` öğesi yoktur ve `P` yalnız `data-code` öznitelik **değeri** olarak bulunur (bilinmeyen kod için metin `t('field_error.unknown')`).
 2. `web/src` içinde `v-html` kullanılmaz (ESLint `vue/no-v-html: error`; CI lint).
@@ -568,4 +637,6 @@ export function useActivityFeed(campaignId: Ref<string>, status: Ref<CampaignSta
 | REQ-UI-01 | §6 (1–5), §3.16 `email-preview-frame` |
 | REQ-LNG-04 | §3.7 `audience-languages`, §3.14 `language` prop, §3.15 önizleme dili (sekmeyi izler, `preview-fallback-note`), §3.24 Onay ekranı dil sekmesi ve `lang` sorgusu, §3.23 dil sekmeleri, §3.27 `LanguageTabs`, §5.2 `enFields`/`hasEnglish`, §6 (İngilizce metin `v-html` ile basılmaz) |
 | REQ-ABT-04 | §1.1 (`?generate=1&ab=1`, `start(id, { ab })`), §3.7 `audience-ab-toggle`, §3.14 `variant` prop + `editor-angle`, §3.15 `data-variant` ve `variant` sorgusu, §3.20/§3.30 `variant-breakdown`, §3.22 `inline-error-angle`/`inline-error-variant`, §3.23 varyant sekmeleri + `content-ab-toggle` + `content-variant-angle`, §3.24 Onay varyant sekmeleri + `approval-ab-note` + `approval-variant-angle` + limit denetimi, §3.28 `VariantTabs`, §3.29 `AbToggle`, §4 i18n, §5.2 (`bFields`, `bEnFields`, `hasVariantB`, `angles`, `variantErrors`), §6 |
+| REQ-DSH-02 | §1 (yeni rota yok), §1.1 (`CampaignPanel` eylemleri), §3.31 `CampaignPanel` (istekler, testid'ler, tazeleme), §4 i18n P10, §6 |
+| REQ-DSH-03 | §3.20 P10 (genel durum kartı, `delivery-percent`, `delivery-processed`, `delivery-results`/`-remaining`, `delivery-last-updated`, `delivery-live`, `delivery-waiting`, `delivery-percent-<c>`, başlık düzeni), §3.20b başlık bloğu, §3.25 `schedule-started-note` yeri, §4 i18n P10, §6 |
 | REQ-SCH-04 | §1 tablo (`scheduled`), §1.1, §3.11, §3.14 (`locked`), §3.17 `scheduled`, §3.18 plan kipi, §3.20 `data-state="scheduled"`, §3.24 (gönderim ve planlıyken), §3.25 `SchedulePanel` + `TrackingPage`, §3.26 `@/lib/schedule.ts`, §4 i18n |

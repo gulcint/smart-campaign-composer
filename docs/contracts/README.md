@@ -8,7 +8,7 @@ Dokümanın ötesine geçen kararlar kullanıldıkları yerde **VARSAYIM** olara
 
 | Dosya | İçerik |
 |---|---|
-| [`openapi.yaml`](openapi.yaml) | HTTP API (OpenAPI 3.1): 20 operasyon (P7a: `cancelSchedule`), kapalı şemalar, durum kodları, yanıt başına izinli hata kodları; segment kuralı ve içerik gövdeleri `schemas/*.schema.json`'a göreli `$ref` (çok dosyalı, doğruluk kaynağı; §11) |
+| [`openapi.yaml`](openapi.yaml) | HTTP API (OpenAPI 3.1): 21 operasyon (P7a: `cancelSchedule`; P10: `listCampaignSummaries`), kapalı şemalar, durum kodları, yanıt başına izinli hata kodları; segment kuralı ve içerik gövdeleri `schemas/*.schema.json`'a göreli `$ref` (çok dosyalı, doğruluk kaynağı; §11) |
 | [`redocly.yaml`](redocly.yaml) | `api-lint` kapısının Redocly yapılandırması (kapatılan her kural gerekçeli) |
 | [`sse-events.md`](sse-events.md) | İçerik üretimi (`delta`, `invalid`, `validated`) ve canlı durum (`snapshot`, `status`, `completed`) olayları |
 | [`schemas/segment-rule.schema.json`](schemas/segment-rule.schema.json) | Segment kuralı JSON şeması (LLM aracı girdisi + `POST /api/segments/count` gövdesi) |
@@ -274,6 +274,9 @@ Test türleri ve konumları `.claude/skills/writing-tests/SKILL.md` §4'tedir. G
 | REQ-ABT-02 | openapi `generateContent` (`GenerateContentRequest`), `ContentDeltaEvent.variant`; go-interfaces `campaign.ContentOptions`/`WithContentOptions`/`ContentOptionsFromContext`, `llm.ContentRequest.IncludeVariantB`, `llm.ContentToolSchemaAB`, `ContentChunk.Path`, `composer.DeltaEvent.Variant`; schemas/llm/content-ab.tool.json, content-ab-en.tool.json; llm-tools §1.4, §3.3 `CNT_OK_AB`/`CNT_OK_AB_EN`, §3.4, §3.5; sse-events §1.1 `variant` |
 | REQ-ABT-03 | go-interfaces `content.VariantFor`, `Recipient.Variant`, `RenderContent` (`Rendered.Variant`), `delivery.Job.Recipient.Variant`, `campaign.CampaignStatus.ByVariant`/`VariantCounts`, `Delivery.Variant`, `PreviewQuery.Variant`, `Preview.Variant`, `PreviewCustomer.Variant`, `startSendingLocked` notu; db-schema §3.7 `variant` + `deliveries_variant_check`, §3.9, §4 claim; openapi `sendCampaign`, `CampaignStatus.by_variant` (`VariantStatusCounts`, `ChannelStatusCounts`), `Delivery.variant`, `previewContent` (`variant` sorgusu, `variant_not_available`); sse-events §2 `by_variant` |
 | REQ-ABT-04 | **ui.md §3.7** (`audience-ab-toggle`), **§3.14** (`variant`, `editor-angle`), **§3.15** (`data-variant`), **§3.20** (`variant-breakdown`), **§3.22** (`inline-error-variant`, `inline-error-angle`), **§3.23** (varyant sekmeleri, `content-ab-toggle`), **§3.24** (Onay varyant sekmeleri, `approval-ab-note`, `variant` sorgusu), **§3.28** `VariantTabs`, **§3.29** `AbToggle`, **§3.30** `VariantBreakdown`, §4 i18n, §5.2 (`bFields`, `bEnFields`, `hasVariantB`, `angles`, `start(id, { ab })`), §6; DESIGN.md `VariantTabs`, `VariantBreakdown`, `AbToggle` |
+| REQ-DSH-01 | openapi `listCampaignSummaries` (`state`, `order`, `Limit`, `Offset`; `CampaignSummaryPage`, `CampaignSummary`, `CampaignOverview`, `CampaignStateCounts`); go-interfaces `campaign.SummaryLister`, `NewSummaryLister`, `ParseSummaryFilter`, `SummaryFilter`, `SummaryOrderRecent`/`SummaryOrderScheduledAt`, `Summary`, `SummaryPage`, `Overview`, `StateCounts`, `httpapi.Deps.Summaries`; db-schema §3.10 |
+| REQ-DSH-02 | **ui.md §3.31** `CampaignPanel`, §1, §1.1, §4 i18n P10, §6; DESIGN.md §8.1 panel, `CampaignPanel`, `CampaignSummaryRow` |
+| REQ-DSH-03 | **ui.md §3.20 P10**, **§3.20b**, §3.25 (`schedule-started-note` yeri), §4 i18n P10, §6; DESIGN.md §8.5 |
 
 ## 9. Kararlar (sahip / lider, P1 incelemesi)
 
