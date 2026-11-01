@@ -32,10 +32,11 @@ import (
 )
 
 var (
-	// scheduled_at is part of the send response and of CampaignStatus (REQ-SCH-01 C2, C4).
+	// scheduled_at is part of the send response and of CampaignStatus (REQ-SCH-01 C2, C4); by_variant
+	// is part of CampaignStatus from P9 on (REQ-ABT-03 C10).
 	sndAcceptedKeys   = []string{"campaign_id", "content_version_id", "deliveries", "scheduled_at", "state"}
 	sndDeliveriesKeys = []string{"email", "sms", "total"}
-	sndStatusKeys     = []string{"by_channel", "campaign_id", "completed_at", "counts", "scheduled_at", "sending_started_at", "state", "updated_at"}
+	sndStatusKeys     = []string{"by_channel", "by_variant", "campaign_id", "completed_at", "counts", "scheduled_at", "sending_started_at", "state", "updated_at"}
 	sndCountKeys      = []string{"failed", "queued", "sending", "sent", "total"}
 	sndChannels       = []string{"email", "sms"}
 	sndPageKeys       = []string{"items", "limit", "offset", "total"}
@@ -251,6 +252,7 @@ func sndStatusOf(t *testing.T, api, id string) sndStatus {
 		t.Fatalf("CampaignStatus.updated_at = %q: %v", s.UpdatedAt, err)
 	}
 	sndCheckCounts(t, s)
+	abCheckByVariant(t, "GET status", obj) // REQ-ABT-03 C7, C10
 	return s
 }
 

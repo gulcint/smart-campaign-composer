@@ -79,6 +79,8 @@ const (
 	CodeEmptyGroup              = "empty_group"
 	CodeMaxDepthExceeded        = "max_depth_exceeded"
 	CodeMaxConditionsExceeded   = "max_conditions_exceeded"
-	CodeScheduleTooSoon         = "schedule_too_soon" // P7a, path "scheduled_at"
-	CodeScheduleTooFar          = "schedule_too_far"  // P7a, path "scheduled_at"
+	CodeScheduleTooSoon         = "schedule_too_soon"     // P7a, path "scheduled_at"
+	CodeScheduleTooFar          = "schedule_too_far"      // P7a, path "scheduled_at"
+	CodeVariantsIdentical       = "variants_identical"    // P9, path "b"
+	CodeVariantNotAvailable     = "variant_not_available" // P9, path "query.variant"
 )

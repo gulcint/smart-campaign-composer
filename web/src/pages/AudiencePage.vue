@@ -4,6 +4,7 @@ import { ArrowUpRight, PencilLine } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import AbToggle from '@/components/AbToggle.vue'
 import AudienceSummaryCard from '@/components/AudienceSummaryCard.vue'
 import Button from '@/components/Button.vue'
 import ChatBubble from '@/components/ChatBubble.vue'
@@ -52,6 +53,17 @@ const canEditBrief = computed(
   () => campaign.value?.state !== 'sending' && campaign.value?.state !== 'completed',
 )
 
+// P9 (ui.md §3.7, §3.29): A/B switch for the generation started from here. It starts on when the
+// latest version has variant B; a user choice wins from then on. Enabled exactly when
+// audience-generate-content is.
+const abChoice = ref<boolean | null>(null)
+const ab = computed(
+  () => abChoice.value ?? campaign.value?.latest_content_version?.content.b != null,
+)
+function onAb(v: boolean) {
+  if (canGenerate.value) abChoice.value = v
+}
+
 onMounted(() => {
   if (campaignId.value) void store.ensure(campaignId.value)
 })
@@ -61,7 +73,11 @@ const confirmOpen = ref(false)
 function goToContent() {
   const id = campaignId.value
   if (!id) return
-  void router.push({ name: 'content', params: { campaignId: id }, query: { generate: '1' } })
+  void router.push({
+    name: 'content',
+    params: { campaignId: id },
+    query: ab.value ? { generate: '1', ab: '1' } : { generate: '1' },
+  })
 }
 
 function onGenerate() {
@@ -137,15 +153,25 @@ async function onRetry() {
           <PencilLine aria-hidden="true" />
           {{ t('audience.editBrief') }}
         </Button>
-        <Button
-          data-testid="audience-generate-content"
-          size="lg"
-          :disabled="!canGenerate"
-          @click="onGenerate"
-        >
-          {{ t('audience.generateContent') }}
-          <ArrowUpRight aria-hidden="true" />
-        </Button>
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-center">
+          <div class="sm:max-w-64">
+            <AbToggle
+              data-testid="audience-ab-toggle"
+              :model-value="ab"
+              :disabled="!canGenerate"
+              @update:model-value="onAb"
+            />
+          </div>
+          <Button
+            data-testid="audience-generate-content"
+            size="lg"
+            :disabled="!canGenerate"
+            @click="onGenerate"
+          >
+            {{ t('audience.generateContent') }}
+            <ArrowUpRight aria-hidden="true" />
+          </Button>
+        </div>
       </div>
 
       <ConfirmDialog

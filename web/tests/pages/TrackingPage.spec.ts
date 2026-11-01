@@ -4,6 +4,8 @@
 //
 // REQ-SCH-04 C7, C8, C9 (UI): the waiting plan (schedule-panel, countdown), cancel and "send now"
 // from the tracking page, and the started-from-plan note.
+//
+// REQ-ABT-04 C10 (UI): the variant-breakdown table from status.by_variant.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import TrackingPage from '@/pages/TrackingPage.vue'
@@ -620,5 +622,90 @@ describe('TrackingPage started-from-plan note (REQ-SCH-04 C9)', () => {
     }
     expect(note?.getAttribute('data-value')).toBe(at)
     expect(note?.textContent?.trim()).toBe(t('schedule.startedNote', { time: formatTsi(at) }))
+  })
+})
+
+// ---- A/B variants (P9) ----
+
+const AB_ANGLES = { a: 'İndirim oranı öne çıkar', b: 'Aciliyet: indirim bugün bitiyor' }
+
+function abCounts(queued: number, sending: number, sent: number, failed: number) {
+  return { total: queued + sending + sent + failed, queued, sending, sent, failed }
+}
+
+/** by_variant whose a + b equals the by_channel of AB_STATUS (REQ-ABT-03 C7). */
+const BY_VARIANT = {
+  a: { sms: abCounts(50, 5, 120, 2), email: abCounts(60, 4, 110, 1) },
+  b: { sms: abCounts(50, 15, 110, 3), email: abCounts(140, 6, 50, 3) },
+}
+const AB_STATUS = status(CAMPAIGN_ID, 'sending', [100, 20, 230, 5], [200, 10, 160, 4], {
+  by_variant: BY_VARIANT,
+})
+
+async function mountAB(snapshot: unknown) {
+  const es = fakeEventSourceFactory()
+  const c = {
+    ...version().content,
+    b: { sms: { body: 'B' }, email: { subject: 'B', body: 'B' } },
+    angles: AB_ANGLES,
+  }
+  const a = fakeApi({
+    [`GET ${C}`]: () => campaign('sending', version(V1, 1, c as never)),
+    [`GET ${C}/deliveries`]: () => deliveriesPage(),
+  })
+  const r = await mountPage(TrackingPage, 'tracking', { api: a.client, eventSource: es.factory })
+  wrapper = r.wrapper
+  es.last().simulateOpen()
+  es.last().simulateEvent('snapshot', snapshot)
+  await flushPromises()
+  return { es, w: r.wrapper }
+}
+
+describe('TrackingPage variant breakdown (REQ-ABT-04 C10)', () => {
+  it('status.by_variant set: variant-breakdown table with rows, angles, counts and the note', async () => {
+    await mountAB(AB_STATUS)
+    const table = q('variant-breakdown')
+    expect(table?.tagName).toBe('TABLE')
+    expect(q('variant-row-a')).not.toBeNull()
+    expect(q('variant-row-b')).not.toBeNull()
+    expect(q('variant-angle-a')?.textContent).toBe(AB_ANGLES.a)
+    expect(q('variant-angle-b')?.textContent).toBe(AB_ANGLES.b)
+    for (const v of ['a', 'b'] as const) {
+      for (const c of CHANNELS) {
+        for (const k of ['sent', 'failed', 'queued'] as const) {
+          expect(
+            q(`variant-count-${v}-${c}-${k}`)?.getAttribute('data-value'),
+            `${v} ${c} ${k}`,
+          ).toBe(String(BY_VARIANT[v][c][k]))
+        }
+      }
+    }
+    expect(q('variant-breakdown-note')?.textContent?.trim()).toBe(t('tracking.variantNote'))
+  })
+
+  it('a later status event updates the variant counts', async () => {
+    const { es } = await mountAB(AB_STATUS)
+    const next = {
+      a: { sms: abCounts(0, 0, 175, 2), email: abCounts(0, 0, 174, 1) },
+      b: { sms: abCounts(0, 0, 175, 3), email: abCounts(0, 0, 196, 3) },
+    }
+    es.last().simulateEvent(
+      'status',
+      status(CAMPAIGN_ID, 'sending', [0, 0, 350, 5], [0, 0, 370, 4], { by_variant: next }),
+    )
+    await flushPromises()
+    expect(q('variant-count-b-email-sent')?.getAttribute('data-value')).toBe('196')
+  })
+
+  it.each([
+    {
+      name: 'by_variant null',
+      snap: status(CAMPAIGN_ID, 'sending', [1, 0, 0, 0], [1, 0, 0, 0], { by_variant: null }),
+    },
+    { name: 'no by_variant key', snap: status(CAMPAIGN_ID, 'sending', [1, 0, 0, 0], [1, 0, 0, 0]) },
+  ])('$name: no variant-breakdown', async ({ snap }) => {
+    await mountAB(snap)
+    expect(q('variant-breakdown')).toBeNull()
+    expect(q('variant-breakdown-note')).toBeNull()
   })
 })

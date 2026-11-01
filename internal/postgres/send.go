@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/gulcint/smart-campaign-composer/internal/campaign"
+	"github.com/gulcint/smart-campaign-composer/internal/content"
 	"github.com/gulcint/smart-campaign-composer/internal/segment"
 )
 
@@ -123,14 +124,20 @@ func startSendingLocked(ctx context.Context, tx pgx.Tx, id, versionID string, lc
 	// One row per (channel, customer) of the channel audiences (segment-dsl.md §6), read with the
 	// current consent and contact columns. The compiled predicate holds only constant SQL and $n
 	// placeholders; this query's own parameters follow the rule's. The row id is the provider
-	// Idempotency-Key (REQ-SND-03).
+	// Idempotency-Key (REQ-SND-03). P9 (D64): the A/B variant is written here, once, from the
+	// campaign and customer ids only (db-schema.md §3.7): 'b' iff the approved version has variant B
+	// and the first byte of sha256(campaign uuid || customer uuid) is >= 128 (content.VariantFor is
+	// the Go twin); independent of the channel, so one customer gets the same variant on both.
 	n := len(comp.Args)
 	p := func(i int) string { return "$" + strconv.Itoa(n+i) }
 	q := `WITH ins AS (
 		INSERT INTO deliveries (id, campaign_id, content_version_id, customer_id, channel, status,
-			next_attempt_at, created_at, updated_at)
+			next_attempt_at, created_at, updated_at, variant)
 		SELECT gen_random_uuid(), ` + p(1) + `::uuid, ` + p(2) + `::uuid, c.id, ch.channel, 'queued',
-			` + p(3) + `::timestamptz, ` + p(3) + `::timestamptz, ` + p(3) + `::timestamptz
+			` + p(3) + `::timestamptz, ` + p(3) + `::timestamptz, ` + p(3) + `::timestamptz,
+			CASE WHEN EXISTS (SELECT 1 FROM content_versions v WHERE v.id = ` + p(2) + `::uuid AND v.b_sms_body IS NOT NULL)
+				AND get_byte(sha256(uuid_send(` + p(1) + `::uuid) || uuid_send(c.id)), 0) >= 128
+				THEN 'b' ELSE 'a' END
 		FROM customers c
 		JOIN customer_stats_at($1) s ON s.customer_id = c.id
 		CROSS JOIN (VALUES ('sms'), ('email')) AS ch (channel)
@@ -239,6 +246,7 @@ func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign
 		state                string
 		scheduledAt          *time.Time
 		sendingAt, completed *time.Time
+		hasB                 bool
 	)
 	// One snapshot for the campaign row and the counters: a response never pairs a state with
 	// counters from another moment (e.g. approved with non-zero counters).
@@ -250,8 +258,10 @@ func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign
 
 	err = tx.QueryRow(ctx, `
 		SELECT state, scheduled_at, sending_started_at, completed_at,
-			greatest(updated_at, (SELECT max(updated_at) FROM deliveries WHERE campaign_id = $1))
-		FROM campaigns WHERE id = $1`, id).Scan(&state, &scheduledAt, &sendingAt, &completed, &st.UpdatedAt)
+			greatest(updated_at, (SELECT max(updated_at) FROM deliveries WHERE campaign_id = $1)),
+			EXISTS (SELECT 1 FROM content_versions v
+				WHERE v.id = campaigns.approved_content_version_id AND v.b_sms_body IS NOT NULL)
+		FROM campaigns WHERE id = $1`, id).Scan(&state, &scheduledAt, &sendingAt, &completed, &st.UpdatedAt, &hasB)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return campaign.CampaignStatus{}, campaign.ErrCampaignNotFound
 	}
@@ -263,38 +273,53 @@ func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign
 	st.SendingStartedAt, st.CompletedAt, st.UpdatedAt = utcPtr(sendingAt), utcPtr(completed), st.UpdatedAt.UTC()
 
 	rows, err := tx.Query(ctx, `
-		SELECT channel, status, count(*) FROM deliveries WHERE campaign_id = $1 GROUP BY channel, status`, id)
+		SELECT channel, status, variant, count(*) FROM deliveries WHERE campaign_id = $1
+		GROUP BY channel, status, variant`, id)
 	if err != nil {
 		return campaign.CampaignStatus{}, fmt.Errorf("postgres: campaign status: %w", err)
 	}
 	defer rows.Close()
+	// P9 (D64): by_variant only when the approved version has variant B (null otherwise).
+	var byVariant campaign.VariantCounts
+	pick := func(cc *campaign.ChannelCounts, ch string) *campaign.StatusCounts {
+		if ch == "email" {
+			return &cc.Email
+		}
+		return &cc.SMS
+	}
 	for rows.Next() {
-		var ch, status string
+		var ch, status, variant string
 		var n int
-		if err := rows.Scan(&ch, &status, &n); err != nil {
+		if err := rows.Scan(&ch, &status, &variant, &n); err != nil {
 			return campaign.CampaignStatus{}, fmt.Errorf("postgres: campaign status: %w", err)
 		}
-		c := &st.ByChannel.SMS
-		if ch == "email" {
-			c = &st.ByChannel.Email
+		vc := &byVariant.A
+		if variant == content.VariantB {
+			vc = &byVariant.B
 		}
-		switch status {
-		case "queued":
-			c.Queued += n
-		case "sending":
-			c.Sending += n
-		case "sent":
-			c.Sent += n
-		case "failed":
-			c.Failed += n
+		for _, c := range []*campaign.StatusCounts{pick(&st.ByChannel, ch), pick(vc, ch)} {
+			switch status {
+			case "queued":
+				c.Queued += n
+			case "sending":
+				c.Sending += n
+			case "sent":
+				c.Sent += n
+			case "failed":
+				c.Failed += n
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return campaign.CampaignStatus{}, fmt.Errorf("postgres: campaign status: %w", err)
 	}
 	// total = queued + sending + sent + failed per channel; counts = sms + email (REQ-TRK-01).
-	for _, c := range []*campaign.StatusCounts{&st.ByChannel.SMS, &st.ByChannel.Email} {
+	for _, c := range []*campaign.StatusCounts{&st.ByChannel.SMS, &st.ByChannel.Email,
+		&byVariant.A.SMS, &byVariant.A.Email, &byVariant.B.SMS, &byVariant.B.Email} {
 		c.Total = c.Queued + c.Sending + c.Sent + c.Failed
+	}
+	if hasB {
+		st.ByVariant = &byVariant
 	}
 	sms, email := st.ByChannel.SMS, st.ByChannel.Email
 	st.Counts = campaign.StatusCounts{
@@ -305,7 +330,7 @@ func (s *CampaignStore) DeliveryStatus(ctx context.Context, id string) (campaign
 }
 
 const deliveryColumns = `id::text, campaign_id::text, content_version_id::text, customer_id::text, channel, status,
-	attempts, failed_attempts, rate_limited_count, retry_count, next_attempt_at, first_attempt_at, last_attempt_at,
+	variant, attempts, failed_attempts, rate_limited_count, retry_count, next_attempt_at, first_attempt_at, last_attempt_at,
 	last_http_status, last_error, failure_reason, provider_message_id, sent_at, failed_at, created_at, updated_at`
 
 // ListDeliveries returns one page of the campaign's deliveries. No recipient address is selected:
@@ -347,7 +372,7 @@ func (s *CampaignStore) ListDeliveries(ctx context.Context, id string, f campaig
 	for rows.Next() {
 		var d campaign.Delivery
 		if err := rows.Scan(&d.ID, &d.CampaignID, &d.ContentVersionID, &d.CustomerID, &d.Channel, &d.Status,
-			&d.Attempts, &d.FailedAttempts, &d.RateLimitedCount, &d.RetryCount, &d.NextAttemptAt, &d.FirstAttemptAt,
+			&d.Variant, &d.Attempts, &d.FailedAttempts, &d.RateLimitedCount, &d.RetryCount, &d.NextAttemptAt, &d.FirstAttemptAt,
 			&d.LastAttemptAt, &d.LastHTTPStatus, &d.LastError, &d.FailureReason, &d.ProviderMessageID, &d.SentAt,
 			&d.FailedAt, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("postgres: list deliveries: %w", err)

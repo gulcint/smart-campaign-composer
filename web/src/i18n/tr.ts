@@ -133,6 +133,10 @@ export const tr = {
   'content.generate': 'İçeriği üret',
   'content.regenerate': 'Yeniden üret',
   'content.editDraft': 'Taslağı düzenle',
+  // P9 (REQ-ABT-04): A/B test switch, shown next to generate / regenerate.
+  'content.abToggle': 'A/B testi',
+  'content.abToggleHint':
+    'İki varyant üretilir; kitle gönderimde ≈ yarı yarıya bölünür, üretim ~2× sürer.',
   'content.empty': 'Bu kampanya için henüz içerik üretilmedi.',
   'content.toApproval': 'Onaya geç',
   'content.previewTitle': 'Örnek alıcıyla önizleme',
@@ -160,11 +164,17 @@ export const tr = {
   'tabs.languages': 'İçerik dilleri',
   'language.tr': 'Türkçe',
   'language.en': 'İngilizce',
+  'tabs.variants': 'İçerik varyantları',
+  'variant.a': 'Varyant A',
+  'variant.b': 'Varyant B',
+  'variant.angle': 'Bu varyantın denediği açı',
 
   // --- Content editor (P4) ---
   'editor.smsBody': 'SMS metni',
   'editor.emailSubject': 'Email konusu',
   'editor.emailBody': 'Email gövdesi',
+  'editor.angle': 'Açı',
+  'editor.angleHint': 'Varyantın neyi denediğini anlatan kısa etiket; müşteriye gitmez.',
   'editor.variables': 'Değişken ekle',
   'editor.save': 'Kaydet ve doğrula',
   'editor.shortcut': 'Kaydetmek için Ctrl/⌘ + Enter',
@@ -188,7 +198,6 @@ export const tr = {
   'approval.title': 'Gönderimi onayla',
   'approval.subtitle': 'Kime ve tam olarak ne gideceğini kontrol et; önce onayla, sonra gönder.',
   'approval.summaryTitle': 'Gönderim özeti',
-  'approval.version': 'Sürüm {n}',
   'approval.row.recipients': 'Kime',
   'approval.row.message': 'Ne gidiyor',
   'approval.row.limits': 'Uzunluk',
@@ -210,6 +219,8 @@ export const tr = {
   'approval.approvedNote': 'düzenlersen onay düşer',
   'approval.scheduledNote': 'Planlandı: {time}. Değiştirmek için planı iptal et.',
   'approval.toTracking': 'Takibe git',
+  'approval.abSplitNote':
+    'Kitle iki yarıya bölünür (≈ %50 / %50); aynı kişi iki kanalda aynı varyantı alır.',
 
   // --- Confirm dialog ---
   'confirm.approve.title': 'İçeriği onayla',
@@ -288,6 +299,15 @@ export const tr = {
   'tracking.title': 'Gönderimi izle',
   'tracking.subtitle':
     'Sayılar sayfa yenilenmeden güncellenir; tüm teslimatlar sonlanınca kampanya tamamlanır.',
+  'tracking.variantTitle': 'Varyantlara göre teslimat',
+  'tracking.variantNote':
+    'Mock provider açılma ve tıklama ölçmez; bu tablo yalnız teslimat sonucudur, kazanan seçilmez.',
+  'tracking.variantCol': 'Varyant',
+  'tracking.angleCol': 'Açı',
+  'tracking.variantCounts': 'gön. / baş. / kuy.',
+  'tracking.sent': 'Gönderildi',
+  'tracking.failed': 'Başarısız',
+  'tracking.queued': 'Kuyrukta',
 
   // --- Connection / toasts ---
   'connection.lost': 'Bağlantı koptu, yeniden bağlanılıyor…',
@@ -383,6 +403,8 @@ export const tr = {
   'field_error.max_conditions_exceeded': 'Kuralda çok fazla koşul var.',
   'field_error.schedule_too_soon': 'Gönderim zamanı çok yakın ya da geçmişte.',
   'field_error.schedule_too_far': 'Gönderim zamanı en fazla 30 gün sonrası olabilir.',
+  'field_error.variants_identical': 'Varyant B, Varyant A ile aynı; en az bir metni farklılaştır.',
+  'field_error.variant_not_available': 'Bu sürümde Varyant B yok.',
   'field_error.payload_too_large': 'Metin çok büyük.',
   'field_error.unknown': 'Bu alan geçersiz.',
 } as const

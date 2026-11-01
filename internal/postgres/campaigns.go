@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,7 +40,7 @@ func (s *CampaignStore) CreateCampaign(ctx context.Context, c campaign.Campaign)
 
 // campaignSelect reads a campaign with the latest VALIDATED content version of the current segment
 // revision and the active approval (openapi Campaign).
-const campaignSelect = `
+var campaignSelect = `
 	SELECT c.id::text, c.brief, c.state, c.segment_rule, c.segment_reference_time, c.segment_revision,
 		c.segment_llm_attempts, c.segment_generated_at, c.audience_matched, c.audience_sms, c.audience_email,
 		c.audience_languages, c.longest_first_name, c.longest_last_name, c.longest_city, c.scheduled_at, c.sending_started_at, c.completed_at,
@@ -46,6 +48,7 @@ const campaignSelect = `
 		cv.id::text, cv.version_number, cv.segment_revision, cv.status, cv.source, cv.sms_body, cv.email_subject,
 		cv.email_body, cv.validation_errors, cv.llm_attempts, cv.worst_case_sms_runes, cv.worst_case_subject_runes,
 		cv.en_sms_body, cv.en_email_subject, cv.en_email_body, cv.worst_case_en_sms_runes, cv.worst_case_en_subject_runes,
+		` + variantColumns("cv") + `,
 		cv.created_at,
 		a.id::text, a.content_version_id::text, a.approved_at
 	FROM campaigns c
@@ -187,20 +190,22 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 		cvErrors                                           []byte
 		cvENSMS, cvENSubject, cvENBody                     *string
 		cvWCENSMS, cvWCENSub                               *int
+		cvB                                                variantCols
 		cvCreated                                          *time.Time
 
 		apID, apVersion *string
 		apAt            *time.Time
 	)
-	err := row.Scan(&c.ID, &c.Brief, &state, &rule, &refTime, &revision,
+	dest := []any{&c.ID, &c.Brief, &state, &rule, &refTime, &revision,
 		&llmAttempts, &generatedAt, &matched, &sms, &email,
 		&audienceLanguages, &longFirst, &longLast, &longCity, &scheduledAt, &sendingAt, &completeAt,
 		&c.CreatedAt, &c.UpdatedAt,
 		&cvID, &cvNumber, &cvRevision, &cvStatus, &cvSource, &cvSMS, &cvSubject,
 		&cvBody, &cvErrors, &cvAttempts, &cvWCSMS, &cvWCSub,
-		&cvENSMS, &cvENSubject, &cvENBody, &cvWCENSMS, &cvWCENSub,
-		&cvCreated,
-		&apID, &apVersion, &apAt)
+		&cvENSMS, &cvENSubject, &cvENBody, &cvWCENSMS, &cvWCENSub}
+	dest = append(dest, cvB.dest()...)
+	dest = append(dest, &cvCreated, &apID, &apVersion, &apAt)
+	err := row.Scan(dest...)
 	if err != nil {
 		return campaign.Campaign{}, fmt.Errorf("postgres: read campaign: %w", err)
 	}
@@ -253,6 +258,7 @@ func scanCampaign(row pgx.Row) (campaign.Campaign, error) {
 				v.WorstCase.EN = &content.WorstCaseLang{SMSRunes: *cvWCENSMS, SubjectRunes: *cvWCENSub}
 			}
 		}
+		cvB.apply(&v.Content, v.WorstCase)
 		if len(cvErrors) > 0 {
 			if err := json.Unmarshal(cvErrors, &v.ValidationErrors); err != nil {
 				return campaign.Campaign{}, fmt.Errorf("postgres: read content version errors: %w", err)
@@ -292,6 +298,78 @@ func englishOf(sms, subject, body *string) *content.English {
 		return nil
 	}
 	return &content.English{SMS: content.SMS{Body: *sms}, Email: content.Email{Subject: *subject, Body: *body}}
+}
+
+// variantColumnNames are the 0010 columns of content_versions (P9, D64; db-schema.md §3.5), in the
+// order of variantCols.dest and variantArgs.
+var variantColumnNames = []string{
+	"b_sms_body", "b_email_subject", "b_email_body", "angle_a", "angle_b",
+	"b_en_sms_body", "b_en_email_subject", "b_en_email_body",
+	"worst_case_b_sms_runes", "worst_case_b_subject_runes", "worst_case_b_en_sms_runes", "worst_case_b_en_subject_runes",
+}
+
+// variantColumns lists variantColumnNames qualified by alias ("v.b_sms_body, v.b_email_subject, ...").
+func variantColumns(alias string) string {
+	cols := make([]string, len(variantColumnNames))
+	for i, c := range variantColumnNames {
+		cols[i] = alias + "." + c
+	}
+	return strings.Join(cols, ", ")
+}
+
+// variantCols receives the 0010 columns of one content_versions row.
+type variantCols struct {
+	sms, subject, body, angleA, angleB, enSMS, enSubject, enBody *string
+	wcSMS, wcSub, wcENSMS, wcENSub                               *int
+}
+
+func (v *variantCols) dest() []any {
+	return []any{&v.sms, &v.subject, &v.body, &v.angleA, &v.angleB, &v.enSMS, &v.enSubject, &v.enBody,
+		&v.wcSMS, &v.wcSub, &v.wcENSMS, &v.wcENSub}
+}
+
+// apply rebuilds Content.B / Angles (all NULL or all set: 0010 checks) and, when wc is non-nil,
+// WorstCase.B.
+func (v *variantCols) apply(c *content.Content, wc *content.WorstCase) {
+	if v.sms == nil || v.subject == nil || v.body == nil || v.angleA == nil || v.angleB == nil {
+		return
+	}
+	c.B = &content.Variant{
+		SMS: content.SMS{Body: *v.sms}, Email: content.Email{Subject: *v.subject, Body: *v.body},
+		EN: englishOf(v.enSMS, v.enSubject, v.enBody),
+	}
+	c.Angles = &content.Angles{A: *v.angleA, B: *v.angleB}
+	if wc != nil && v.wcSMS != nil && v.wcSub != nil {
+		wc.B = &content.WorstCaseVariant{SMSRunes: *v.wcSMS, SubjectRunes: *v.wcSub}
+		if v.wcENSMS != nil && v.wcENSub != nil {
+			wc.B.EN = &content.WorstCaseLang{SMSRunes: *v.wcENSMS, SubjectRunes: *v.wcENSub}
+		}
+	}
+}
+
+// variantArgs are the INSERT values of variantColumnNames for c (NULL without variant B). B
+// without angles (or angles without B) is an error: content.Parse never yields it, and storing
+// it would silently drop variant B.
+func variantArgs(c content.Content, wc *content.WorstCase) ([]any, error) {
+	if (c.B == nil) != (c.Angles == nil) {
+		return nil, errors.New("postgres: variant B and angles must be set together")
+	}
+	var v variantCols
+	if b := c.B; b != nil {
+		v.sms, v.subject, v.body = &b.SMS.Body, &b.Email.Subject, &b.Email.Body
+		v.angleA, v.angleB = &c.Angles.A, &c.Angles.B
+		if b.EN != nil {
+			v.enSMS, v.enSubject, v.enBody = &b.EN.SMS.Body, &b.EN.Email.Subject, &b.EN.Email.Body
+		}
+		if wc != nil && wc.B != nil {
+			v.wcSMS, v.wcSub = &wc.B.SMSRunes, &wc.B.SubjectRunes
+			if wc.B.EN != nil && b.EN != nil {
+				v.wcENSMS, v.wcENSub = &wc.B.EN.SMSRunes, &wc.B.EN.SubjectRunes
+			}
+		}
+	}
+	return []any{v.sms, v.subject, v.body, v.angleA, v.angleB, v.enSMS, v.enSubject, v.enBody,
+		v.wcSMS, v.wcSub, v.wcENSMS, v.wcENSub}, nil
 }
 
 // nullableJSON maps an empty document to SQL NULL.
