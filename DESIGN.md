@@ -339,6 +339,9 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | `SegmentRuleView` | Kuralın insan-okur özeti (ör. "Şehir = İstanbul · Son 30 gün sepete ekledi · Satın almadı") | custom | chip listesi / açılır JSON (mono, salt okunur, `textContent`) | — | REQ-AUD-00/01 |
 | `ChannelTabs` | SMS / Email geçişi | shadcn `Tabs` | her sekmede kanal noktası (renk) + durum rozeti mini (validated/invalid) | aktif: alt 2 px pill gösterge kanal renginde, etiket `--text-accent`; pasif; hata içeren sekme etiketinde `CircleAlert` | REQ-CNT-01..04 |
 | `LanguageTabs` | Türkçe / İngilizce içerik sürümü geçişi (yalnız sürümde veya akışta İngilizce varsa) | shadcn `Tabs` | her sekmede etiket ("Türkçe", "İngilizce") + hata göstergesi | `ChannelTabs`'ın bir üst seviyesinde, daha küçük ve nötr: aktif sekme alt 2 px pill gösterge `--text-accent`, kanal rengi kullanılmaz (kanal rengi yalnız kanal sekmelerindedir); hata içeren sekme etiketinde `CircleAlert`; <1024 px'te 44 px dokunma hedefi | REQ-LNG-04 |
+| `VariantTabs` | Varyant A / Varyant B geçişi (yalnız sürümde veya akışta B varsa; İçerik ve Onay) | shadcn `Tabs` | her sekmede etiket ("Varyant A", "Varyant B") + hata göstergesi; altında seçili varyantın açı etiketi | Hiyerarşinin en üstü: varyant → dil → kanal. `LanguageTabs` ile aynı ölçek ve nötr dil (alt 2 px pill `--text-accent`, kanal rengi yok); açı etiketi sekmelerin altında küçük, `--ink-700` gövde metni (LLM metni turuncu yapılmaz, §4.1), önünde `FlaskConical` ikonu `--ink-500`; hata içeren sekmede `CircleAlert`; <1024 px'te 44 px dokunma hedefi | REQ-ABT-04 |
+| `AbToggle` | "A/B testi" anahtarı (Kitle ve İçerik eylem şeridinde, üret/yeniden üret düğmesinin solunda) | shadcn `Switch` | kapalı, açık, devre dışı (planlı/gönderiliyor/tamamlandı) | etiket + tek satır ipucu (`--ink-500`, "kitle ≈ yarı yarıya bölünür, üretim ~2× sürer"); açıkken iz rengi `--text-accent` rol token'ıyla; anahtar tek başına birincil eylem değildir | REQ-ABT-04 |
+| `VariantBreakdown` | Takip ekranında varyant başına teslimat tablosu (`by_variant` doluysa) | shadcn `Table` | iki satır (A, B): açı, SMS ve Email için gönderildi / başarısız / kuyrukta | sayaç kartlarının altında, kart yüzeyinde; sayılar `tabular-nums`, başarısız > 0 ise `--error`; kazanan vurgusu, renkli karşılaştırma veya oran çubuğu **yok**; altta `Info` ikonlu not "Mock provider açılma/tıklama ölçmez; tablo yalnız teslimat sonucudur" (`--ink-500`); <640 px'te tablo yatay kayar (başlık sütunu yapışık) | REQ-ABT-04 |
 | `StreamingText` | Akan içerik bloğu | custom | alan başına (SMS gövdesi, email konusu, email gövdesi) | `idle` (skeleton 3 satır), `streaming` (metin + caret, rozet "Taslak"), `validated` (caret yok, rozet "Doğrulandı"), `invalid` (rozet "Geçersiz" + alan altında hata listesi), `retrying` (sunucu son olmayan `invalid` gönderdi: taslak temizlenir, üstte info satırı "Model çıktısı düzeltiliyor…"), `interrupted` (son olay yok: taslak soluk, uyarı "Akış yarıda kesildi" + "Yeniden üret") | REQ-CNT-04, REQ-AI-01, REQ-UI-01 |
 | `StatusBadge` | Durum rozetleri | shadcn `Badge` | §3.4 tablosundaki tüm durumlar; `sm` (20 px) / `md` (24 px); pill, ikon + metin, zemin = semantik zemin | — | REQ-CNT-04, REQ-TRK-01 |
 | `VariableChip` | `{{first_name}}` vb. | custom | `insert` (editör araç çubuğunda, tıklayınca imleç konumuna ekler) · `inline` (önizlemede renderlanmamış hali) · `invalid` (izinsiz değişken: `--error` kenarlık + üstü çizili değil, `CircleAlert`) | default, hover, focus, disabled (sending/completed) | REQ-CNT-03 |
@@ -446,6 +449,14 @@ Durumlar: yükleniyor (kural alanında shimmer chip satırı; kartta shimmer say
 │ └────────────────────────────────────────────────────────────────────┘│
 ```
 Üstte `StepHeader`: "ADIM 3/5 · ÜRET VE DÜZENLE", h1 "Mesajları hazırla", amaç cümlesi, sağda içerik rozeti, altında "→ Sıradaki: Onaya geç" pill'i.
+**A/B (P9):** eylem şeridinde "Yeniden üret"in solunda `AbToggle`. Sürümde B varsa editör kartının en üstünde `VariantTabs` ("Varyant A" / "Varyant B") ve altında seçili varyantın açı etiketi; onun altında (varsa) `LanguageTabs`, sonra kanal sekmeleri. Önizleme seçili varyant + dili izler.
+
+```
+│ [Varyant A] [Varyant B ●]                                            │
+│ ⚗ Aciliyet: indirim bugün bitiyor                                    │
+│ [Türkçe] [İngilizce]                                                 │
+│ [● SMS ✓] [● Email ✓]                                                │
+```
 Email sekmesinde: konu `Input` + sayaç `/80`, gövde `Textarea`; sağda `EmailPreview` (konu satırı + iframe). Akış sırasında editör `readonly`, caret görünür; her iki kanal `validated` olunca rozetler yeşile döner ve ana eylem aktifleşir. `interrupted` ve son `invalid` durumunda "Yeniden üret" birincil olur.
 
 ### 8.4 Onay
@@ -471,6 +482,7 @@ Email sekmesinde: konu `Input` + sayaç `/80`, gövde `Textarea`; sağda `EmailP
 - Tek sütun, maks. 768 px, ortalı (İçerik'in 1120 px iki panelinden bilerek farklı). Satır etiketi sütunu ≥640 px'te 144 px; altında etiket satırın üstüne gelir. Satırlar arası kesik çizgi (`--border-default`), makbuz hissi.
 - **Ne gidiyor:** API'nin tek örnek alıcı için render ettiği düz metin (`preview.sms.text`, `preview.email.subject`, `preview.email.text`); kanal renginde 2 px sol çizgi, `--ink-900`/`--ink-700` metin (LLM metni turuncu yapılmaz, §4.1). Email gövdesi 288 px'i aşarsa kendi içinde kayar (klavyeyle odaklanabilir bölge).
 - **Uzunluk:** tek sinyal; geçtiyse `--success` + `CircleCheck`, aşıyorsa `--error` + `CircleAlert` ve "onay reddedilir". Ayrıntı mono tabular tek satır.
+- **A/B (P9):** sürümde B varsa kartın başında `VariantTabs` (+ açı etiketi), Kime satırında "Kitle iki yarıya bölünür (≈ %50 / %50); aynı kişi iki kanalda aynı varyantı alır" notu. Ne gidiyor satırı seçili varyant + dili gösterir; Uzunluk sinyali **bütün** varyant × dil sürümlerini kapsar (ayrıntı satırı seçili olanın sayılarını gösterir). Onay tek karardır: iki varyant birlikte onaylanır.
 - **Karar paneli:** kartın son bölümü (opak `--surface-sunken`, üst kenarlık `--border-default`). Kartın akışı içinde `sticky bottom-0`: kısa görünümlerde (ör. 1280×900) kart kaydırılırken görünümün altına iğnelenir, kart sonuna gelince son satırın (Uzunluk) altında yerine oturur; böylece karar kaydırmadan görünür, kaydırmanın sonunda hiçbir içeriği örtmez ve iğneliyken üstünden geçtiği içerik kaydırınca açılır. Satırlar ve email gövdesi 192 px `scroll-margin-bottom` taşır (odak panelin altına düşmez). 375 px'te panel 177 px (812 px görünümün %22'si, %25 sınırının altında) olduğu için telefonda da yapışıktır. Onay sonrası not "Onaylandı · düzenlersen onay düşer" + ( Gönder ) → `ConfirmDialog send` (kanal sayıları). 422 (REQ-CNT-05 onay anı aşımı) diyalog içinde. "Taslağı düzenle" → İçerik adımı.
 - Kaldırılanlar (P6): sayfa rozeti (`AppHeader` ile tekrar), "1 Onayla → 2 Gönder" mini adım listesi, "Sürüm · Claude üretti" kaynağı, kart logosu, `LimitChip`'ler (4 adet → tek satır), "Gidecek metin" etiketleri, balon/çerçeve/örnek gezme, ayrı düzenleme ipucu şeridi, uzun alt başlık.
 
@@ -485,6 +497,17 @@ Email sekmesinde: konu `Input` + sayaç `/80`, gövde `Textarea`; sağda `EmailP
 │ │ Gönderiliyor 12  Kuyrukta 441 │ │ Gönderiliyor 8  Kuyrukta 604 │ │
 │ └───────────────────────────────┘ └──────────────────────────────┘ │
 ```
+**A/B (P9):** `by_variant` doluysa sayaç kartlarının altında `VariantBreakdown`:
+
+```
+│ Varyantlara göre teslimat                                          │
+│            Açı                         SMS (gön./baş./kuy.)  Email  │
+│ Varyant A  İndirim oranı öne çıkar     301 / 4 / 0     318 / 2 / 0  │
+│ Varyant B  Aciliyet: indirim bugün…    296 / 5 / 0     322 / 3 / 0  │
+│ ⓘ Mock provider açılma/tıklama ölçmez; tablo yalnız teslimat sonucudur │
+```
+Kazanan gösterilmez (sahip kararı, D64).
+
 `completed`: başlık "Kampanya tamamlandı", rozet `Tamamlandı`, başarısız sayısı sıfır değilse `--error` vurgulu ve "Başarısızları gör" listesi (kayıt alanları sözleşmeye bağlı). Kampanya düzeyinde "Başarısız" durumu gösterilmez (REQ-TRK-01).
 
 ### 8.6 Responsive düzen (V13, uygulandı 2026-10-28)
