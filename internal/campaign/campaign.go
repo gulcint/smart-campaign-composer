@@ -53,6 +53,27 @@ var (
 // ExpectedVersionNone is the X-Expected-Version value meaning "the editor saw no latest validated version".
 const ExpectedVersionNone = "none"
 
+// ContentOptions are the per-request options of a content generation (P9, D64). They travel in ctx
+// so that the Service interface (and every existing fake) is unchanged: the generateContent handler
+// parses the body ({"ab": true}) and calls StartContentGeneration(WithContentOptions(ctx, opts), id).
+type ContentOptions struct {
+	AB bool // ask for variant B and the angles (llm.ContentRequest.IncludeVariantB)
+}
+
+type contentOptionsKey struct{}
+
+// WithContentOptions returns ctx carrying o.
+func WithContentOptions(ctx context.Context, o ContentOptions) context.Context {
+	return context.WithValue(ctx, contentOptionsKey{}, o)
+}
+
+// ContentOptionsFromContext returns the options set by WithContentOptions and true, or the zero
+// value and false when absent (=> no A/B, the pre-P9 behaviour).
+func ContentOptionsFromContext(ctx context.Context) (ContentOptions, bool) {
+	o, ok := ctx.Value(contentOptionsKey{}).(ContentOptions)
+	return o, ok
+}
+
 // EditConflictError is returned by EditContent when the expected version is not the current latest
 // validated version. errors.Is(err, ErrContentEditConflict) is true. Current is the CURRENT latest
 // validated version of the current segment revision; both members are nil when there is none.
@@ -283,15 +304,24 @@ type ChannelCounts struct {
 	Email StatusCounts `json:"email"`
 }
 
+// VariantCounts is CampaignStatus.by_variant (P9, D64; openapi VariantStatusCounts).
+type VariantCounts struct {
+	A ChannelCounts `json:"a"`
+	B ChannelCounts `json:"b"`
+}
+
 type CampaignStatus struct {
-	CampaignID       string        `json:"campaign_id"`
-	State            State         `json:"state"`
-	Counts           StatusCounts  `json:"counts"`
-	ByChannel        ChannelCounts `json:"by_channel"`
-	ScheduledAt      *time.Time    `json:"scheduled_at"`
-	SendingStartedAt *time.Time    `json:"sending_started_at"`
-	CompletedAt      *time.Time    `json:"completed_at"`
-	UpdatedAt        time.Time     `json:"updated_at"`
+	CampaignID string        `json:"campaign_id"`
+	State      State         `json:"state"`
+	Counts     StatusCounts  `json:"counts"`
+	ByChannel  ChannelCounts `json:"by_channel"`
+	// ByVariant (P9): nil (JSON null) unless the approved version has variant B; then the counters
+	// split by deliveries.variant (A.c.k + B.c.k == ByChannel.c.k).
+	ByVariant        *VariantCounts `json:"by_variant"`
+	ScheduledAt      *time.Time     `json:"scheduled_at"`
+	SendingStartedAt *time.Time     `json:"sending_started_at"`
+	CompletedAt      *time.Time     `json:"completed_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
 type Delivery struct {
@@ -301,6 +331,7 @@ type Delivery struct {
 	CustomerID        string     `json:"customer_id"`
 	Channel           string     `json:"channel"`
 	Status            string     `json:"status"`
+	Variant           string     `json:"variant"` // P9: deliveries.variant ("a" | "b")
 	Attempts          int        `json:"attempts"`
 	FailedAttempts    int        `json:"failed_attempts"`
 	RateLimitedCount  int        `json:"rate_limited_count"`
@@ -339,6 +370,11 @@ type PreviewQuery struct {
 	// Language (P8, D63): "" = the sample customer's own language, or "tr" | "en". Anything else =>
 	// *validation.Error {Path: "query.language", Code: "invalid_value"}.
 	Language string
+	// Variant (P9, D64): "" or "a" = variant A, "b" = variant B. Anything else => *validation.Error
+	// {Path: "query.variant", Code: "invalid_value"}; "b" on a version without variant B =>
+	// *validation.Error {Path: "query.variant", Code: "variant_not_available"} (checked after the
+	// version is resolved, i.e. after the 404/409 checks of Preview).
+	Variant string
 }
 
 type PreviewCustomer struct {
@@ -347,6 +383,7 @@ type PreviewCustomer struct {
 	LastName  string `json:"last_name"`
 	City      string `json:"city"`
 	Language  string `json:"language"` // P8: customers.language
+	Variant   string `json:"variant"`  // P9: content.VariantFor(campaign, customer) if the version has B, else "a"
 }
 
 type PreviewSMS struct {
@@ -371,6 +408,7 @@ type Preview struct {
 	SampleIndex      int             `json:"sample_index"`
 	SampleCount      int             `json:"sample_count"`
 	Customer         PreviewCustomer `json:"customer"`
+	Variant          string          `json:"variant"`  // P9: variant of the shown text (content.Rendered.Variant)
 	Language         string          `json:"language"` // P8: language of the shown text (content.Rendered.Language)
 	Fallback         bool            `json:"fallback"` // P8: content.Rendered.Fallback
 	SMS              PreviewSMS      `json:"sms"`

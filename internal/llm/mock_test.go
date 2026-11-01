@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,8 +27,9 @@ var allScenarioNames = []string{
 	"html_in_content", "llm_unavailable", "stalled_stream",
 }
 
-// REQ-AI-02
-// Self-check of the transcribed fixtures against the lengths stated in llm-tools.md §3.3.
+// REQ-AI-02, REQ-ABT-02 C6
+// Self-check of the transcribed fixtures against the lengths stated in llm-tools.md §3.3 and, for the
+// A/B fixtures, in docs/requirements.md REQ-ABT-02.
 func TestFixtures_MatchContractLengths(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -39,6 +41,13 @@ func TestFixtures_MatchContractLengths(t *testing.T) {
 		{name: "CNT_OK subject is 42 chars", s: cntOKSubject, want: 42},
 		{name: "CNT_SMS_161 sms is 161 chars", s: cntSMS161.sms, want: 161},
 		{name: "CNT_SUBJECT_81 subject is 81 chars", s: cntSubject81.subject, want: 81},
+		// REQ-ABT-02 C6: the stated template lengths of the B fixtures and the angles.
+		{name: "CNT_OK_AB b.sms.body template is 102 chars", s: cntABSMS, want: 102},
+		{name: "CNT_OK_AB b.email.subject is 42 chars", s: cntABSubject, want: 42},
+		{name: "CNT_OK_AB_EN b.en.sms.body template is 103 chars", s: cntABENSMS, want: 103},
+		{name: "CNT_OK_AB_EN b.en.email.subject is 40 chars", s: cntABENSubject, want: 40},
+		{name: "angles.a is 23 chars", s: cntABAngleA, want: 23},
+		{name: "angles.b is 31 chars", s: cntABAngleB, want: 31},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -644,6 +653,362 @@ func enProperty(node any) (has, required bool) {
 		}
 	}
 	return false, false
+}
+
+// ---- A/B variants (P9) ----
+
+// abPathOrder is the chunk path order of an A/B stream (REQ-ABT-02 C7): A Turkish, A English (if
+// any), B Turkish, B English (if any).
+var abPathOrder = map[string]int{
+	"sms.body": 0, "email.subject": 1, "email.body": 2,
+	"en.sms.body": 3, "en.email.subject": 4, "en.email.body": 5,
+	"b.sms.body": 6, "b.email.subject": 7, "b.email.body": 8,
+	"b.en.sms.body": 9, "b.en.email.subject": 10, "b.en.email.body": 11,
+}
+
+// runStream runs one StreamContent call of scenario s to its end and returns the chunks, the terminal
+// Recv error and Raw().
+func runStream(t *testing.T, s llm.Scenario, req llm.ContentRequest) (chunks []llm.ContentChunk, raw json.RawMessage, endErr error) {
+	t.Helper()
+	st, err := llm.NewMock(llm.MockOptions{}).StreamContent(llm.WithScenario(context.Background(), s), req)
+	if err != nil {
+		t.Fatalf("StreamContent(%s) error = %v", s, err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	chunks, endErr = collect(t, st)
+	return chunks, st.Raw(), endErr
+}
+
+// docOf decodes a valid JSON tool input into an object.
+func docOf(t *testing.T, raw json.RawMessage) map[string]any {
+	t.Helper()
+	v, err := decodeJSON(raw)
+	if err != nil {
+		t.Fatalf("Raw() is not valid JSON (%v): %s", err, raw)
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("Raw() is not a JSON object: %s", raw)
+	}
+	return m
+}
+
+// REQ-ABT-02 C5, C6, C7
+// IncludeVariantB = true: wherever the mock returns CNT_OK (ok, sql_in_value, then_ok_after_repair
+// attempt 2) it returns CNT_OK_AB (IncludeEnglish false) or CNT_OK_AB_EN (IncludeEnglish true): the A
+// fields (sms, email, en) are byte for byte those of the same call without IncludeVariantB, plus the
+// stated b (and b.en) texts and angles. The chunks carry the b.* paths after every A chunk (A Turkish,
+// A English, B Turkish, B English), never an angle; the result parses, validates with the example
+// longest values and measures 138 / 42 for B and 139 / 40 for B English.
+func TestMock_StreamContent_IncludeVariantB(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		scenario llm.Scenario
+		attempt  int
+	}{
+		{llm.ScenarioOK, 1},
+		{llm.ScenarioSQLInValue, 1},
+		{llm.ScenarioThenOKAfterRepair, 2},
+	}
+	for _, sc := range cases {
+		for _, includeEnglish := range []bool{false, true} {
+			t.Run(string(sc.scenario)+" attempt "+itoa(sc.attempt)+" IncludeEnglish="+strconv.FormatBool(includeEnglish), func(t *testing.T) {
+				t.Parallel()
+				base := contentRequest(sc.attempt)
+				base.IncludeEnglish = includeEnglish
+				_, baseRaw, _ := runStream(t, sc.scenario, base)
+				baseDoc := docOf(t, baseRaw)
+
+				req := base
+				req.IncludeVariantB = true
+				chunks, raw, endErr := runStream(t, sc.scenario, req)
+				if !errors.Is(endErr, io.EOF) {
+					t.Fatalf("terminal Recv error = %v, want io.EOF", endErr)
+				}
+				doc := docOf(t, raw)
+
+				// A fields are the IncludeVariantB=false output, unchanged.
+				wantKeys := []string{"angles", "b", "email", "sms"}
+				aKeys := []string{"sms", "email"}
+				if includeEnglish {
+					wantKeys = []string{"angles", "b", "email", "en", "sms"}
+					aKeys = append(aKeys, "en")
+				}
+				var gotKeys []string
+				for k := range doc {
+					gotKeys = append(gotKeys, k)
+				}
+				slices.Sort(gotKeys)
+				if diff := cmp.Diff(wantKeys, gotKeys); diff != "" {
+					t.Fatalf("A/B output keys mismatch (-want +got):\n%s", diff)
+				}
+				for _, k := range aKeys {
+					if diff := cmp.Diff(baseDoc[k], doc[k]); diff != "" {
+						t.Fatalf("variant A %s differs from the output without IncludeVariantB (-want +got):\n%s", k, diff)
+					}
+				}
+				wantB := map[string]any{
+					"sms":   map[string]any{"body": cntABSMS},
+					"email": map[string]any{"subject": cntABSubject, "body": cntABBody},
+				}
+				if includeEnglish {
+					wantB["en"] = map[string]any{
+						"sms":   map[string]any{"body": cntABENSMS},
+						"email": map[string]any{"subject": cntABENSubject, "body": cntABENBody},
+					}
+				}
+				if diff := cmp.Diff(any(wantB), doc["b"]); diff != "" {
+					t.Fatalf("b mismatch with the fixture (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(any(map[string]any{"a": cntABAngleA, "b": cntABAngleB}), doc["angles"]); diff != "" {
+					t.Fatalf("angles mismatch with the fixture (-want +got):\n%s", diff)
+				}
+
+				// Chunks: allowed paths, A before B, 1..20 runes, concatenation = the output's fields.
+				got := map[string]string{}
+				last := -1
+				for i, c := range chunks {
+					idx, ok := abPathOrder[c.Path]
+					if !ok || (!includeEnglish && strings.Contains(c.Path, "en.")) {
+						t.Fatalf("chunk %d has path %q, not allowed here", i, c.Path)
+					}
+					if idx < last {
+						t.Fatalf("chunk %d path %q arrives after a later field; order is A tr, A en, B tr, B en", i, c.Path)
+					}
+					last = idx
+					if c.Text == "" || utf8.RuneCountInString(c.Text) > 20 {
+						t.Fatalf("chunk %d (%s) has %d runes, want 1..20", i, c.Path, utf8.RuneCountInString(c.Text))
+					}
+					got[c.Path] += c.Text
+				}
+				want := map[string]string{}
+				for path := range abPathOrder {
+					if v, ok := jsonPath(doc, path); ok {
+						want[path] = v
+					}
+				}
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Fatalf("chunk text per path mismatch with the output (-want +got):\n%s", diff)
+				}
+
+				c, err := content.Parse(raw)
+				if err != nil {
+					t.Fatalf("content.Parse(A/B fixture) error = %v", err)
+				}
+				if err := content.Validate(c, req.Longest); err != nil {
+					t.Fatalf("content.Validate(A/B fixture) error = %v, want nil", err)
+				}
+				wc, err := content.MeasureWorstCase(c, req.Longest)
+				if err != nil {
+					t.Fatalf("MeasureWorstCase() error = %v", err)
+				}
+				wantB2 := &content.WorstCaseVariant{SMSRunes: 138, SubjectRunes: 42}
+				if includeEnglish {
+					wantB2.EN = &content.WorstCaseLang{SMSRunes: 139, SubjectRunes: 40}
+				}
+				if diff := cmp.Diff(wantB2, wc.B); diff != "" {
+					t.Fatalf("worst case of B mismatch (-want +got):\n%s", diff)
+				}
+			})
+		}
+	}
+}
+
+// REQ-ABT-02 C5
+// IncludeVariantB changes no other fixture: the scenarios whose output is not CNT_OK yield the same
+// chunks, the same terminal error and the same Raw() bytes with and without IncludeVariantB; the
+// stalled_stream first chunk is still a prefix of CNT_OK sms.body (variant A streams first).
+func TestMock_StreamContent_IncludeVariantBLeavesOtherFixtures(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		scenario llm.Scenario
+		attempt  int
+	}{
+		{llm.ScenarioInvalidJSON, 1}, {llm.ScenarioSchemaViolation, 1}, {llm.ScenarioOverLimitSMS, 1},
+		{llm.ScenarioOverLimitSMS, 2}, {llm.ScenarioOverLimitSubject, 1}, {llm.ScenarioUnknownVariable, 1},
+		{llm.ScenarioInjectionAttempt, 1}, {llm.ScenarioTruncatedStream, 1}, {llm.ScenarioThenOKAfterRepair, 1},
+		{llm.ScenarioAlwaysInvalid, 1}, {llm.ScenarioAlwaysInvalid, 2}, {llm.ScenarioHTMLInContent, 1},
+	}
+	for _, sc := range cases {
+		t.Run(string(sc.scenario)+" attempt "+itoa(sc.attempt), func(t *testing.T) {
+			t.Parallel()
+			off := contentRequest(sc.attempt)
+			on := off
+			on.IncludeVariantB = true
+			c1, r1, e1 := runStream(t, sc.scenario, off)
+			c2, r2, e2 := runStream(t, sc.scenario, on)
+			if !errors.Is(e2, e1) && !errors.Is(e1, e2) {
+				t.Fatalf("terminal error with IncludeVariantB = %v, without = %v", e2, e1)
+			}
+			if diff := cmp.Diff(c1, c2); diff != "" {
+				t.Fatalf("chunks differ with IncludeVariantB (-without +with):\n%s", diff)
+			}
+			if !errors.Is(e1, io.EOF) {
+				return
+			}
+			if string(r1) != string(r2) {
+				t.Fatalf("Raw() differs with IncludeVariantB:\n%s\n%s", r1, r2)
+			}
+		})
+	}
+
+	t.Run("llm_unavailable fails at start either way", func(t *testing.T) {
+		t.Parallel()
+		req := contentRequest(1)
+		req.IncludeVariantB = true
+		s, err := llm.NewMock(llm.MockOptions{}).StreamContent(llm.WithScenario(context.Background(), llm.ScenarioLLMUnavailable), req)
+		if !errors.Is(err, llm.ErrUnavailable) {
+			if s != nil {
+				_ = s.Close()
+			}
+			t.Fatalf("StreamContent() error = %v, want %v", err, llm.ErrUnavailable)
+		}
+	})
+
+	t.Run("stalled_stream first chunk is variant A", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(llm.WithScenario(context.Background(), llm.ScenarioStalledStream))
+		defer cancel()
+		req := contentRequest(1)
+		req.IncludeVariantB = true
+		s, err := llm.NewMock(llm.MockOptions{}).StreamContent(ctx, req)
+		if err != nil {
+			t.Fatalf("StreamContent() error = %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		first, err := s.Recv()
+		if err != nil || first.Path != "sms.body" || first.Text == "" || !strings.HasPrefix(cntOKSMS, first.Text) {
+			t.Fatalf("first chunk = %+v, %v; want a non-empty prefix of CNT_OK sms.body", first, err)
+		}
+		cancel()
+	})
+}
+
+// REQ-ABT-02 C4
+// Four strict tool schemas: llm.ContentToolSchema(false/true) unchanged, llm.ContentToolSchemaAB(false)
+// with required = sms, email, b, angles and no en property, llm.ContentToolSchemaAB(true) with
+// required = sms, email, en, b, angles and b.required = sms, email, en. In all four every object has
+// additionalProperties false and lists all its properties as required; minLength, maxLength, pattern,
+// oneOf, const and format never appear. The four schemas are pairwise different.
+func TestContentToolSchemaAB(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		includeEnglish bool
+		wantRequired   []string
+		wantBRequired  []string
+	}{
+		{includeEnglish: false, wantRequired: []string{"angles", "b", "email", "sms"}, wantBRequired: []string{"email", "sms"}},
+		{includeEnglish: true, wantRequired: []string{"angles", "b", "email", "en", "sms"}, wantBRequired: []string{"email", "en", "sms"}},
+	}
+	for _, tc := range tests {
+		t.Run("includeEnglish="+strconv.FormatBool(tc.includeEnglish), func(t *testing.T) {
+			t.Parallel()
+			schema := schemaDoc(t, llm.ContentToolSchemaAB(tc.includeEnglish))
+			root, _ := schema.(map[string]any)
+			if diff := cmp.Diff(tc.wantRequired, sortedStrings(root["required"])); diff != "" {
+				t.Fatalf("required mismatch (-want +got):\n%s", diff)
+			}
+			props, _ := root["properties"].(map[string]any)
+			if _, ok := props["en"]; ok != tc.includeEnglish {
+				t.Fatalf("top-level en property present = %v, want %v", ok, tc.includeEnglish)
+			}
+			b, _ := props["b"].(map[string]any)
+			if diff := cmp.Diff(tc.wantBRequired, sortedStrings(b["required"])); diff != "" {
+				t.Fatalf("b.required mismatch (-want +got):\n%s", diff)
+			}
+			angles, _ := props["angles"].(map[string]any)
+			if diff := cmp.Diff([]string{"a", "b"}, sortedStrings(angles["required"])); diff != "" {
+				t.Fatalf("angles.required mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+	all := map[string]json.RawMessage{
+		"ContentToolSchema(false)":   llm.ContentToolSchema(false),
+		"ContentToolSchema(true)":    llm.ContentToolSchema(true),
+		"ContentToolSchemaAB(false)": llm.ContentToolSchemaAB(false),
+		"ContentToolSchemaAB(true)":  llm.ContentToolSchemaAB(true),
+	}
+	docs := map[string]any{}
+	for name, raw := range all {
+		doc := schemaDoc(t, raw)
+		problems := strictProblems("$", doc)
+		problems = append(problems, forbiddenKeywords("$", doc, "const", "format")...)
+		if len(problems) > 0 {
+			t.Fatalf("%s is not strict: %v", name, problems)
+		}
+		for other, d := range docs {
+			if cmp.Equal(d, doc) {
+				t.Fatalf("%s and %s are the same schema", name, other)
+			}
+		}
+		docs[name] = doc
+	}
+	for _, includeEnglish := range []bool{false, true} {
+		root, _ := schemaDoc(t, llm.ContentToolSchema(includeEnglish)).(map[string]any)
+		props, _ := root["properties"].(map[string]any)
+		if _, hasB := props["b"]; hasB {
+			t.Fatalf("ContentToolSchema(%v) has a b property; it must stay unchanged", includeEnglish)
+		}
+	}
+}
+
+// forbiddenKeywords lists every occurrence of the given keywords as object keys anywhere in node.
+func forbiddenKeywords(at string, node any, kws ...string) []string {
+	var out []string
+	switch n := node.(type) {
+	case map[string]any:
+		for _, k := range kws {
+			if _, ok := n[k]; ok {
+				out = append(out, at+": forbidden keyword "+k)
+			}
+		}
+		for k, v := range n {
+			// A property named like a keyword is not the keyword itself.
+			if k == "properties" {
+				if props, ok := v.(map[string]any); ok {
+					for name, p := range props {
+						out = append(out, forbiddenKeywords(at+".properties."+name, p, kws...)...)
+					}
+					continue
+				}
+			}
+			out = append(out, forbiddenKeywords(at+"."+k, v, kws...)...)
+		}
+	case []any:
+		for i, v := range n {
+			out = append(out, forbiddenKeywords(at+"["+strconv.Itoa(i)+"]", v, kws...)...)
+		}
+	}
+	return out
+}
+
+// sortedStrings returns the strings of a JSON array, sorted.
+func sortedStrings(v any) []string {
+	arr, _ := v.([]any)
+	out := make([]string, 0, len(arr))
+	for _, x := range arr {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// jsonPath reads a dotted string path ("b.en.sms.body") from a decoded JSON object.
+func jsonPath(doc map[string]any, path string) (string, bool) {
+	var cur any = doc
+	for _, part := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		if cur, ok = m[part]; !ok {
+			return "", false
+		}
+	}
+	s, ok := cur.(string)
+	return s, ok
 }
 
 // ---- helpers ----

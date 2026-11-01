@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,10 +21,11 @@ import (
 // Content versions are immutable (db-schema.md §3.5): this file only INSERTs them. Every campaign
 // write runs in one transaction under the campaign row lock (db-schema.md §3.9).
 
-const versionColumns = `v.id::text, v.campaign_id::text, v.version_number, v.segment_revision, v.status, v.source,
+var versionColumns = `v.id::text, v.campaign_id::text, v.version_number, v.segment_revision, v.status, v.source,
 	v.sms_body, v.email_subject, v.email_body, v.validation_errors, v.llm_attempts,
 	v.worst_case_sms_runes, v.worst_case_subject_runes,
 	v.en_sms_body, v.en_email_subject, v.en_email_body, v.worst_case_en_sms_runes, v.worst_case_en_subject_runes,
+	` + variantColumns("v") + `,
 	v.created_at`
 
 func scanVersion(row pgx.Row) (campaign.ContentVersion, error) {
@@ -36,10 +38,13 @@ func scanVersion(row pgx.Row) (campaign.ContentVersion, error) {
 		enBody       *string
 		wcENSMS      *int
 		wcENSub      *int
+		b            variantCols
 	)
-	if err := row.Scan(&v.ID, &v.CampaignID, &v.VersionNumber, &v.SegmentRevision, &status, &src,
+	dest := []any{&v.ID, &v.CampaignID, &v.VersionNumber, &v.SegmentRevision, &status, &src,
 		&v.Content.SMS.Body, &v.Content.Email.Subject, &v.Content.Email.Body, &errs, &v.LLMAttempts,
-		&wcSMS, &wcSub, &enSMS, &enSub, &enBody, &wcENSMS, &wcENSub, &v.CreatedAt); err != nil {
+		&wcSMS, &wcSub, &enSMS, &enSub, &enBody, &wcENSMS, &wcENSub}
+	dest = append(append(dest, b.dest()...), &v.CreatedAt)
+	if err := row.Scan(dest...); err != nil {
 		return campaign.ContentVersion{}, err
 	}
 	v.Status, v.Source = campaign.ContentStatus(status), campaign.ContentSource(src)
@@ -51,6 +56,7 @@ func scanVersion(row pgx.Row) (campaign.ContentVersion, error) {
 			v.WorstCase.EN = &content.WorstCaseLang{SMSRunes: *wcENSMS, SubjectRunes: *wcENSub}
 		}
 	}
+	b.apply(&v.Content, v.WorstCase) // P9 (D64)
 	v.ValidationErrors = []validation.FieldError{}
 	if len(errs) > 0 {
 		if err := json.Unmarshal(errs, &v.ValidationErrors); err != nil {
@@ -261,16 +267,23 @@ func (s *CampaignStore) writeContentVersion(ctx context.Context, id string, deci
 	if en := w.Content.EN; en != nil {
 		enSMS, enSub, enBody = &en.SMS.Body, &en.Email.Subject, &en.Email.Body
 	}
+	// P9 (D64): variant B, the angles and their worst cases ($20..$31; NULL without variant B).
+	args := []any{w.ID, id, number, lc.SegmentRevision, string(w.Status), string(w.Source),
+		w.Content.SMS.Body, w.Content.Email.Subject, w.Content.Email.Body, string(errJSON), w.LLMAttempts,
+		wcSMS, wcSub, enSMS, enSub, enBody, wcENSMS, wcENSub, w.CreatedAt}
+	vargs, err := variantArgs(w.Content, w.WorstCase)
+	if err != nil {
+		return campaign.ContentVersion{}, err
+	}
+	args = append(args, vargs...)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO content_versions (id, campaign_id, version_number, segment_revision, status, source,
 			sms_body, email_subject, email_body, validation_errors, llm_attempts,
 			worst_case_sms_runes, worst_case_subject_runes,
 			en_sms_body, en_email_subject, en_email_body, worst_case_en_sms_runes, worst_case_en_subject_runes,
-			created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
-		w.ID, id, number, lc.SegmentRevision, string(w.Status), string(w.Source),
-		w.Content.SMS.Body, w.Content.Email.Subject, w.Content.Email.Body, string(errJSON), w.LLMAttempts,
-		wcSMS, wcSub, enSMS, enSub, enBody, wcENSMS, wcENSub, w.CreatedAt); err != nil {
+			created_at, `+strings.Join(variantColumnNames, ", ")+`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+			$20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)`, args...); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "content_versions_campaign_version_key" {
 			return campaign.ContentVersion{}, errRetryVersionNumber

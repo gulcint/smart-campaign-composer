@@ -17,8 +17,10 @@ import (
 
 // DeltaEvent is one streamed text chunk of one field (SSE event "delta"). Language is "en" for the
 // English version's chunks and empty (no JSON key) for the Turkish ones (P8, sse-events.md §1.1).
+// Variant is "b" for variant B's chunks and empty (no JSON key) for variant A's (P9, D64).
 type DeltaEvent struct {
 	Attempt  int    `json:"attempt"`
+	Variant  string `json:"variant,omitempty"`  // "" (variant A) | "b"
 	Language string `json:"language,omitempty"` // "" (Turkish) | "en"
 	Channel  string `json:"channel"`            // "sms" | "email"
 	Field    string `json:"field"`              // "body" | "subject"
@@ -70,7 +72,8 @@ type ContentSession struct {
 
 // OpenContent starts attempt 1. req.Longest is used both as model hint and for content.Validate.
 // req.IncludeEnglish (set by the caller from Audience.WantsEnglish; P8, D63) is kept for the repair
-// attempt; validation covers the English version when present.
+// attempt; validation covers the English version when present. req.IncludeVariantB (P9, D64; from
+// campaign.ContentOptions.AB) is kept the same way; Run emits DeltaEvent{Variant: "b"} for b.* chunks.
 // Errors: llm.ErrUnavailable, ctx errors.
 func OpenContent(ctx context.Context, c llm.Client, req llm.ContentRequest) (*ContentSession, error) {
 	req.Attempt, req.Previous = 1, nil
@@ -98,6 +101,8 @@ func asUnavailable(err error) error {
 var contentRuleCodes = []string{
 	validation.CodeRequired, validation.CodeMalformedVariable, validation.CodeUnknownVariable,
 	validation.CodeSMSTooLong, validation.CodeSubjectTooLong, validation.CodeEmailBodyTooLong,
+	// P9 (D64): variants_identical (path "b") and too_long (only angles.a / angles.b produce it).
+	validation.CodeVariantsIdentical, validation.CodeTooLong,
 }
 
 // Run consumes the stream(s), emitting every DeltaEvent and the non-final InvalidEvent of a failed
@@ -169,7 +174,10 @@ func (s *ContentSession) consume(stream llm.ContentStream, attempt int, emit fun
 	for {
 		chunk, err := stream.Recv()
 		if err == nil {
-			language, path := "", chunk.Path
+			variant, language, path := "", "", chunk.Path
+			if rest, isB := strings.CutPrefix(path, content.VariantB+"."); isB {
+				variant, path = content.VariantB, rest
+			}
 			if rest, isEN := strings.CutPrefix(path, content.LangEN+"."); isEN {
 				language, path = content.LangEN, rest
 			}
@@ -177,7 +185,7 @@ func (s *ContentSession) consume(stream llm.ContentStream, attempt int, emit fun
 			if !ok || chunk.Text == "" {
 				continue
 			}
-			if err := emit(DeltaEvent{Attempt: attempt, Language: language, Channel: channel, Field: field, Text: chunk.Text}); err != nil {
+			if err := emit(DeltaEvent{Attempt: attempt, Variant: variant, Language: language, Channel: channel, Field: field, Text: chunk.Text}); err != nil {
 				return nil, nil, false, err
 			}
 			continue

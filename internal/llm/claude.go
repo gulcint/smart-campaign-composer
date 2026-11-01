@@ -29,6 +29,26 @@ const (
 		"not a word-for-word translation. For BOTH languages: SMS body at most 160 characters and email subject at " +
 		"most 80 characters AFTER personalization; the longest recipient values are given in the prompt. Allowed " +
 		"variables in both languages: {{first_name}}, {{last_name}}, {{city}}. Plain text only, no HTML."
+	// contentABToolDescription is the A/B tool's description (llm-tools.md §1.4; P9, D64);
+	// contentABENSentence is appended for the bilingual A/B tool.
+	contentABToolDescription = "Return the campaign copy as an A/B test: variant A (`sms`, `email`) and variant B " +
+		"(the `b` object) in Turkish, plus a short Turkish label for each variant's angle (`angles.a`, `angles.b`, " +
+		"at most 60 characters each). Both variants make the SAME offer to the same audience in the same tone; " +
+		"variant B tells it from a deliberately different angle (e.g. the discount rate vs. urgency) and must not " +
+		"repeat variant A's texts. For EVERY variant: SMS body at most 160 characters and email subject at most 80 " +
+		"characters AFTER personalization; the longest recipient values are given in the prompt. Allowed variables: " +
+		"{{first_name}}, {{last_name}}, {{city}}. Plain text only, no HTML."
+	contentABENSentence = " Each variant also has an English version for English-speaking customers (`en` for " +
+		"variant A, `b.en` for variant B): same intent, angle and tone as its Turkish text, not a word-for-word " +
+		"translation; the same limits apply to every language version."
+	// contentABSystemSuffix extends the system prompt for the A/B tools (llm-tools.md §1.4).
+	contentABSystemSuffix = " This is an A/B test: write two variants of the copy. Variant A is the sms and email " +
+		"objects (and en, if requested); variant B is the b object with the same structure. The offer (for example " +
+		"the discount), the audience, the channels and the tone do NOT change between the variants; only the angle " +
+		"of the message changes. Variant B's Turkish SMS body, email subject and email body must not be the same as " +
+		"variant A's. Describe each variant's angle in angles.a and angles.b: a short, concrete Turkish label of at " +
+		"most 60 characters, without variables. The limits apply separately to every variant and language version: " +
+		"SMS body at most 160, email subject at most 80, email body at most 5000."
 
 	segmentSystemPrompt = "You turn a marketer's campaign brief into a structured audience segment rule. " +
 		"Always answer by calling the emit_segment_rule tool exactly once. " +
@@ -121,16 +141,16 @@ func (c *claudeClient) params(tool string, rawSchema json.RawMessage, descriptio
 
 // toolInputSchema converts an embedded strict schema into the SDK's input_schema parameter.
 func toolInputSchema(tool string, raw json.RawMessage) (anthropic.ToolInputSchemaParam, error) {
-	var m map[string]any
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return anthropic.ToolInputSchemaParam{}, fmt.Errorf("llm: tool schema %s: %w", tool, err)
 	}
+	// Properties stay raw so the model sees them in schema order (sms, email, en, b, angles; P9
+	// streams variant A before variant B); a decoded map would be re-encoded alphabetically.
 	s := anthropic.ToolInputSchemaParam{Properties: m["properties"], ExtraFields: map[string]any{}}
-	if req, ok := m["required"].([]any); ok {
-		for _, r := range req {
-			if name, ok := r.(string); ok {
-				s.Required = append(s.Required, name)
-			}
+	if req, ok := m["required"]; ok {
+		if err := json.Unmarshal(req, &s.Required); err != nil {
+			return anthropic.ToolInputSchemaParam{}, fmt.Errorf("llm: tool schema %s required: %w", tool, err)
 		}
 	}
 	for k, v := range m {
@@ -246,7 +266,17 @@ func (c *claudeClient) StreamContent(ctx context.Context, req ContentRequest) (C
 		description, system = contentENToolDescription, contentSystemPrompt+contentENSystemSuffix
 		paths = append(paths, "en.sms.body", "en.email.subject", "en.email.body")
 	}
-	p, err := c.params(ToolEmitCampaignContent, ContentToolSchema(req.IncludeEnglish), description, system,
+	schema := ContentToolSchema(req.IncludeEnglish)
+	// P9 (D64): the A/B tool when the request asked for variant B; angles are never streamed.
+	if req.IncludeVariantB {
+		schema, description, system = ContentToolSchemaAB(req.IncludeEnglish), contentABToolDescription, system+contentABSystemSuffix
+		paths = append(paths, "b.sms.body", "b.email.subject", "b.email.body")
+		if req.IncludeEnglish {
+			description += contentABENSentence
+			paths = append(paths, "b.en.sms.body", "b.en.email.subject", "b.en.email.body")
+		}
+	}
+	p, err := c.params(ToolEmitCampaignContent, schema, description, system,
 		conversation(user, ToolEmitCampaignContent, req.Previous))
 	if err != nil {
 		return nil, err

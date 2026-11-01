@@ -28,6 +28,7 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 	if !ok {
 		return nil, ErrCampaignNotFound
 	}
+	opts, _ := ContentOptionsFromContext(ctx) // absent => no A/B
 	lease, release, err := s.beginGeneration(ctx, id, func(lc LockedCampaign) error {
 		if _, err := Transition(lc.State, EventContentValidated); err != nil {
 			return err
@@ -72,6 +73,8 @@ func (s *service) StartContentGeneration(ctx context.Context, id string) (Conten
 		Brief: c.Brief, Rule: c.Segment.Rule, Longest: c.Segment.LongestValues,
 		// P8 (D63): English only when the current audience has English-speaking customers.
 		IncludeEnglish: c.Segment.Audience.WantsEnglish(),
+		// P9 (D64): variant B only when the request asked for an A/B test ({"ab": true}).
+		IncludeVariantB: opts.AB,
 	})
 	if err != nil {
 		timedOut := errors.Is(context.Cause(genCtx), errGenerationTimeout)
@@ -367,6 +370,11 @@ func (s *service) Preview(ctx context.Context, id string, q PreviewQuery) (Previ
 			Path: "query.language", Code: validation.CodeInvalidValue, Message: "language must be tr or en",
 		}}}
 	}
+	if q.Variant != "" && q.Variant != content.VariantA && q.Variant != content.VariantB {
+		return Preview{}, &validation.Error{Fields: []validation.FieldError{{
+			Path: "query.variant", Code: validation.CodeInvalidValue, Message: "variant must be a or b",
+		}}}
+	}
 	c, err := s.d.Store.GetCampaign(ctx, id)
 	if err != nil {
 		return Preview{}, err
@@ -408,20 +416,33 @@ func (s *service) Preview(ctx context.Context, id string, q PreviewQuery) (Previ
 	if err != nil {
 		return Preview{}, err
 	}
+	// P9 (D64): after every 404/409 above; the version is resolved here.
+	if q.Variant == content.VariantB && v.Content.B == nil {
+		return Preview{}, &validation.Error{Fields: []validation.FieldError{{
+			Path: "query.variant", Code: validation.CodeVariantNotAvailable, Message: "the content version has no variant B",
+		}}}
+	}
 	cu := sample.Customer
+	cu.Variant = content.VariantA
+	if v.Content.B != nil {
+		if cu.Variant, err = content.VariantFor(id, cu.ID); err != nil {
+			return Preview{}, fmt.Errorf("campaign: preview variant: %w", err)
+		}
+	}
 	// P8 (D63): the requested language, or the sample customer's own.
 	lang := q.Language
 	if lang == "" {
 		lang = cu.Language
 	}
-	r, err := content.RenderContent(v.Content, content.Recipient{FirstName: cu.FirstName, LastName: cu.LastName, City: cu.City, Language: lang})
+	r, err := content.RenderContent(v.Content, content.Recipient{FirstName: cu.FirstName, LastName: cu.LastName, City: cu.City,
+		Language: lang, Variant: q.Variant})
 	if err != nil {
 		return Preview{}, fmt.Errorf("campaign: render validated version: %w", err)
 	}
 	smsRunes, subjectRunes := content.RuneCount(r.SMSText), content.RuneCount(r.EmailSubject)
 	return Preview{
 		CampaignID: id, ContentVersionID: v.ID, SampleIndex: sample.Index, SampleCount: sample.Count, Customer: cu,
-		Language: r.Language, Fallback: r.Fallback,
+		Variant: r.Variant, Language: r.Language, Fallback: r.Fallback,
 		SMS: PreviewSMS{Text: r.SMSText, Runes: smsRunes, Limit: content.SMSMaxRunes, WithinLimit: smsRunes <= content.SMSMaxRunes},
 		Email: PreviewEmail{
 			Subject: r.EmailSubject, SubjectRunes: subjectRunes, SubjectLimit: content.SubjectMaxRunes,

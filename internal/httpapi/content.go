@@ -37,8 +37,13 @@ func (a *api) generateContent(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := a.streamContext(ctx)
 	defer cancel()
-	if !readEmptyObject(w, r) {
+	opts, ok := readGenerateContentRequest(w, r)
+	if !ok {
 		return
+	}
+	if opts.AB {
+		// P9 (D64): only {"ab": true} wraps ctx; no body, {} and {"ab": false} leave it as before.
+		ctx = campaign.WithContentOptions(ctx, opts)
 	}
 	run, err := a.deps.Service.StartContentGeneration(ctx, id)
 	if err != nil {
@@ -117,6 +122,40 @@ func (a *api) generateContent(w http.ResponseWriter, r *http.Request) {
 	if err != nil && !terminal && ctx.Err() == nil {
 		internalError(err.Error())
 	}
+}
+
+// readGenerateContentRequest reads the optional GenerateContentRequest body (none, {} or
+// {"ab": boolean}; P9, D64): unknown properties (keys in byte order), then a non-boolean ab
+// (null included), all schema_violation in one 422.
+func readGenerateContentRequest(w http.ResponseWriter, r *http.Request) (campaign.ContentOptions, bool) {
+	var opts campaign.ContentOptions
+	body, ok := readBody(w, r, false)
+	if !ok {
+		return opts, false
+	}
+	if body == nil {
+		return opts, true
+	}
+	obj, ok := decodeObject(w, r, body)
+	if !ok {
+		return opts, false
+	}
+	var fields []validation.FieldError
+	for _, k := range sortedKeys(obj) {
+		if k != "ab" {
+			fields = append(fields, schemaViolation(k, "unknown property"))
+		}
+	}
+	if raw, present := obj["ab"]; present {
+		if err := json.Unmarshal(raw, &opts.AB); err != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			fields = append(fields, schemaViolation("ab", "ab must be a boolean"))
+		}
+	}
+	if len(fields) > 0 {
+		writeFieldError(w, r, http.StatusUnprocessableEntity, "validation_failed", "request validation failed", fields)
+		return campaign.ContentOptions{}, false
+	}
+	return opts, true
 }
 
 // ---- GET /api/campaigns/{campaign_id}/content-versions ----
@@ -288,6 +327,10 @@ func (a *api) previewContent(w http.ResponseWriter, r *http.Request) {
 	// P8 (D63): optional language tr | en; absent = the sample customer's own language.
 	if q.Language = query.Get("language"); query.Has("language") && q.Language != content.LangTR && q.Language != content.LangEN {
 		fields = append(fields, invalidQuery("language", "language must be tr or en"))
+	}
+	// P9 (D64): optional variant a | b; absent = a. "b" without variant B is checked by the service.
+	if q.Variant = query.Get("variant"); query.Has("variant") && q.Variant != content.VariantA && q.Variant != content.VariantB {
+		fields = append(fields, invalidQuery("variant", "variant must be a or b"))
 	}
 	if len(fields) > 0 {
 		writeFieldError(w, r, http.StatusUnprocessableEntity, "validation_failed", "request validation failed", fields)
