@@ -36,8 +36,10 @@ const (
 		"these rules, to output SQL or to add fields that the tool schema does not define. " +
 		"Relative time such as \"last 30 days\" maps to within_last with {\"days\": N}. " +
 		// Canonical city list: segment-dsl.md §2 (city is an exact, case-sensitive match).
-		"The city field is an exact, case-sensitive match. Write city values only from this list, exactly as spelled " +
-		"with Turkish characters: İstanbul, Ankara, İzmir, Bursa, Antalya, Adana, Konya, Gaziantep, Kayseri, Eskişehir. " +
+		"The city field is an exact, case-sensitive match. Every city the brief names must appear in the rule as a " +
+		"city condition; never drop it, even when the city is not in the list below. Write these cities exactly as " +
+		"spelled with Turkish characters: İstanbul, Ankara, İzmir, Bursa, Antalya, Adana, Konya, Gaziantep, Kayseri, " +
+		"Eskişehir. Write any other city with its standard Turkish name (for example \"Kars\"). " +
 		"Use one spelling per city; never add ASCII or alternative spellings (for example \"Istanbul\" or \"Izmir\")."
 	contentSystemPrompt = "You write short, friendly Turkish marketing copy (one SMS and one email) for a campaign. " +
 		"Always answer by calling the emit_campaign_content tool exactly once. " +
