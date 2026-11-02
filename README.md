@@ -9,7 +9,7 @@ Pazarlamacı ne istediğini doğal dille yazar; Claude hedef kitleyi ve SMS ile 
 | Çekirdek akış: kitle → mesaj → onay → gönderim → izleme | ✅ |
 | Bonus: zamanlanmış gönderim, kullanıcının diline göre içerik, A/B varyantları, CI | ✅ dördü de |
 
-Ek olarak (case bonusu değil, sahip isteği): kampanya paneli ve yenilenmiş takip ekranı.
+Ek olarak: geçmiş ve planlanmış kampanyaları gösteren bir panel ve yenilenmiş takip ekranı.
 
 ## Çalıştırma
 
