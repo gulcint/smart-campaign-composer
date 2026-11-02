@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Step 2 (ui.md §1.1, §3.7, §3.8; DESIGN.md §8.2).
 import { ArrowUpRight, PencilLine } from '@lucide/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, useId } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AbToggle from '@/components/AbToggle.vue'
@@ -69,6 +69,7 @@ onMounted(() => {
 })
 
 const confirmOpen = ref(false)
+const optionsTitleId = `${useId()}-options`
 
 function goToContent() {
   const id = campaignId.value
@@ -141,6 +142,19 @@ async function onRetry() {
           @retry="onRetry"
           @edit-brief="onEditBrief"
         />
+        <!-- P9: message options for the generation started from here (owner decision 2026-11-02). -->
+        <div class="h-px bg-border-subtle" aria-hidden="true" />
+        <div role="group" :aria-labelledby="optionsTitleId" class="flex flex-col gap-2">
+          <h2 :id="optionsTitleId" class="text-h4 text-accent-heading">
+            {{ t('audience.messageOptions') }}
+          </h2>
+          <AbToggle
+            data-testid="audience-ab-toggle"
+            :model-value="ab"
+            :disabled="!canGenerate"
+            @update:model-value="onAb"
+          />
+        </div>
       </section>
 
       <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -153,25 +167,15 @@ async function onRetry() {
           <PencilLine aria-hidden="true" />
           {{ t('audience.editBrief') }}
         </Button>
-        <div class="flex flex-col gap-4 sm:flex-row sm:items-center">
-          <div class="sm:max-w-64">
-            <AbToggle
-              data-testid="audience-ab-toggle"
-              :model-value="ab"
-              :disabled="!canGenerate"
-              @update:model-value="onAb"
-            />
-          </div>
-          <Button
-            data-testid="audience-generate-content"
-            size="lg"
-            :disabled="!canGenerate"
-            @click="onGenerate"
-          >
-            {{ t('audience.generateContent') }}
-            <ArrowUpRight aria-hidden="true" />
-          </Button>
-        </div>
+        <Button
+          data-testid="audience-generate-content"
+          size="lg"
+          :disabled="!canGenerate"
+          @click="onGenerate"
+        >
+          {{ t('audience.generateContent') }}
+          <ArrowUpRight aria-hidden="true" />
+        </Button>
       </div>
 
       <ConfirmDialog

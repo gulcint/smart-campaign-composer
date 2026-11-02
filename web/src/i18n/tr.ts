@@ -84,6 +84,7 @@ export const tr = {
   'audience.languages': 'Dile göre dağılım',
   'audience.generateContent': 'İçeriği üret',
   'audience.ruleTitle': 'Segment kuralı',
+  'audience.messageOptions': 'Mesaj seçenekleri',
   'audience.noRule': 'Henüz bir segment kuralı yok.',
 
   // --- Segment rule view ---
@@ -135,8 +136,8 @@ export const tr = {
   'content.editDraft': 'Taslağı düzenle',
   // P9 (REQ-ABT-04): A/B test switch, shown next to generate / regenerate.
   'content.abToggle': 'A/B testi',
-  'content.abToggleHint':
-    'İki varyant üretilir; kitle gönderimde ≈ yarı yarıya bölünür, üretim ~2× sürer.',
+  'content.abToggleHint': 'İki farklı mesaj üretilir; kitle gönderimde yarı yarıya bölünür.',
+  'content.abToggleInfo': 'A/B testi hakkında',
   'content.empty': 'Bu kampanya için henüz içerik üretilmedi.',
   'content.toApproval': 'Onaya geç',
   'content.previewTitle': 'Örnek alıcıyla önizleme',
