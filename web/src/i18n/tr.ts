@@ -319,6 +319,25 @@ export const tr = {
   'tracking.audience': 'SMS {sms} · Email {email} alıcı',
   'tracking.channelProcessed': '{total} alıcı · {done} işlendi',
 
+  // --- Brief campaign panel (P10, REQ-DSH-02) ---
+  'briefPanel.title': 'Kampanyaların',
+  'briefPanel.kpi.total': 'Toplam kampanya',
+  'briefPanel.kpi.scheduled': 'Planlanan',
+  'briefPanel.kpi.sent': 'Gönderilen',
+  'briefPanel.kpi.messagesSent': 'Gönderilen mesaj',
+  'briefPanel.kpi.messagesFailed': 'Başarısız mesaj',
+  'briefPanel.scheduledTitle': 'Planlanan',
+  'briefPanel.sentTitle': 'Gönderilen',
+  'briefPanel.scheduledEmpty': 'Planlanmış kampanya yok.',
+  'briefPanel.sentEmpty': 'Henüz gönderilen kampanya yok.',
+  'briefPanel.more': 'Daha fazla göster',
+  'briefPanel.moreLoaded': '{n} kampanya daha gösteriliyor.',
+  'briefPanel.scheduledError': 'Planlanan kampanyalar yüklenemedi.',
+  'briefPanel.sentError': 'Gönderilen kampanyalar yüklenemedi.',
+  'briefPanel.retry': 'Tekrar dene',
+  'briefPanel.sentCounts': '{sent} gönderildi · {failed} başarısız',
+  'briefPanel.loading': 'Kampanyalar yükleniyor…',
+
   // --- Connection / toasts ---
   'connection.lost': 'Bağlantı koptu, yeniden bağlanılıyor…',
   'schedule.tz': '(Türkiye saati, UTC+3)',

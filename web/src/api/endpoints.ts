@@ -85,4 +85,13 @@ export const api = {
     c.request<Ok<'listDeliveries', 200>>('GET', `${campaignPath(id)}/deliveries`, {
       query: query as Record<string, string | number>,
     }),
+
+  /** listCampaignSummaries — GET /api/campaign-summaries (REQ-DSH-01, brief panel REQ-DSH-02) */
+  listCampaignSummaries: (
+    c: ApiClient,
+    query: NonNullable<operations['listCampaignSummaries']['parameters']['query']>,
+  ) =>
+    c.request<Ok<'listCampaignSummaries', 200>>('GET', '/api/campaign-summaries', {
+      query: query as Record<string, string | number>,
+    }),
 }
