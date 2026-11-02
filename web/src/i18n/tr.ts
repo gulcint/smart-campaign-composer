@@ -53,10 +53,10 @@ export const tr = {
   'brief.readonlyTitle': 'Kampanya brief’i',
   'brief.inputLabel': 'Kampanya brief’i',
   'brief.placeholder':
-    'Örn. Son 30 günde sepetine ürün ekleyip alışveriş yapmayan Ankara’daki gold ve platinum üyelere %20 indirim hatırlatması gönder.',
+    'Örn. Son 60 günde alışveriş yapmayan müşterilere %15 indirimle geri dönmeleri için mesaj gönder.',
   'brief.example': 'Örnek brief’i kullan',
   'brief.exampleText':
-    'Son 30 günde sepetine ürün ekleyip alışveriş yapmayan Ankara’daki gold ve platinum üyelere %20 indirim hatırlatması gönder. Samimi ama kısa olsun.',
+    'Son 60 günde alışveriş yapmayan müşterilere %15 indirimle geri dönmeleri için mesaj gönder. Sıcak bir dil kullan.',
   'brief.submit': 'Kitleyi çıkar',
   'brief.shortcut': 'Göndermek için Ctrl/⌘ + Enter',
   'brief.counterLabel': '{n} / {max} karakter',
