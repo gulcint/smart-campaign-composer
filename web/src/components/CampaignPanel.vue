@@ -5,8 +5,8 @@
 // for the panel. One setTimeout refreshes both sections quietly: every 10 s while a shown row is
 // sending, and once 10 s after the earliest plan within the hour starts. No per-campaign stream.
 import { CalendarClock, ChevronDown, CircleAlert, RotateCcw } from '@lucide/vue'
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { routerKey } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import { api } from '@/api/endpoints'
 import type { ApiError } from '@/api/errors'
@@ -62,7 +62,6 @@ const newSection = (): Section => ({
 })
 
 const client = injectApiClient()
-const router = inject(routerKey, null)
 
 const sections = reactive<Record<SectionKey, Section>>({
   scheduled: newSection(),
@@ -75,6 +74,8 @@ const announcement = ref('')
 const generation: Record<SectionKey, number> = { scheduled: 0, sent: 0 }
 let timer: ReturnType<typeof setTimeout> | null = null
 let disposed = false
+/** The timer fired while a "show more" request was in flight; re-armed when it settles. */
+let deferredRefresh = false
 
 // ---- data-state, summary numbers ----
 const sectionState = (s: Section) => {
@@ -136,7 +137,7 @@ const showsTime = computed(
 )
 
 const SENT_COUNTS = messageParts('briefPanel.sentCounts')
-const firstLine = (brief: string) => brief.split('\n')[0] ?? ''
+const firstLine = (brief: string) => brief.split(/\r?\n/)[0] ?? ''
 const deliveriesOf = (i: CampaignSummary) =>
   i.deliveries ?? { total: 0, queued: 0, sending: 0, sent: 0, failed: 0 }
 
@@ -149,12 +150,7 @@ function relativeText(seconds: number): string {
   return relativeFormat.format(Math.round(seconds / 86_400), 'day')
 }
 
-const trackingHref = (id: string) => `/campaigns/${encodeURIComponent(id)}/tracking`
-function openRow(ev: MouseEvent, id: string) {
-  if (!router || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return
-  ev.preventDefault()
-  void router.push({ name: 'tracking', params: { campaignId: id } })
-}
+const trackingTo = (id: string) => ({ name: 'tracking', params: { campaignId: id } })
 
 // ---- requests ----
 function fetchPage(key: SectionKey, limit: number, offset: number) {
@@ -198,7 +194,9 @@ async function loadInitial(key: SectionKey) {
 }
 
 const itemRefs = new Map<string, HTMLElement>()
-function setItemRef(id: string, el: unknown) {
+/** Row refs are RouterLink instances; focus goes to their rendered <a>. */
+function setItemRef(id: string, ref: unknown) {
+  const el = (ref as { $el?: unknown } | null)?.$el
   if (el instanceof HTMLElement) itemRefs.set(id, el)
   else itemRefs.delete(id)
 }
@@ -233,7 +231,19 @@ async function loadMore(key: SectionKey, offset = sections[key].items.length) {
     s.error = toApiError(e)
     s.failed = { offset }
   } finally {
-    if (gen === generation[key]) s.loadingMore = false
+    // Also when superseded: the button must never stay in its loading state.
+    s.loadingMore = false
+    // A refresh skipped while this request ran is owed now, whatever the outcome (a failed
+    // "more" would otherwise leave sending rows without any timer).
+    if (
+      deferredRefresh &&
+      !disposed &&
+      !sections.scheduled.loadingMore &&
+      !sections.sent.loadingMore
+    ) {
+      deferredRefresh = false
+      schedule()
+    }
   }
 }
 
@@ -295,7 +305,8 @@ function clearTimer() {
 
 function schedule() {
   clearTimer()
-  if (disposed) return
+  // A hidden tab polls nothing; visibilitychange re-arms the timer when it is shown again.
+  if (disposed || document.hidden) return
   const delay = nextDelay()
   if (delay === null) return
   timer = setTimeout(onTimer, delay)
@@ -304,19 +315,29 @@ function schedule() {
 function onTimer() {
   timer = null
   if (disposed) return
-  // A "show more" in flight sets the timer again when it answers.
-  if (sections.scheduled.loadingMore || sections.sent.loadingMore) return
+  // A "show more" in flight re-arms the timer when it settles (success or failure).
+  if (sections.scheduled.loadingMore || sections.sent.loadingMore) {
+    deferredRefresh = true
+    return
+  }
   void refresh('scheduled')
   void refresh('sent')
 }
 
+function onVisibility() {
+  if (document.hidden) clearTimer()
+  else schedule()
+}
+
 onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibility)
   void loadInitial('scheduled')
   void loadInitial('sent')
 })
 
 onBeforeUnmount(() => {
   disposed = true
+  document.removeEventListener('visibilitychange', onVisibility)
   clearTimer()
 })
 </script>
@@ -397,14 +418,13 @@ onBeforeUnmount(() => {
             :key="item.id"
             class="border-b border-border-subtle last:border-b-0"
           >
-            <a
+            <RouterLink
               :ref="(el) => setItemRef(item.id, el)"
               data-testid="campaign-summary-item"
-              :href="trackingHref(item.id)"
+              :to="trackingTo(item.id)"
               :data-campaign-id="item.id"
               :data-state="item.state"
               class="flex flex-col gap-1.5 rounded-sm px-3 py-3 text-ink-900 no-underline transition-colors duration-[var(--dur-fast)] hover:bg-surface-sunken hover:text-ink-900 max-lg:min-h-11"
-              @click="openRow($event, item.id)"
             >
               <!-- Planned row: brief, then the planned time and how far away it was at load. -->
               <template v-if="key === 'scheduled'">
@@ -490,7 +510,7 @@ onBeforeUnmount(() => {
                   >
                 </span>
               </template>
-            </a>
+            </RouterLink>
           </li>
         </ul>
 
