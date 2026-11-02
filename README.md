@@ -130,7 +130,7 @@ Kampanya durumları: `draft` → `audience_ready` → `content_ready` → `appro
 - İki farklı varyant alan kişi 0. Bölme kuralının SQL ve Go hâli 440 kişide 0 fark verdi.
 - Mock servise giden 1405 isteğin hepsi alıcının varyantı ve diliyle eşleşti (ağ trafiği yakalanarak).
 
-**2026-11-02, bu README'nin dalında çalıştırıldı:** `make test-unit` geçti (tüm Go paketleri, DB'siz). `npx vitest run` 421/421 web testi geçti. Konteynerli tam `make test` bu dalda çalıştırılmadı.
+**2026-11-02, P10 dahil son hâl, key yok:** konteynerli tam `make test` geçti: 20 Go paketinin hepsi (birim, veritabanlı entegrasyon, mock provider'la gönderim, uçtan uca API) ve 421 web testi. Arayüz derlemesi (`vue-tsc --build`) hatasız.
 
 ## Case isterleri nasıl karşılandı
 
