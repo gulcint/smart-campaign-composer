@@ -273,6 +273,17 @@ HTTP katmanında 409 üreten kontroller bu kilit altında, durum değişmeden ö
 
 Düzenleme, onay, gönderim ve planlama, kendi transaction'larında satırı kilitledikten sonra, durum denetimlerinden önce süresi geçmemiş bir kira olup olmadığına bakar (`LockedCampaign.CheckNoGeneration`); varsa hiçbir yazma yapmadan 409 `generation_in_progress` döner. Onay, gönderim ve planlamada bundan önce yalnız sürümün varlığı (404 `content_version_not_found`) denetlenir; düzenlemede kira denetimi ilk denetimdir. Böylece aynı veritabanını kullanan birden fazla API sürecinde de üretim başlangıcı ile gönderimden yalnız biri kabul edilir (REQ-SND-01).
 
+### 3.10 Kampanya özetleri okuması (P10, D65; openapi `listCampaignSummaries`)
+
+**Migration yok.** Yalnız okuma; tek salt okunur `REPEATABLE READ` transaction'ında dört sorgu (yanıt tek anlık görüntüdür, REQ-DSH-01):
+
+1. **Sayfa:** `SELECT id, brief, state, audience_matched, audience_sms, audience_email, scheduled_at, sending_started_at, completed_at, created_at, updated_at FROM campaigns WHERE (cardinality($1::text[]) = 0 OR state = ANY($1)) ORDER BY <sıra> LIMIT $2 OFFSET $3`. `<sıra>` kodda sabit iki metinden biridir (`created_at DESC, id ASC` | `scheduled_at ASC NULLS LAST, id ASC`); kullanıcı girdisi SQL metnine girmez, `state` listesi `ParseSummaryFilter` beyaz listesinden geçmiş değerlerle `$1` parametresidir. `audience` = üç `audience_*` kolonu (üçü NULL ise `null`). Süzgeçsiz istek `$1` = boş dizi `'{}'` geçer (Go'da nil ve uzunluğu 0 olan `States` aynı boş diziye çevrilir; `NULL` geçilmez).
+2. **Toplam:** aynı `WHERE` ile `count(*)`.
+3. **Sayfadaki kampanyaların teslimat sayıları:** `SELECT campaign_id, status, count(*) FROM deliveries WHERE campaign_id = ANY($1::uuid[]) GROUP BY campaign_id, status` (`$1` = sayfanın `sending`/`completed` kampanyaları; diğerlerinde `deliveries` `null`). `deliveries_campaign_status_idx (campaign_id, status)` kullanılır. Sayım `GET …/status`'unkiyle aynı kuraldır (`total = queued + sending + sent + failed`); `variant` kolonuna bakılmaz.
+4. **Overview:** `SELECT state, count(*) FROM campaigns GROUP BY state` (olmayan durum 0) ve `SELECT status, count(*) FROM deliveries GROUP BY status`.
+
+İndeks eklenmez: seed ölçeğinde (onlarca kampanya) sayfa sorgusu `campaigns` tam taraması ve sıralamasıdır; overview'ın teslimat sayımı `deliveries` taramasıdır (`/metrics`'in her scrape'te yaptığıyla aynı ölçek, D22). Ölçek gerekirse `(state, created_at)` indeksi ayrı migration'la eklenir (`DECISIONS.md` "Bilinen sınırlar").
+
 ## 4. Kuyruk mekanikleri (gözlemlenebilir)
 
 - **Claim** (müşteri satırı aynı sorguda `customers` ile birleştirilerek **yeniden okunur**: güncel `phone`/`email` ve kanal izni `delivery.Job.To`/`Consent`'e girer; P8: `customers.language` → `Job.Recipient.Language`; P9: teslimatın kendi `variant`'ı → `Job.Recipient.Variant`): `UPDATE deliveries SET status='sending', lease_expires_at=$lease, attempts=attempts+1, last_attempt_at=$now, first_attempt_at=COALESCE(first_attempt_at,$now) WHERE id IN (SELECT id FROM deliveries WHERE channel=$ch AND status='queued' AND next_attempt_at <= $now ORDER BY next_attempt_at, id LIMIT $n FOR UPDATE SKIP LOCKED) RETURNING ...` → eşzamanlı worker'lar aynı satırı alamaz.

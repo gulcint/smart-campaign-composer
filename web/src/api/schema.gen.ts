@@ -96,6 +96,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/campaign-summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Campaign overview for the brief screen panel (REQ-DSH-01, P10, D65)
+         * @description Read-only. One page of small campaign summaries (no segment rule, no content bodies, no recipient
+         *     address) plus `overview`, the counts over ALL campaigns (independent of `state`, `order`, `limit`,
+         *     `offset`). The page, the per-item delivery counts, `total` and `overview` are read in ONE read-only
+         *     REPEATABLE READ transaction, so a single response is one consistent snapshot: e.g. with
+         *     `state=scheduled`, `total` == `overview.campaigns.scheduled`. Delivery counts are variant-agnostic
+         *     (every delivery row counts once, A and B together; no `by_variant` here).
+         *     Query validation: every invalid parameter is reported in ONE 422 `validation_failed`, field code
+         *     `invalid_value`, `fields[]` in the order state, order, limit, offset (paths `query.state`,
+         *     `query.order`, `query.limit`, `query.offset`). A repeated parameter: only its first value is read.
+         */
+        get: operations["listCampaignSummaries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/campaigns/{campaign_id}": {
         parameters: {
             query?: never;
@@ -834,6 +862,66 @@ export interface components {
             total: number;
             limit: number;
             offset: number;
+        };
+        /**
+         * @description P10 (D65). One row of listCampaignSummaries. Reads the same columns as Campaign; deliberately has no
+         *     segment rule, no content version, no approval and no recipient address (REQ-SEC-01 spirit).
+         */
+        CampaignSummary: {
+            /** Format: uuid */
+            id: string;
+            /** @description Full stored brief (NFC, trimmed); the UI shortens it */
+            brief: string;
+            state: components["schemas"]["CampaignState"];
+            /** @description Segment audience of the current segment (same numbers as Campaign.segment.audience); null iff the campaign has no segment (state draft). */
+            audience: {
+                matched: number;
+                sms: number;
+                email: number;
+            } | null;
+            scheduled_at: components["schemas"]["ScheduledAt"];
+            /** Format: date-time */
+            sending_started_at: string | null;
+            /** Format: date-time */
+            completed_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /**
+             * @description null in draft, audience_ready, content_ready, approved and scheduled. In sending and completed always
+             *     an object, equal to GET /api/campaigns/{campaign_id}/status `counts` at the same moment (all 0 for a
+             *     send whose two audiences were empty). Variant-agnostic (A + B).
+             */
+            deliveries: components["schemas"]["StatusCounts"] | null;
+        };
+        /** @description P10 (D65). Campaign count per state; every key always present (0 when none); total = sum of the seven states. */
+        CampaignStateCounts: {
+            total: number;
+            draft: number;
+            audience_ready: number;
+            content_ready: number;
+            approved: number;
+            scheduled: number;
+            sending: number;
+            completed: number;
+        };
+        /** @description P10 (D65). Counts over ALL campaigns, independent of the request's filter and paging. */
+        CampaignOverview: {
+            campaigns: components["schemas"]["CampaignStateCounts"];
+            /** @description Sum of every campaign's delivery counters (all delivery rows, both channels, both variants). */
+            deliveries: components["schemas"]["StatusCounts"];
+        };
+        /** @description P10 (D65). Response of listCampaignSummaries. */
+        CampaignSummaryPage: {
+            items: components["schemas"]["CampaignSummary"][];
+            /** @description Campaigns matching `state` (all campaigns without it), independent of limit and offset */
+            total: number;
+            /** @description The effective limit (default 50) */
+            limit: number;
+            /** @description The effective offset (default 0) */
+            offset: number;
+            overview: components["schemas"]["CampaignOverview"];
         };
         VersionRef: {
             /**
@@ -1689,6 +1777,98 @@ export interface operations {
             };
             400: components["responses"]["MalformedRequest"];
             413: components["responses"]["PayloadTooLarge"];
+            422: components["responses"]["ValidationFailed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listCampaignSummaries: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Comma-separated list of CampaignState values (e.g. `state=sending,completed`; the comma may be
+                 *     percent-encoded as `%2C`). Absent => no filter. Present but empty (`state=`), an empty element
+                 *     (`state=sending,`, `state=,sending`, `state=sending,,completed`), an unknown or differently cased
+                 *     value (`state=sent`, `state=Sending`) or surrounding spaces (`state=sending, completed`) => 422
+                 *     invalid_value (path query.state). Duplicates are allowed and count once.
+                 * @example sending,completed
+                 */
+                state?: string;
+                /**
+                 * @description `recent` (default) = created_at DESC, then id ASC. `scheduled_at` = scheduled_at ASC with NULLs
+                 *     last, then id ASC. (`id` ASC = the lowercase UUID text order.) Unknown or empty value (`order=`) =>
+                 *     422 invalid_value (path query.order).
+                 */
+                order?: "recent" | "scheduled_at";
+                /** @description 1..200, default 50. Out of range => 422 invalid_value (path query.limit). */
+                limit?: components["parameters"]["Limit"];
+                /** @description >= 0, default 0. Negative => 422 invalid_value (path query.offset). */
+                offset?: components["parameters"]["Offset"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. `items` is always an array (empty past the end). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "items": [
+                     *         {
+                     *           "id": "7d0c1f9e-3b8a-4c52-9e41-2f6a8d1b5c30",
+                     *           "brief": "Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder.",
+                     *           "state": "completed",
+                     *           "audience": {
+                     *             "matched": 412,
+                     *             "sms": 342,
+                     *             "email": 361
+                     *           },
+                     *           "scheduled_at": null,
+                     *           "sending_started_at": "2026-11-02T09:15:04.120511Z",
+                     *           "completed_at": "2026-11-02T09:15:21.904377Z",
+                     *           "created_at": "2026-11-02T09:12:40.003154Z",
+                     *           "updated_at": "2026-11-02T09:15:21.904377Z",
+                     *           "deliveries": {
+                     *             "total": 703,
+                     *             "queued": 0,
+                     *             "sending": 0,
+                     *             "sent": 689,
+                     *             "failed": 14
+                     *           }
+                     *         }
+                     *       ],
+                     *       "total": 1,
+                     *       "limit": 5,
+                     *       "offset": 0,
+                     *       "overview": {
+                     *         "campaigns": {
+                     *           "total": 9,
+                     *           "draft": 2,
+                     *           "audience_ready": 1,
+                     *           "content_ready": 1,
+                     *           "approved": 0,
+                     *           "scheduled": 2,
+                     *           "sending": 0,
+                     *           "completed": 3
+                     *         },
+                     *         "deliveries": {
+                     *           "total": 2104,
+                     *           "queued": 0,
+                     *           "sending": 0,
+                     *           "sent": 2061,
+                     *           "failed": 43
+                     *         }
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["CampaignSummaryPage"];
+                };
+            };
             422: components["responses"]["ValidationFailed"];
             500: components["responses"]["InternalError"];
         };
