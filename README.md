@@ -6,34 +6,58 @@ Smart Campaign Composer, pazarlama ekiplerinin kampanyalarını doğal dille tan
 
 ## Case isterleri
 
-Tablo, case dokümanının bölümlerini ve maddelerini izler. Parantez içindeki kodlar [`DECISIONS.md`](DECISIONS.md) dosyasındaki ilgili kararları gösterir.
+Case dokümanındaki **16 madde** ve **4 bonusun** tamamı karşılanmıştır. Gerekçeler [`DECISIONS.md`](DECISIONS.md) dosyasında; `D8` gibi kodlar ilgili kararı gösterir.
 
-| Bölüm | Case isteri | Nasıl karşılandı |
+| Kullanıcı akışı | Fonksiyonel | AI | Teslimat | Bonus |
+|:---:|:---:|:---:|:---:|:---:|
+| **5 / 5** ✅ | **7 / 7** ✅ | **2 / 2** ✅ | **2 / 2** ✅ | **4 / 4** ✅ |
+
+### 1. Kullanıcı akışı
+
+| Adım | Nasıl çalışıyor |
+|---|---|
+| **Kitle çıkarılır** | Claude brief'ten bir segment kuralı üretir; arayüz eşleşen kişi sayısını ve kanal bazında ulaşılabilir kişi sayısını gösterir. |
+| **Mesajlar üretilir** | SMS ve e-posta içeriği SSE ile ekrana akarak gelir. |
+| **İnsan onaylar** | Pazarlamacı içeriği önizler, gerekirse düzenler ve onaylar; yalnızca onaylanan sürüm gönderilir. |
+| **Gönderilir** | Mesajlar PostgreSQL üzerindeki kuyruk aracılığıyla sahte servise iletilir (`D1`). |
+| **Canlı izlenir** | Takip ekranı gönderim durumunu canlı olarak gösterir. |
+
+### 2. Fonksiyonel gereksinimler
+
+| Konu | Gereksinim | Nasıl karşılandı |
 |---|---|---|
-| Kullanıcı akışı | Kitle çıkarılır | Claude brief'ten bir segment kuralı üretir; arayüz eşleşen kişi sayısını ve kanal bazında ulaşılabilir kişi sayısını gösterir ✅ |
-| | Mesajlar üretilir | SMS ve e-posta içeriği SSE ile ekrana akarak gelir ✅ |
-| | İnsan onaylar | Pazarlamacı içeriği önizler, gerekirse düzenler ve onaylar; yalnızca onaylanan sürüm gönderilir ✅ |
-| | Gönderilir | Mesajlar PostgreSQL üzerindeki kuyruk aracılığıyla sahte servise gönderilir (D1) ✅ |
-| | Canlı izlenir | Takip ekranı gönderim durumunu canlı olarak gösterir ✅ |
-| Fonksiyonel gereksinimler | Segment kuralı backend'de doğrulanır; LLM çıktısı doğrudan SQL olarak çalıştırılmaz | Kural yalnızca izin verilen alan ve operatörlerden oluşur; parametreli sorguyu backend kurar (D8) ✅ |
-| | İzni olmayan kullanıcıya o kanaldan mesaj gönderilmez | SMS ve e-posta izinleri ayrı tutulur; denetimi model değil sistem yapar (D9) ✅ |
-| | SMS en fazla 160, e-posta konusu en fazla 80 karakter | Sınırlar, değişkenler doldurulduktan sonraki metne göre ölçülür (D10) ✅ |
-| | `{{first_name}}` gibi kişiselleştirme değişkenleri | Desteklenir; bilinmeyen değişkenler reddedilir ✅ |
-| | Asenkron kuyruk, kanal başına saniyede en fazla 100 mesaj | Her kanal için tek dağıtıcı ve hız sınırlayıcı kullanılır (D5) ✅ |
-| | Aynı kişiye aynı mesaj iki kez gitmez; yeniden deneme stratejisi | Veritabanı tekillik kısıtı ve `Idempotency-Key` (D3); ilk deneme dahil en fazla 5 deneme, artan aralıklar, 429'da `Retry-After` (D6) ✅ |
-| | Canlı gönderim durumu, metrics ve health check uç noktaları | SSE ile canlı durum akışı, `/metrics`, `/healthz` ve `/readyz` ✅ |
-| AI gereksinimleri | Doğrulama: yapılandırılmış JSON, backend'de kontrol | Claude araç kullanımıyla JSON döndürür ve backend bunu doğrular; geçersizse bir düzeltme denemesi yapılır, ardından anlaşılır bir hata gösterilir (D7) ✅ |
-| | Test edilebilirlik: gerçek API anahtarı olmadan, sahte LLM ile | LLM bir arayüzün arkasındadır; anahtar yoksa sahte Claude devreye girer (D11) ✅ |
-| Teslim edilecekler | `docker compose up` ile tek komutla kurulum (seed ve mock provider dahil) | 5000 sahte kullanıcı ve sahte gönderim servisi tek komutla ayağa kalkar ✅ |
-| | `make test`, `README.md`, `DECISIONS.md`, `ai-sessions/` | Testler konteynerde ve API anahtarı olmadan çalışır; belgeler ve temizlenmiş oturum kayıtları depodadır ✅ |
-| Bonus | Zamanlanmış gönderim | Kampanya ileri bir tarih ve saate planlanabilir (Türkiye saati, UTC+3) (D62) ✅ |
-| | A/B varyantları | İki mesaj varyantı üretilir; kitle gönderim sırasında belirlenimci olarak ikiye bölünür (D64) ✅ |
-| | Kullanıcının diline göre içerik | Kitlede İngilizce konuşan kullanıcılar varsa onlar için İngilizce metin de üretilir (D63) ✅ |
-| | CI pipeline | GitHub Actions; lint, testler, API sözleşmesi ve güvenlik kontrolleri her PR'da çalışır ✅ |
+| **Kitle** | Segment kuralı backend'de doğrulanır; LLM çıktısı SQL olarak çalıştırılmaz | Kural yalnızca izin verilen alan ve operatörlerden oluşur; parametreli sorguyu backend kurar (`D8`) |
+| | İzni olmayan kullanıcıya o kanaldan mesaj gitmez | SMS ve e-posta izinleri ayrıdır; denetimi model değil sistem yapar (`D9`) |
+| **İçerik** | SMS ≤ 160, e-posta konusu ≤ 80 karakter | Sınırlar, değişkenler doldurulduktan sonraki metne göre ölçülür (`D10`) |
+| | `{{first_name}}` gibi değişkenler | Desteklenir; bilinmeyen değişkenler reddedilir |
+| **Gönderim** | Asenkron kuyruk, kanal başına saniyede en fazla 100 mesaj | Her kanal için tek dağıtıcı ve hız sınırlayıcı (`D5`) |
+| | Aynı kişiye aynı mesaj iki kez gitmez; yeniden deneme stratejisi | Veritabanı tekillik kısıtı ve `Idempotency-Key` (`D3`); en fazla 5 deneme, artan aralıklar, `429` yanıtında `Retry-After` (`D6`) |
+| **Takip** | Canlı durum, metrics ve health check | SSE ile canlı akış, `/metrics`, `/healthz`, `/readyz` |
 
-Bunlara ek olarak, brief ekranının altında planlanan ve gönderilen kampanyaların listesi yer alır ve takip ekranı yeniden tasarlanmıştır (D65).
+### 3. AI gereksinimleri
 
-Case'teki tüm maddeler ve dört bonusun tamamı karşılanmıştır. Bilinçli tasarım sınırları ve gerekçeleri [`DECISIONS.md`](DECISIONS.md) dosyasında yer alır.
+| Konu | Nasıl karşılandı |
+|---|---|
+| **Doğrulama** | Claude araç kullanımıyla JSON döndürür, backend doğrular; geçersizse bir düzeltme denemesi yapılır, ardından anlaşılır bir hata gösterilir (`D7`) |
+| **Test edilebilirlik** | LLM bir arayüzün arkasındadır; API anahtarı yoksa sahte Claude devreye girer (`D11`) |
+
+### 4. Teslim edilenler
+
+| Madde | Durum |
+|---|---|
+| `docker compose up` ile tek komutla kurulum | 5000 sahte kullanıcı ve sahte gönderim servisiyle birlikte ayağa kalkar |
+| `make test`, `README.md`, `DECISIONS.md`, `ai-sessions/` | Testler konteynerde ve anahtarsız çalışır; belgeler ve temizlenmiş oturum kayıtları depodadır |
+
+### 5. Bonuslar
+
+| Bonus | Nasıl karşılandı |
+|---|---|
+| ⏰ **Zamanlanmış gönderim** | Kampanya ileri bir tarih ve saate planlanabilir; saatler UTC+3'tür (`D62`) |
+| 🧪 **A/B varyantları** | İki mesaj varyantı üretilir; kitle gönderimde belirlenimci olarak ikiye bölünür (`D64`) |
+| 🌍 **Kullanıcının diline göre içerik** | Kitlede İngilizce konuşan kullanıcı varsa İngilizce metin de üretilir (`D63`) |
+| ⚙️ **CI pipeline** | GitHub Actions; lint, testler, API sözleşmesi ve güvenlik kontrolleri her PR'da çalışır |
+
+> **Ek olarak:** brief ekranının altında planlanan ve gönderilen kampanyaların listesi yer alır; takip ekranı yeniden tasarlanmıştır (`D65`).
 
 ## Çalıştırma
 
