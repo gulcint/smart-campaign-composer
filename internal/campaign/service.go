@@ -105,6 +105,10 @@ type Store interface {
 	// Order "customer" or "recent") and the filtered total, both from one snapshot. Unknown
 	// campaign => ErrCampaignNotFound.
 	ListDeliveries(ctx context.Context, id string, f DeliveryFilter) ([]Delivery, int, error)
+	// ListSummaries returns one page of campaign summaries matching f (already validated, Limit
+	// set), the filtered total and the overview, all from one read-only REPEATABLE READ snapshot
+	// (db-schema §3.10). Limit and Offset of the result are left to the caller.
+	ListSummaries(ctx context.Context, f SummaryFilter) (SummaryPage, error)
 }
 
 // GenerationLease is the per-campaign generation marker kept on the campaign row (D52): at most
