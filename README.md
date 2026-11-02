@@ -6,11 +6,7 @@ Smart Campaign Composer, pazarlama ekiplerinin kampanyalarını doğal dille tan
 
 ## Case isterleri
 
-Case dokümanındaki **16 madde** ve **4 bonusun** tamamı karşılanmıştır. Gerekçeler [`DECISIONS.md`](DECISIONS.md) dosyasında; `D8` gibi kodlar ilgili kararı gösterir.
-
-| Kullanıcı akışı | Fonksiyonel | AI | Teslimat | Bonus |
-|:---:|:---:|:---:|:---:|:---:|
-| **5 / 5** ✅ | **7 / 7** ✅ | **2 / 2** ✅ | **2 / 2** ✅ | **4 / 4** ✅ |
+Case dokümanındaki tüm maddeler ve dört bonusun tamamı karşılanmıştır. Gerekçeler [`DECISIONS.md`](DECISIONS.md) dosyasında; `D8` gibi kodlar ilgili kararı gösterir.
 
 ### 1. Kullanıcı akışı
 
@@ -43,10 +39,12 @@ Case dokümanındaki **16 madde** ve **4 bonusun** tamamı karşılanmıştır. 
 
 ### 4. Teslim edilenler
 
-| Madde | Durum |
-|---|---|
-| `docker compose up` ile tek komutla kurulum | 5000 sahte kullanıcı ve sahte gönderim servisiyle birlikte ayağa kalkar |
-| `make test`, `README.md`, `DECISIONS.md`, `ai-sessions/` | Testler konteynerde ve anahtarsız çalışır; belgeler ve temizlenmiş oturum kayıtları depodadır |
+- [x] **GitHub repository:** [`gulcint/smart-campaign-composer`](https://github.com/gulcint/smart-campaign-composer)
+- [x] **`docker compose up`** ile tek komutla kurulum (seed verisi ve mock provider dahil)
+- [x] **`make test`** ile çalışan testler (konteynerde, API anahtarı olmadan)
+- [x] **`README.md`:** kurulum ve kısa mimari özeti
+- [x] **`DECISIONS.md`:** önemli kararlar ve nedenleri
+- [x] **`ai-sessions/`:** temizlenmiş Claude session export'ları ([dizin](ai-sessions/INDEX.md))
 
 ### 5. Bonuslar
 
