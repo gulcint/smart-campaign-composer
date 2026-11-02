@@ -341,7 +341,7 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | `LanguageTabs` | Türkçe / İngilizce içerik sürümü geçişi (yalnız sürümde veya akışta İngilizce varsa) | shadcn `Tabs` | her sekmede etiket ("Türkçe", "İngilizce") + hata göstergesi | `ChannelTabs`'ın bir üst seviyesinde, daha küçük ve nötr: aktif sekme alt 2 px pill gösterge `--text-accent`, kanal rengi kullanılmaz (kanal rengi yalnız kanal sekmelerindedir); hata içeren sekme etiketinde `CircleAlert`; <1024 px'te 44 px dokunma hedefi | REQ-LNG-04 |
 | `VariantTabs` | Varyant A / Varyant B geçişi (yalnız sürümde veya akışta B varsa; İçerik ve Onay) | shadcn `Tabs` | her sekmede etiket ("Varyant A", "Varyant B") + hata göstergesi; altında seçili varyantın açı etiketi | Hiyerarşinin en üstü: varyant → dil → kanal. `LanguageTabs` ile aynı ölçek ve nötr dil (alt 2 px pill `--text-accent`, kanal rengi yok); açı etiketi sekmelerin altında küçük, `--ink-700` gövde metni (LLM metni turuncu yapılmaz, §4.1), önünde `FlaskConical` ikonu `--ink-500`; hata içeren sekmede `CircleAlert`; <1024 px'te 44 px dokunma hedefi | REQ-ABT-04 |
 | `AbToggle` | "A/B testi" anahtarı (Kitle'de kitle kartının en altındaki "Mesaj seçenekleri" satırında; İçerik'te eylem şeridinde, yeniden üret düğmesinin solunda) | shadcn `Switch` + Reka `Tooltip` | kapalı, açık, devre dışı (planlı/gönderiliyor/tamamlandı) | etiket + yanında `Info` ikonu; açıklama ("İki farklı mesaj üretilir; kitle gönderimde yarı yarıya bölünür.") hover, klavye odağı ve dokunuşta tooltip olarak açılır (`--ink-900` zemin, `--radius-sm`), ekran okuyucuya `aria-describedby` ile; açıkken iz rengi `--text-accent` rol token'ıyla; anahtar tek başına birincil eylem değildir | REQ-ABT-04 |
-| `VariantBreakdown` | Takip ekranında varyant başına teslimat tablosu (`by_variant` doluysa) | shadcn `Table` | iki satır (A, B): açı, SMS ve Email için gönderildi / başarısız / kuyrukta | sayaç kartlarının altında, kart yüzeyinde; sayılar `tabular-nums`, başarısız > 0 ise `--error`; kazanan vurgusu, renkli karşılaştırma veya oran çubuğu **yok**; altta `Info` ikonlu not "Mock provider açılma/tıklama ölçmez; tablo yalnız teslimat sonucudur" (`--ink-500`); <640 px'te tablo yatay kayar (başlık sütunu yapışık) | REQ-ABT-04 |
+| `VariantBreakdown` | Takip ekranında varyant başına teslimat tablosu (`by_variant` doluysa) | shadcn `Table` | iki satır (A, B): açı, SMS ve Email için gönderildi / başarısız / kuyrukta | sayaç kartlarının altında, kart yüzeyinde; sayılar `tabular-nums`, başarısız > 0 ise `--error`; kazanan vurgusu, renkli karşılaştırma veya oran çubuğu **yok**; altta `Info` ikonlu not "Mock provider açılma/tıklama ölçmez; tablo yalnız teslimat sonucudur" (`--ink-500`); <640 px'te tablo yerine varyant başına kart (P10; tablo DOM'da kalır, testid'ler yalnız tabloda) | REQ-ABT-04 |
 | `StreamingText` | Akan içerik bloğu | custom | alan başına (SMS gövdesi, email konusu, email gövdesi) | `idle` (skeleton 3 satır), `streaming` (metin + caret, rozet "Taslak"), `validated` (caret yok, rozet "Doğrulandı"), `invalid` (rozet "Geçersiz" + alan altında hata listesi), `retrying` (sunucu son olmayan `invalid` gönderdi: taslak temizlenir, üstte info satırı "Model çıktısı düzeltiliyor…"), `interrupted` (son olay yok: taslak soluk, uyarı "Akış yarıda kesildi" + "Yeniden üret") | REQ-CNT-04, REQ-AI-01, REQ-UI-01 |
 | `StatusBadge` | Durum rozetleri | shadcn `Badge` | §3.4 tablosundaki tüm durumlar; `sm` (20 px) / `md` (24 px); pill, ikon + metin, zemin = semantik zemin | — | REQ-CNT-04, REQ-TRK-01 |
 | `VariableChip` | `{{first_name}}` vb. | custom | `insert` (editör araç çubuğunda, tıklayınca imleç konumuna ekler) · `inline` (önizlemede renderlanmamış hali) · `invalid` (izinsiz değişken: `--error` kenarlık + üstü çizili değil, `CircleAlert`) | default, hover, focus, disabled (sending/completed) | REQ-CNT-03 |
@@ -352,7 +352,9 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | `ApprovalBar` | Onay/gönder karar paneli | custom (konumlanmaz; Onay'da ebeveyn kart içinde `sticky bottom-0`) | ≥640 tek satır: not solda, ikincil + birincil eylem sağda / <640 not üstte, eylemler alt alta tam genişlik (birincil önce). Kendi kartı/gölgesi yok; Onay özet kartının sonunda opak `--surface-sunken` zeminde, kart içinde yapışık | `disabled` (neden metni görünür), `ready` ("Onayladıktan sonra gönderebilirsin"), `submitting`, `approved` (yeşil `CircleCheck` + "Onaylandı · düzenlersen onay düşer" + ( Gönder ) birincil), `stale` ("Onay düştü, yeniden onayla") | REQ-APR-01/03, REQ-CNT-04/05 |
 | `ConfirmDialog` | Onay/gönder/yeniden üret teyidi | shadcn `Alert Dialog` | `approve`, `send` (kanal sayıları özetlenir: "SMS 1.204 · Email 987 kişiye gidecek"), `regenerate` (mevcut içerik silinecek) | açık, submitting, hata (diyalog içinde inline) | REQ-APR-01, REQ-SND-01 |
 | `ProgressBar` / `ProgressRow` | Referans çubuk dili | custom (`role="progressbar"`) | `single` (tek dolgu `--gradient-brand-vivid`), `segmented` (sent `--success` · failed `--error` · sending `--info` · queued `--track` desen); satır: solda etiket, ortada çubuk (8 px, pill), sağda sayı + yüzde (`numeral-sm`) | indeterminate yok (her zaman sayı); güncelleme `--dur-bar` | REQ-AUD-03, REQ-TRK-01 |
-| `DeliveryCounters` | Kuyrukta / Gönderiliyor / Gönderildi / Başarısız | custom (Card) | kanal başına ve toplam | live, stale (SSE koptu: sayılar soluk + "Son güncelleme 12 sn önce"), completed | REQ-TRK-01 |
+| `DeliveryCounters` | Takip'in genel durum kartı + kanal kartları (P10 yeniden düzen, §8.5) | custom (Card) | genel kart (tek vurgulu kart: `--radius-card-lg` + gradient şerit; büyük sayı tamamlanma yüzdesi `numeral-xl` `--text-accent-numeral` + "x / y mesaj işlendi"; **sonuç** Gönderildi/Başarısız `numeral-md` ile **kalan iş** Gönderiliyor/Kuyrukta `numeral-sm --ink-700` ayrı gruplarda) · kanal kartı (`h3` + kanal noktası, toplam ve yüzde aynı `numeral-md`, dört durum tek sütunlu tanım listesi) | live ("Canlı" pill), stale (opaklık **düşmez**; `CircleAlert` + "Bağlantı koptu" notu, son güncelleme saati her zaman görünür), completed ("Kampanya tamamlandı" başlığın yanında), bekleme (iskelet + gizli `role=status`, başlık değil) | REQ-TRK-01, REQ-DSH-03 |
+| `CampaignPanel` | Brief giriş ekranının altında kampanyalara genel bakış (P10, D65): özet kartları + Planlanan + Gönderilen | custom (Card + shadcn `Skeleton`) | özet kartları (5 sayı, yalnız sayı, oran yok) · iki bölüm (5'er satır, "Daha fazla göster" +5) | yükleniyor (bölüm başına 3 satır iskelet), hazır, boş (tek satır metin `--ink-500`), bölüm hatası (yalnız o bölümde satır içi hata + "Tekrar dene"), daha fazla yükleniyor (düğme loading) | REQ-DSH-02 |
+| `CampaignSummaryRow` | Panel satırı: tek link, Takip ekranına | custom (`RouterLink`) | Planlanan (brief ilk satırı · `CalendarClock` + TSİ saat · göreli süre) / Gönderilen (brief ilk satırı · `StatusBadge` sm · mini segmentli `ProgressBar` · "gönderildi n · başarısız m") | hover (`--surface-sunken` zemin), focus-visible (`--shadow-focus`), < 640 iki satırlık kart | REQ-DSH-02 |
 | `ActivityFeed` | **Kapsam dışı, uygulanmadı** (sahip kararı): Takip ekranında yalnız sayaçlar var (§8.5) | — | — | — | — |
 | `Toast` | Geçici geri bildirim | shadcn `Sonner` (`vue-sonner`) | success, info, warning, error | otomatik kapanma 5 s (error: kalıcı, kapat butonu) | HTTP kodları |
 | `InlineError` / `ErrorCard` | Alan ve bölüm hataları | shadcn `Alert` | field (alan altı, 14 px, `--error`, ikon), section (kart, başlık + açıklama + eylem) | — | HTTP kodları |
@@ -401,6 +403,29 @@ Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu 
 │  ⓘ Gerçek kimseye mesaj gitmez; alıcılar sahte seed verisidir.       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+**Kampanya paneli (P10, D65; composer ve seed notunun altında, yalnız `brief-new`):**
+
+```
+│  Kampanyaların                                         ← h2           │
+│  ┌ Toplam ─┐┌ Planlanan ┐┌ Gönderilen ┐┌ Gönd. mesaj ┐┌ Başarısız ┐   │
+│  │   12    ││     2     ││     5      ││    3.214    ││     43    │   │
+│  └─────────┘└───────────┘└────────────┘└─────────────┘└───────────┘   │
+│  ┌ Planlanan · 2 ───────────────┐ ┌ Gönderilen · 5 ─────────────────┐ │
+│  │ Hafta sonu kahve kampanyası… │ │ Son 30 günde sepetine… [Tamam.] │ │
+│  │ 3 Kasım 2026 10:00 TSİ ·     │ │ ███████████░ gönd. 689 · baş. 14 │ │
+│  │   20 saat sonra              │ │ İzmir'deki yeni üyelere… [Gönd.] │ │
+│  │ Yılbaşı öncesi hatırlatma…   │ │ █████░░░░░░░ gönd. 120 · baş. 2  │ │
+│  │ 28 Kasım 2026 09:00 TSİ ·    │ │ …                               │ │
+│  │   26 gün sonra               │ │ [ Daha fazla göster ]           │ │
+│  └──────────────────────────────┘ └─────────────────────────────────┘ │
+```
+- **Onaylı eskiz (sahip, 2026-11-02):** panel kabı `max-w-5xl` (1024 px), composer'ın 768 px kabının altında ve ortalı; Planlanan ve Gönderilen ≥ 1024 px'te yan yana **5:7** (12 sütunlu ızgarada 5 + 7), altında alt alta. Bölüm başlıkları `h3` öğesi, görsel `text-h4`. Satır çubuğu `ProgressBar size="sm"` (6 px). Saatler eksiz (`formatTsiPlain`: "3 Kasım 2026 10:00"); saat dilimi panelde bir kez, altta `caption --ink-500` notuyla ("Saatler Türkiye saati (UTC+3)."). Hata metni bölümü adlandırır ("Planlanan kampanyalar yüklenemedi." + "Tekrar dene"); boş metinler "Planlanmış kampanya yok." / "Henüz gönderilen kampanya yok.". Eskizler: designer çıktısı (1280/375, dolu/boş/hata durumları).
+- Özet sayıları `numeral-md` `--text-accent-numeral`, etiket `caption --ink-600`; yalnız sayı (oran/yüzde yok, sahip kararı); "Başarısız mesaj" > 0 ise sayı `--error`. Kartlar küçük ve gölgesiz (`surface-card`, 1 px `--border-default`): panel ikincil bilgidir, ekranın birincil işi brief yazmaktır.
+- Bölüm başlıkları `h3` + toplam ("Planlanan · 2"); satır tek link, brief ilk satırı `--ink-900` `body` (kullanıcı metni, turuncu değil), ikinci satır `caption --ink-600`. Boş bölüm tek satır metin ("Planlanmış kampanya yok."), kart çerçevesi kalır.
+- Taslak ve onaylı ama gönderilmemiş kampanyalar satır olarak yoktur (yalnız "Toplam"da sayılır). Gönderimi süren satır varken 10 sn'de bir, 1 saat içinde planlı satır varken planın başlamasından 10 sn sonra sessizce tazelenir (yükleniyor gösterilmez).
+- Brief gönderilirken panel gizlenir (dikkat tek göstergede: Kitle yükleniyor kartı).
+- Eskiz kapısı (PLAN §12.7 adım 5): `designer` uygulamadan önce 1280 ve 375 px eskizi sahibe gösterir; bu çizim bağlayıcı değil, yön verir.
+
 Durumlar: boş, yazıyor, gönderiliyor (kullanıcı balonunun hemen altında Kitle adımının yükleniyor kartı: shimmer kural chip'leri, shimmer sayı bloğu + görünür durum satırı "Claude kitleyi çıkarıyor…" / "Kitle hesaplanıyor…", shimmer SMS/Email satırları, izin notu; ~5 s'lik segment beklemesi burada geçer ve Kitle sayfası aynı şekillerle açılır; tek gösterge, eski 3 noktalı balon kaldırıldı; gönder düğmesi kilitli), 422/413 field hatası, 502 `ErrorCard`.
 
 ### 8.2 Kitle
@@ -486,18 +511,47 @@ Email sekmesinde: konu `Input` + sayaç `/80`, gövde `Textarea`; sağda `EmailP
 - **Karar paneli:** kartın son bölümü (opak `--surface-sunken`, üst kenarlık `--border-default`). Kartın akışı içinde `sticky bottom-0`: kısa görünümlerde (ör. 1280×900) kart kaydırılırken görünümün altına iğnelenir, kart sonuna gelince son satırın (Uzunluk) altında yerine oturur; böylece karar kaydırmadan görünür, kaydırmanın sonunda hiçbir içeriği örtmez ve iğneliyken üstünden geçtiği içerik kaydırınca açılır. Satırlar ve email gövdesi 192 px `scroll-margin-bottom` taşır (odak panelin altına düşmez). 375 px'te panel 177 px (812 px görünümün %22'si, %25 sınırının altında) olduğu için telefonda da yapışıktır. Onay sonrası not "Onaylandı · düzenlersen onay düşer" + ( Gönder ) → `ConfirmDialog send` (kanal sayıları). 422 (REQ-CNT-05 onay anı aşımı) diyalog içinde. "Taslağı düzenle" → İçerik adımı.
 - Kaldırılanlar (P6): sayfa rozeti (`AppHeader` ile tekrar), "1 Onayla → 2 Gönder" mini adım listesi, "Sürüm · Claude üretti" kaynağı, kart logosu, `LimitChip`'ler (4 adet → tek satır), "Gidecek metin" etiketleri, balon/çerçeve/örnek gezme, ayrı düzenleme ipucu şeridi, uzun alt başlık.
 
-### 8.5 Takip / Dashboard
+### 8.5 Takip / Dashboard (P10'da yeniden düzenlendi, D65)
+
+Sorunlar (P10 öncesi): durum üç kez söyleniyordu (başlık rozeti, kart başlığı, "Canlı" hapı) ama hangi kampanyanın izlendiği hiç söylenmiyordu; ana ilerleme yüzdesi 13 px gri, en küçük yazıydı; sonuç ile kalan iş aynı boyda yan yanaydı; `h2` `text-h3` ile çiziliyordu; üç ayrı kart dili vardı; bayatken bütün kart `opacity-80` idi (kontrast AA altına inebiliyordu); plan notu sayfada yüzüyordu. Yeniden yazım yok: bileşenler ve **bütün testid/`data-value`'lar aynı**; değişen sıra, tipografi ve kart dili. Eskiz kapısı (PLAN §12.7 adım 5): `designer` uygulamadan önce 1280 ve 375 px eskizi sahibe gösterir.
 
 ```
-│ Kampanya gönderiliyor                         [Gönderiliyor]      │
-│ ┌ SMS ─────────────────────────┐ ┌ Email ───────────────────────┐ │
-│ │ 1.204 alıcı                   │ │ 987 alıcı                    │ │
-│ │ ███████████▓▓░░░░░░  %62      │ │ ██████▓░░░░░░░░░░░  %38      │ │
-│ │ Gönderildi  742  Başarısız  9 │ │ Gönderildi 371  Başarısız 4  │ │
-│ │ Gönderiliyor 12  Kuyrukta 441 │ │ Gönderiliyor 8  Kuyrukta 604 │ │
-│ └───────────────────────────────┘ └──────────────────────────────┘ │
+│ ADIM 5/5 · CANLI GÖNDERİM DURUMU                     [Gönderiliyor]   │
+│ Gönderimi izle                                          ← h1          │
+│ Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki   │
+│ kullanıcılara %30 indirim hatırlatması gönder…  ← brief, 2 satır, ink-700│
+│ SMS 342 · Email 361 · Başladı 2 Kasım 2026 12:15 TSİ · Planlanan: …   │
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓   │
+│ ┃ Genel durum   ← h2 turuncu                            (● Canlı) ┃   │
+│ ┃ %62           ← numeral-xl turuncu                              ┃   │
+│ ┃ 436 / 703 mesaj işlendi                                         ┃   │
+│ ┃ ████████████████▓▓░░░░░░░░░ (gönderildi/başarısız/sürüyor/kuyruk)┃   │
+│ ┃ SONUÇ                          KALAN İŞ                         ┃   │
+│ ┃ Gönderildi 422  Başarısız 14   Gönderiliyor 20  Kuyrukta 247    ┃   │
+│ ┃ ← numeral-md                   ← numeral-sm ink-700             ┃   │
+│ ┃ Son güncelleme 12:15:21                                         ┃   │
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛   │
+│ ┌ ● SMS          ← h3 ─────────┐ ┌ ● Email ──────────────────────┐    │
+│ │ 342 alıcı              %64   │ │ 361 alıcı                %60  │    │
+│ │ ██████████▓░░░░░             │ │ █████████▓░░░░░░░             │    │
+│ │ Gönderildi             212   │ │ Gönderildi               210  │    │
+│ │ Başarısız                7   │ │ Başarısız                  7  │    │
+│ │ Gönderiliyor            10   │ │ Gönderiliyor              10  │    │
+│ │ Kuyrukta               113   │ │ Kuyrukta                 134  │    │
+│ └──────────────────────────────┘ └───────────────────────────────┘    │
+│ (P9) Varyantlara göre teslimat: aynı kart dilinde tablo               │
+│ (tamamlandıysa ve başarısız > 0) Başarısızları gör → liste kartı      │
 ```
-**A/B (P9):** `by_variant` doluysa sayaç kartlarının altında `VariantBreakdown`:
+- **Başlık bloğu:** tek durum rozeti `StepHeader`'da kalır; alt başlık yerine kampanyanın brief'i (`body`, `--ink-700`, `line-clamp-2`) ve tek meta satırı (`body-sm --ink-600`, " · " ayraçlı): kanal kitleleri, başlama, bitiş, (planlıysa) planlanan saat. Saatler `formatTsi`.
+- **Onaylı eskiz (sahip, 2026-11-02):** meta satırındaki saatler eksiz (`formatTsiPlain`), blok sonunda tek saat dilimi notu; genel kart çubuğu `ProgressBar size="lg"` (12 px), kanal kartlarında `md` (8 px); tamamlanınca "Kalan iş 0 / 0" grubu kalır. **Sayı rengi kuralı:** gönderildi `--text-accent-numeral`, başarısız > 0 `--error` (0 iken mürekkep), gönderiliyor/kuyrukta `--ink-700`; her sayının etiketi vardır.
+- **Genel durum kartı** tek vurgulu karttır (`--radius-card-lg`, üstte gradient şerit, `--shadow-card`). Başlık sabit "Genel durum" (`h2` = `text-h2` `--text-accent-heading`); canlılık başlığın sağında pill ("● Canlı", `--success` noktası; tamamlanınca `CircleCheck` + "Kampanya tamamlandı"; bayatken `CircleAlert` + "Bağlantı koptu; sayılar güncel olmayabilir", `--warning`). Büyük sayı tamamlanma yüzdesi (`numeral-xl`, mobilde 32 px), yanında/altında "x / y mesaj işlendi" (`body`, sayılar `tabular-nums`). Sonuç grubu (`numeral-md`; Başarısız > 0 ise `--error` + etiket) kalan iş grubundan (`numeral-sm`, `--ink-700`) etiketli iki `<dl>` ile ayrılır. Son güncelleme saati her zaman kartın altında (`caption --ink-500`).
+- **Bekleme:** başlık değil; sayı bloklarında `Skeleton`, görsel olarak gizli `role=status` "Gönderim durumu alınıyor…".
+- **Kanal kartları:** `surface-card`, `--radius-card`, `--shadow-card`; `h3` = `text-h3` `--text-accent-heading` + kanal noktası; toplam ve yüzde aynı `numeral-md` boyunda çubuğun üstünde; dört durum tek sütunlu tanım listesi (etiket `body-sm --ink-600`, sayı `numeral-sm` sağa hizalı). ≥ 768 yan yana.
+- **Tek kart dili:** kanal kartları, varyant tablosu (P9) ve başarısız listesi aynı `surface-card` + `--radius-card` + `--shadow-card`; yalnız genel kart büyük yarıçap ve şerit taşır.
+- **Bayatlık:** opaklık düşürülmez (kontrast korunur); not, ikon ve metinle söylenir.
+- Hareket: §5 sayaç tween'i ve reduced-motion kuralları değişmez.
+
+**A/B (P9):** `by_variant` doluysa kanal kartlarının altında `VariantBreakdown`:
 
 ```
 │ Varyantlara göre teslimat                                          │
@@ -506,9 +560,9 @@ Email sekmesinde: konu `Input` + sayaç `/80`, gövde `Textarea`; sağda `EmailP
 │ Varyant B  Aciliyet: indirim bugün…    296 / 5 / 0     322 / 3 / 0  │
 │ ⓘ Mock provider açılma/tıklama ölçmez; tablo yalnız teslimat sonucudur │
 ```
-Kazanan gösterilmez (sahip kararı, D64).
+Kazanan gösterilmez (sahip kararı, D64). **Telefonda (< 640 px, P10 onaylı eskiz):** yatay kayan tablo yerine varyant başına bir kart (varyant rozeti + açı + kanal başına gönderildi / başarısız / kuyrukta); tablo DOM'da kalır ve ≥ 640'ta görünür (ui.md §3.30).
 
-`completed`: başlık "Kampanya tamamlandı", rozet `Tamamlandı`, başarısız sayısı sıfır değilse `--error` vurgulu ve "Başarısızları gör" listesi (kayıt alanları sözleşmeye bağlı). Kampanya düzeyinde "Başarısız" durumu gösterilmez (REQ-TRK-01).
+`completed`: rozet `Tamamlandı`, başlığın yanında "Kampanya tamamlandı", başarısız sayısı sıfır değilse `--error` vurgulu ve "Başarısızları gör" listesi. Kampanya düzeyinde "Başarısız" durumu gösterilmez (REQ-TRK-01).
 
 ### 8.6 Responsive düzen (V13, uygulandı 2026-10-28)
 
@@ -525,7 +579,8 @@ Test genişlikleri **375 / 768 / 1280 px**; kanıt `.playwright-mcp/p5-responsiv
 - Brief, Kitle: tek sütun, masaüstüyle aynı; Kitle eylemleri yan yana ("Brief'i düzenle" solda, "İçeriği üret" sağda).
 - İçerik: **tek sütun** (editör kartı → çalışma önizlemesi → eylem şeridi); iki sütun ≥1024. Eylem şeridi yatay.
 - Onay: tek ortalı kart (§8.4); satır etiketleri solda, karar paneli tek satır.
-- Takip: genel kart tam genişlikte, 5 sayaç tek satırda; kanal kartları yan yana; başarısız teslimat listesi tablo.
+- Takip (P10): genel kart tam genişlikte; yüzde + "x / y" solda, sonuç ve kalan iş grupları yan yana; kanal kartları yan yana; başarısız teslimat listesi tablo.
+- Brief paneli (P10): özet kartları 3 sütun (5 kart → 3 + 2); Planlanan ve Gönderilen alt alta (yan yana yalnız ≥ 1024).
 
 **Mobil (<768):**
 - `AppHeader`: wordmark "SCC"e kısalır (<640), rozetler sağda kalır.
@@ -534,7 +589,8 @@ Test genişlikleri **375 / 768 / 1280 px**; kanıt `.playwright-mcp/p5-responsiv
 - Kitle: kural chip'leri sarılır; kanal satırları etiket · çubuk · sayı · yüzde düzeninde kalır; eylemler alt alta ve tam genişlik, birincil ("İçeriği üret") üstte.
 - İçerik: tek sütun; SMS editörü <640'ta en az 192 px (160 karakter `body-lg` ile ~6 satır, kaydırmasız görünür); değişken chip'leri sarılır; eylem şeridinde not ve "Onaya geç" alt alta, buton tam genişlik. Eylem şeridi yapışık değildir (üç satırlık şerit ekranın çeyreğini kaplardı).
 - Onay: satır etiketleri içeriğin üstünde; karar panelinde not üstte, "Onayla"/"Gönder" ve "Taslağı düzenle" alt alta, tam genişlik, 44 px+; panel yapışık değildir.
-- Takip: genel sayaçlar 2 sütun ızgara; kanal kartları alt alta. (Canlı olay akışı `ActivityFeed` sahip kararıyla kapsam dışı; yalnız sayaçlar.)
+- Takip (P10): brief iki satır, meta satırı sarılır; büyük yüzde 32 px; sonuç ve kalan iş grupları alt alta (her biri 2 sütun); kanal kartları alt alta. (Canlı olay akışı `ActivityFeed` sahip kararıyla kapsam dışı; yalnız sayaçlar.)
+- Brief paneli (P10): özet kartları 2 sütun ızgara; bölümler alt alta; < 640'ta satır iki satırlık kart (üstte brief, altta durum + sayılar ya da saat); satır linki ve "Daha fazla göster" ≥ 44 px, düğme tam genişlik.
 - **Tablo/liste:** başarısız teslimat listesi ≥640'ta 4 sütunlu tablo (dar kapta kendi içinde kaydırılır, sayfa değil); <640'ta her satır iki satırlık kart: üstte müşteri kimliği (mono, kırılabilir) + kanal, altta neden + "Deneme: N". Başlık satırı ekran okuyucu için `sr-only` kalır.
 - Kart iç boşluğu 16; tipografi en küçük 12 px (`caption`).
 
@@ -587,7 +643,7 @@ web/src/
 5. E-posta gövdesi düz metin.
 6. Turuncu metin preset'i: `accent` (varsayılan; sahip itiraz etmedi).
 7. Dark tema: teslimde zorunlu değil, opsiyonel (P6).
-8. Kampanya listesi / geçmiş ekranı: kapsam dışı (tek kampanya akışı).
+8. ~~Kampanya listesi / geçmiş ekranı: kapsam dışı (tek kampanya akışı).~~ **Tersine döndü (P10, sahip kararı 2026-11-01, D65):** genel bakış ayrı bir liste ekranı veya rota olarak değil, Brief giriş ekranının altında `CampaignPanel` olarak gelir (özet kartları + Planlanan + Gönderilen, 5'er satır + "Daha fazla göster"); başlığa link eklenmez. Taslak ve onaylı ama gönderilmemiş kampanyalar satır olarak listelenmez.
 
 **VARSAYIM'lar:**
 - V1. Arayüz dili Türkçe; tüm metinler tek i18n dosyasında id ile; İngilizce sonradan eklenebilir.
@@ -602,4 +658,5 @@ web/src/
 - V10. Varsayılan turuncu metin preset'i `accent`.
 - V11. İçerik akışında otomatik yeniden bağlanma yok; dashboard akışında var.
 - V13. ~~Responsive kapsamı eksik~~ **Çözüldü (2026-10-28, `feat/p5-responsive`):** tablet 768–1023 kuralları, Brief/Kitle/İçerik/Onay/Takip mobil düzeni, tablo/liste davranışı, `viewport` meta ve 375/768/1280 kanıt seti §8.6'da.
+- V14. Brief panelinde süzgeç, arama ve sayfa numarası yok; her bölüm 5 satırla açılır, "Daha fazla göster" 5'er ekler; panel gönderimi süren satır varken 10 sn'de bir, 1 saat içindeki en erken planın başlamasından 10 sn sonra bir kez sessizce tazelenir (P10, D65).
 - V12. Kenar değerleri (radius, gölge, dark tema) approximated; ilk ekran görüntüsünden sonra sahiple gözden geçirilir.
