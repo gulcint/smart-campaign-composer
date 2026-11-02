@@ -322,11 +322,6 @@ export const tr = {
 
   // --- Brief campaign panel (P10, REQ-DSH-02) ---
   'briefPanel.title': 'Kampanyaların',
-  'briefPanel.kpi.total': 'Toplam kampanya',
-  'briefPanel.kpi.scheduled': 'Planlanan',
-  'briefPanel.kpi.sent': 'Gönderilen',
-  'briefPanel.kpi.messagesSent': 'Gönderilen mesaj',
-  'briefPanel.kpi.messagesFailed': 'Başarısız mesaj',
   'briefPanel.scheduledTitle': 'Planlanan',
   'briefPanel.sentTitle': 'Gönderilen',
   'briefPanel.scheduledEmpty': 'Planlanmış kampanya yok.',
@@ -341,7 +336,7 @@ export const tr = {
 
   // --- Connection / toasts ---
   'connection.lost': 'Bağlantı koptu, yeniden bağlanılıyor…',
-  'schedule.tz': '(Türkiye saati, UTC+3)',
+  'schedule.tz': 'UTC+3',
   'schedule.title': 'Gönderim planlandı',
   'schedule.timeLabel': 'Planlanan zaman',
   'schedule.remainingLabel': 'Kalan süre',
@@ -351,7 +346,7 @@ export const tr = {
   'schedule.cancel': 'Planı iptal et',
   'schedule.sendNow': 'Şimdi gönder',
   'schedule.startedNote': 'Planlanan: {time}',
-  'schedule.tzNote': 'Saatler Türkiye saati (UTC+3).',
+  'schedule.tzNote': 'Saatler UTC+3.',
 
   'toast.close': 'Kapat',
   'toast.region': 'Bildirimler',

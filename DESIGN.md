@@ -159,7 +159,7 @@ Buton üstü beyaz metin: referans gradient üstü `#FA5B23` **3.19 ✗**, alt `
 | Metin rolü | Renk | Not |
 |---|---|---|
 | Ekran başlığının vurgu kısmı (display, h1'de anahtar ifade) | `--text-accent-display` | Örn. "Kampanyanı **kendi sözlerinle** anlat" |
-| h2–h4 başlıklar | `--text-accent-heading` | Kart başlıkları dahil |
+| h2–h4 başlıklar | `--text-accent-heading` | Kart başlıkları dahil. İstisna: Brief ekranının kampanya paneli başlıkları `--ink-900` (aynı ekranda iki ton turuncu başlık iki ayrı sayfa gibi okunuyordu; §8.1, D65 madde 14) |
 | Vurgulu kelime (`<strong>` rolündeki) | `--text-accent` | Gövde içinde, cümle başına en fazla bir |
 | Anahtar sayılar: kitle sayısı, karakter sayacı (normal), teslimat sayaçları | `--text-accent-numeral` | Durum renkli sayaçlar istisna: başarısız sayısı `--error` |
 | Link, aktif stepper etiketi, aktif sekme etiketi | `--text-accent` | Altı çizili link; hover `--orange-800` |
@@ -353,7 +353,7 @@ shadcn-vue varsayılanı `oklch` kullanır (doğrulandı); hex değerlerimiz do�
 | `ConfirmDialog` | Onay/gönder/yeniden üret teyidi | shadcn `Alert Dialog` | `approve`, `send` (kanal sayıları özetlenir: "SMS 1.204 · Email 987 kişiye gidecek"), `regenerate` (mevcut içerik silinecek) | açık, submitting, hata (diyalog içinde inline) | REQ-APR-01, REQ-SND-01 |
 | `ProgressBar` / `ProgressRow` | Referans çubuk dili | custom (`role="progressbar"`) | `single` (tek dolgu `--gradient-brand-vivid`), `segmented` (sent `--success` · failed `--error` · sending `--info` · queued `--track` desen); satır: solda etiket, ortada çubuk (8 px, pill), sağda sayı + yüzde (`numeral-sm`) | indeterminate yok (her zaman sayı); güncelleme `--dur-bar` | REQ-AUD-03, REQ-TRK-01 |
 | `DeliveryCounters` | Takip'in genel durum kartı + kanal kartları (P10 yeniden düzen, §8.5) | custom (Card) | genel kart (tek vurgulu kart: `--radius-card-lg` + gradient şerit; büyük sayı tamamlanma yüzdesi `numeral-xl` `--text-accent-numeral` + "x / y mesaj işlendi"; **sonuç** Gönderildi/Başarısız `numeral-md` ile **kalan iş** Gönderiliyor/Kuyrukta `numeral-sm --ink-700` ayrı gruplarda) · kanal kartı (`h3` + kanal noktası, toplam ve yüzde aynı `numeral-md`, dört durum tek sütunlu tanım listesi) | live ("Canlı" pill), stale (opaklık **düşmez**; `CircleAlert` + "Bağlantı koptu" notu, son güncelleme saati her zaman görünür), completed ("Kampanya tamamlandı" başlığın yanında), bekleme (iskelet + gizli `role=status`, başlık değil) | REQ-TRK-01, REQ-DSH-03 |
-| `CampaignPanel` | Brief giriş ekranının altında kampanyalara genel bakış (P10, D65): özet kartları + Planlanan + Gönderilen | custom (Card + shadcn `Skeleton`) | özet kartları (5 sayı, yalnız sayı, oran yok) · iki bölüm (5'er satır, "Daha fazla göster" +5) | yükleniyor (bölüm başına 3 satır iskelet), hazır, boş (tek satır metin `--ink-500`), bölüm hatası (yalnız o bölümde satır içi hata + "Tekrar dene"), daha fazla yükleniyor (düğme loading) | REQ-DSH-02 |
+| `CampaignPanel` | Brief giriş ekranının altında kampanyalara genel bakış (P10, D65): Planlanan + Gönderilen (özet kartı yok, sahip kararı 2026-11-02) | custom (Card + shadcn `Skeleton`) | iki bölüm (5'er satır, "Daha fazla göster" +5) | yükleniyor (bölüm başına 3 satır iskelet), hazır, boş (tek satır metin `--ink-500`), bölüm hatası (yalnız o bölümde satır içi hata + "Tekrar dene"), daha fazla yükleniyor (düğme loading) | REQ-DSH-02 |
 | `CampaignSummaryRow` | Panel satırı: tek link, Takip ekranına | custom (`RouterLink`) | Planlanan (brief ilk satırı · `CalendarClock` + TSİ saat · göreli süre) / Gönderilen (brief ilk satırı · `StatusBadge` sm · mini segmentli `ProgressBar` · "gönderildi n · başarısız m") | hover (`--surface-sunken` zemin), focus-visible (`--shadow-focus`), < 640 iki satırlık kart | REQ-DSH-02 |
 | `ActivityFeed` | **Kapsam dışı, uygulanmadı** (sahip kararı): Takip ekranında yalnız sayaçlar var (§8.5) | — | — | — | — |
 | `Toast` | Geçici geri bildirim | shadcn `Sonner` (`vue-sonner`) | success, info, warning, error | otomatik kapanma 5 s (error: kalıcı, kapat butonu) | HTTP kodları |
@@ -406,10 +406,8 @@ Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu 
 **Kampanya paneli (P10, D65; composer ve seed notunun altında, yalnız `brief-new`):**
 
 ```
-│  Kampanyaların                                         ← h2           │
-│  ┌ Toplam ─┐┌ Planlanan ┐┌ Gönderilen ┐┌ Gönd. mesaj ┐┌ Başarısız ┐   │
-│  │   12    ││     2     ││     5      ││    3.214    ││     43    │   │
-│  └─────────┘└───────────┘└────────────┘└─────────────┘└───────────┘   │
+│  ──────────────────────────────────────────────  ← 1 px ayırıcı       │
+│  [▤] Kampanyaların          ← h2 --ink-900 + gradient ikon çipi      │
 │  ┌ Planlanan · 2 ───────────────┐ ┌ Gönderilen · 5 ─────────────────┐ │
 │  │ Hafta sonu kahve kampanyası… │ │ Son 30 günde sepetine… [Tamam.] │ │
 │  │ 3 Kasım 2026 10:00 TSİ ·     │ │ ███████████░ gönd. 689 · baş. 14 │ │
@@ -419,10 +417,11 @@ Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu 
 │  │   26 gün sonra               │ │ [ Daha fazla göster ]           │ │
 │  └──────────────────────────────┘ └─────────────────────────────────┘ │
 ```
-- **Onaylı eskiz (sahip, 2026-11-02):** panel kabı `max-w-5xl` (1024 px), composer'ın 768 px kabının altında ve ortalı; Planlanan ve Gönderilen ≥ 1024 px'te yan yana **5:7** (12 sütunlu ızgarada 5 + 7), altında alt alta. Bölüm başlıkları `h3` öğesi, görsel `text-h4`. Satır çubuğu `ProgressBar size="sm"` (6 px). Saatler eksiz (`formatTsiPlain`: "3 Kasım 2026 10:00"); saat dilimi panelde bir kez, altta `caption --ink-500` notuyla ("Saatler Türkiye saati (UTC+3)."). Hata metni bölümü adlandırır ("Planlanan kampanyalar yüklenemedi." + "Tekrar dene"); boş metinler "Planlanmış kampanya yok." / "Henüz gönderilen kampanya yok.". Eskizler: designer çıktısı (1280/375, dolu/boş/hata durumları).
-- Özet sayıları `numeral-md` `--text-accent-numeral`, etiket `caption --ink-600`; yalnız sayı (oran/yüzde yok, sahip kararı); "Başarısız mesaj" > 0 ise sayı `--error`. Kartlar küçük ve gölgesiz (`surface-card`, 1 px `--border-default`): panel ikincil bilgidir, ekranın birincil işi brief yazmaktır.
+- **Onaylı eskiz (sahip, 2026-11-02):** ~~panel kabı `max-w-5xl` (1024 px)~~ → **tek kompozisyon (sahip, 2026-11-02, D65 madde 14):** panel composer ile aynı 768 px (`max-w-3xl`) sütunda, aynı sol kenarda; Planlanan ve Gönderilen ≥ 1024 px'te yan yana **5:7** (12 sütunlu ızgarada 5 + 7), altında alt alta. Bölüm başlıkları `h3` öğesi, görsel `text-h4`. Satır çubuğu `ProgressBar size="sm"` (6 px). Saatler eksiz (`formatTsiPlain`: "3 Kasım 2026 10:00"); saat dilimi panelde bir kez, altta `caption --ink-500` notuyla ("Saatler UTC+3."; biçimli saat ör. "15 Ocak 2026 15:30 UTC+3"). Hata metni bölümü adlandırır ("Planlanan kampanyalar yüklenemedi." + "Tekrar dene"); boş metinler "Planlanmış kampanya yok." / "Henüz gönderilen kampanya yok.". Eskizler: designer çıktısı (1280/375, dolu/boş/hata durumları).
+- Özet (KPI) kartı yok (sahip kararı 2026-11-02, D65 madde 13): panel yalnız iki bölümdür; panel ikincil bilgidir, ekranın birincil işi brief yazmaktır.
+- **Tek sayfa okunur (D65 madde 14):** panel seed notunun altında 1 px `--border-default` ayırıcı + `pt-10` ile başlar (yeni sayfa değil, sayfanın alt kısmı). Brief ekranında turuncu başlık metni yalnız hero'nun vurgu satırıdır (`--text-accent-display`); panel `h2` (`text-h2`) ve bölüm `h3`'leri (`text-h4`) `--ink-900`'dür, `h2`'nin solunda hero'daki çipin küçüğü (32 px, `bg-gradient-brand`, `LayoutList`, dekoratif) durur. Bölüm kartları composer kartıyla aynı dili taşır: `--radius-card`, 1 px `--border-default`, `--shadow-card`. Hiyerarşi: hero `h1` (display) > panel `h2` > bölüm `h3`.
 - Bölüm başlıkları `h3` + toplam ("Planlanan · 2"); satır tek link, brief ilk satırı `--ink-900` `body` (kullanıcı metni, turuncu değil), ikinci satır `caption --ink-600`. Boş bölüm tek satır metin ("Planlanmış kampanya yok."), kart çerçevesi kalır.
-- Taslak ve onaylı ama gönderilmemiş kampanyalar satır olarak yoktur (yalnız "Toplam"da sayılır). Gönderimi süren satır varken 10 sn'de bir, 1 saat içinde planlı satır varken planın başlamasından 10 sn sonra sessizce tazelenir (yükleniyor gösterilmez).
+- Taslak ve onaylı ama gönderilmemiş kampanyalar satır olarak yoktur (panelde hiç görünmezler). Gönderimi süren satır varken 10 sn'de bir, 1 saat içinde planlı satır varken planın başlamasından 10 sn sonra sessizce tazelenir (yükleniyor gösterilmez).
 - Brief gönderilirken panel gizlenir (dikkat tek göstergede: Kitle yükleniyor kartı).
 - Eskiz kapısı (PLAN §12.7 adım 5): `designer` uygulamadan önce 1280 ve 375 px eskizi sahibe gösterir; bu çizim bağlayıcı değil, yön verir.
 
@@ -580,7 +579,7 @@ Test genişlikleri **375 / 768 / 1280 px**; kanıt `.playwright-mcp/p5-responsiv
 - İçerik: **tek sütun** (editör kartı → çalışma önizlemesi → eylem şeridi); iki sütun ≥1024. Eylem şeridi yatay.
 - Onay: tek ortalı kart (§8.4); satır etiketleri solda, karar paneli tek satır.
 - Takip (P10): genel kart tam genişlikte; yüzde + "x / y" solda, sonuç ve kalan iş grupları yan yana; kanal kartları yan yana; başarısız teslimat listesi tablo.
-- Brief paneli (P10): özet kartları 3 sütun (5 kart → 3 + 2); Planlanan ve Gönderilen alt alta (yan yana yalnız ≥ 1024).
+- Brief paneli (P10): Planlanan ve Gönderilen alt alta (yan yana yalnız ≥ 1024).
 
 **Mobil (<768):**
 - `AppHeader`: wordmark "SCC"e kısalır (<640), rozetler sağda kalır.
@@ -590,7 +589,7 @@ Test genişlikleri **375 / 768 / 1280 px**; kanıt `.playwright-mcp/p5-responsiv
 - İçerik: tek sütun; SMS editörü <640'ta en az 192 px (160 karakter `body-lg` ile ~6 satır, kaydırmasız görünür); değişken chip'leri sarılır; eylem şeridinde not ve "Onaya geç" alt alta, buton tam genişlik. Eylem şeridi yapışık değildir (üç satırlık şerit ekranın çeyreğini kaplardı).
 - Onay: satır etiketleri içeriğin üstünde; karar panelinde not üstte, "Onayla"/"Gönder" ve "Taslağı düzenle" alt alta, tam genişlik, 44 px+; panel yapışık değildir.
 - Takip (P10): brief iki satır, meta satırı sarılır; büyük yüzde 32 px; sonuç ve kalan iş grupları alt alta (her biri 2 sütun); kanal kartları alt alta. (Canlı olay akışı `ActivityFeed` sahip kararıyla kapsam dışı; yalnız sayaçlar.)
-- Brief paneli (P10): özet kartları 2 sütun ızgara; bölümler alt alta; < 640'ta satır iki satırlık kart (üstte brief, altta durum + sayılar ya da saat); satır linki ve "Daha fazla göster" ≥ 44 px, düğme tam genişlik.
+- Brief paneli (P10): bölümler alt alta; < 640'ta satır iki satırlık kart (üstte brief, altta durum + sayılar ya da saat); satır linki ve "Daha fazla göster" ≥ 44 px, düğme tam genişlik.
 - **Tablo/liste:** başarısız teslimat listesi ≥640'ta 4 sütunlu tablo (dar kapta kendi içinde kaydırılır, sayfa değil); <640'ta her satır iki satırlık kart: üstte müşteri kimliği (mono, kırılabilir) + kanal, altta neden + "Deneme: N". Başlık satırı ekran okuyucu için `sr-only` kalır.
 - Kart iç boşluğu 16; tipografi en küçük 12 px (`caption`).
 
@@ -643,7 +642,7 @@ web/src/
 5. E-posta gövdesi düz metin.
 6. Turuncu metin preset'i: `accent` (varsayılan; sahip itiraz etmedi).
 7. Dark tema: teslimde zorunlu değil, opsiyonel (P6).
-8. ~~Kampanya listesi / geçmiş ekranı: kapsam dışı (tek kampanya akışı).~~ **Tersine döndü (P10, sahip kararı 2026-11-01, D65):** genel bakış ayrı bir liste ekranı veya rota olarak değil, Brief giriş ekranının altında `CampaignPanel` olarak gelir (özet kartları + Planlanan + Gönderilen, 5'er satır + "Daha fazla göster"); başlığa link eklenmez. Taslak ve onaylı ama gönderilmemiş kampanyalar satır olarak listelenmez.
+8. ~~Kampanya listesi / geçmiş ekranı: kapsam dışı (tek kampanya akışı).~~ **Tersine döndü (P10, sahip kararı 2026-11-01, D65):** genel bakış ayrı bir liste ekranı veya rota olarak değil, Brief giriş ekranının altında `CampaignPanel` olarak gelir (Planlanan + Gönderilen; özet kartları 2026-11-02'de kaldırıldı, 5'er satır + "Daha fazla göster"); başlığa link eklenmez. Taslak ve onaylı ama gönderilmemiş kampanyalar satır olarak listelenmez.
 
 **VARSAYIM'lar:**
 - V1. Arayüz dili Türkçe; tüm metinler tek i18n dosyasında id ile; İngilizce sonradan eklenebilir.

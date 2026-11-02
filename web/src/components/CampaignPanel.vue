@@ -1,17 +1,17 @@
 <script setup lang="ts">
 // ui.md §3.31 / DESIGN.md §8.1 (REQ-DSH-02, D65): the overview under the brief composer on `/`.
-// Five summary numbers (counts only, no ratios) and two fixed sections, Planned and Sent, five rows
-// each with "show more". Each section loads, fails and retries on its own; the composer never waits
-// for the panel. One setTimeout refreshes both sections quietly: every 10 s while a shown row is
+// Two fixed sections, Planned and Sent, five rows each with "show more"; no summary cards (owner
+// decision 2026-11-02, D65 item 13). Each section loads, fails and retries on its own; the
+// composer never waits for the panel. One setTimeout refreshes both sections quietly: every 10 s while a shown row is
 // sending, and once 10 s after the earliest plan within the hour starts. No per-campaign stream.
-import { CalendarClock, ChevronDown, CircleAlert, RotateCcw } from '@lucide/vue'
+import { CalendarClock, ChevronDown, CircleAlert, LayoutList, RotateCcw } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { api } from '@/api/endpoints'
 import type { ApiError } from '@/api/errors'
 import { toApiError } from '@/api/errors'
-import type { CampaignOverview, CampaignSummary, CampaignSummaryPage } from '@/api/types'
+import type { CampaignSummary } from '@/api/types'
 import type { MessageId } from '@/i18n'
 import { formatNumber, messageParts, t } from '@/i18n'
 import { formatTsiPlain, remainingSeconds } from '@/lib/schedule'
@@ -67,7 +67,6 @@ const sections = reactive<Record<SectionKey, Section>>({
   scheduled: newSection(),
   sent: newSection(),
 })
-const overview = ref<CampaignOverview | null>(null)
 const announcement = ref('')
 
 /** Bumped by every request that writes a section; an older answer for it is dropped. */
@@ -77,7 +76,7 @@ let disposed = false
 /** The timer fired while a "show more" request was in flight; re-armed when it settles. */
 let deferredRefresh = false
 
-// ---- data-state, summary numbers ----
+// ---- data-state ----
 const sectionState = (s: Section) => {
   if (s.loading && !s.loaded) return 'loading'
   if (s.error && s.items.length === 0 && !s.loaded) return 'error'
@@ -85,35 +84,6 @@ const sectionState = (s: Section) => {
   if (s.loaded) return 'ready'
   return s.error ? 'error' : 'loading'
 }
-
-const KPIS: { key: string; label: MessageId; value: (o: CampaignOverview) => number }[] = [
-  { key: 'total', label: 'briefPanel.kpi.total', value: (o) => o.campaigns.total },
-  { key: 'scheduled', label: 'briefPanel.kpi.scheduled', value: (o) => o.campaigns.scheduled },
-  {
-    key: 'sent',
-    label: 'briefPanel.kpi.sent',
-    value: (o) => o.campaigns.sending + o.campaigns.completed,
-  },
-  { key: 'messages-sent', label: 'briefPanel.kpi.messagesSent', value: (o) => o.deliveries.sent },
-  {
-    key: 'messages-failed',
-    label: 'briefPanel.kpi.messagesFailed',
-    value: (o) => o.deliveries.failed,
-  },
-]
-
-const kpis = computed(() =>
-  KPIS.map((k) => {
-    const n = overview.value ? k.value(overview.value) : null
-    return {
-      ...k,
-      n,
-      text: n === null ? '—' : formatNumber(n),
-      tone:
-        k.key === 'messages-failed' && n !== null && n > 0 ? 'text-error' : 'text-accent-numeral',
-    }
-  }),
-)
 
 const SECTION_META: Record<SectionKey, { title: MessageId; empty: MessageId; error: MessageId }> = {
   scheduled: {
@@ -164,12 +134,6 @@ function recordRelative(s: Section, items: CampaignSummary[]) {
   }
 }
 
-/** A successful answer: the summary numbers follow it and the refresh timer is set again. */
-function accepted(page: CampaignSummaryPage) {
-  overview.value = page.overview
-  schedule()
-}
-
 async function loadInitial(key: SectionKey) {
   const s = sections[key]
   const gen = ++generation[key]
@@ -183,7 +147,7 @@ async function loadInitial(key: SectionKey) {
     s.total = page.total
     s.loaded = true
     recordRelative(s, page.items)
-    accepted(page)
+    schedule()
   } catch (e) {
     if (disposed || gen !== generation[key]) return
     s.error = toApiError(e)
@@ -218,7 +182,7 @@ async function loadMore(key: SectionKey, offset = sections[key].items.length) {
     s.loaded = true
     recordRelative(s, added)
     s.loadingMore = false
-    accepted(page)
+    schedule()
     const first = added[0]
     if (first) {
       announcement.value = ''
@@ -268,7 +232,7 @@ async function refresh(key: SectionKey) {
     s.error = null
     s.failed = null
     recordRelative(s, page.items)
-    accepted(page)
+    schedule()
   } catch (e) {
     // Silent by contract: the rows stay and no timer is set from a failed refresh. Only a section
     // that never loaded (its first request was superseded by this one) shows the error, so it
@@ -348,28 +312,17 @@ onBeforeUnmount(() => {
     aria-labelledby="brief-panel-title"
     class="flex flex-col gap-4"
   >
-    <h2 id="brief-panel-title" class="text-h2 text-accent-heading">{{ t('briefPanel.title') }}</h2>
-
-    <!-- Summary numbers: counts only (no ratios), small and shadowless; the page's job is the brief. -->
-    <dl class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
-      <div
-        v-for="(k, i) in kpis"
-        :key="k.key"
-        :class="[
-          'flex min-w-0 flex-col gap-1 rounded-card border border-border-default bg-surface-card px-4 py-3',
-          i === kpis.length - 1 && 'max-md:col-span-2',
-        ]"
+    <!-- Ink heading with the hero's icon chip: the only orange heading text on this page is the
+         hero's accent line (DESIGN.md §8.1), so the panel reads as the same page. -->
+    <h2 id="brief-panel-title" class="flex items-center gap-3 text-h2 text-ink-900">
+      <span
+        class="flex size-8 shrink-0 items-center justify-center rounded-bubble bg-gradient-brand text-primary-foreground"
+        aria-hidden="true"
       >
-        <dt class="text-caption text-ink-600">{{ t(k.label) }}</dt>
-        <dd
-          :data-testid="`campaign-kpi-${k.key}`"
-          :data-value="k.n ?? undefined"
-          :class="['text-numeral-md tabular-nums', k.n === null ? 'text-ink-500' : k.tone]"
-        >
-          {{ k.text }}
-        </dd>
-      </div>
-    </dl>
+        <LayoutList class="size-4" />
+      </span>
+      {{ t('briefPanel.title') }}
+    </h2>
 
     <div class="grid gap-4 lg:grid-cols-12 lg:items-start">
       <section
@@ -380,11 +333,11 @@ onBeforeUnmount(() => {
         :aria-labelledby="`brief-${key}-title`"
         :aria-busy="sectionState(sections[key]) === 'loading' ? 'true' : undefined"
         :class="[
-          'flex min-w-0 flex-col gap-2 rounded-card border border-border-default bg-surface-card p-3 md:p-4',
+          'flex min-w-0 flex-col gap-2 rounded-card border border-border-default bg-surface-card p-3 shadow-card md:p-4',
           key === 'scheduled' ? 'lg:col-span-5' : 'lg:col-span-7',
         ]"
       >
-        <h3 :id="`brief-${key}-title`" class="px-3 pt-1 text-h4 text-accent-heading">
+        <h3 :id="`brief-${key}-title`" class="px-3 pt-1 text-h4 text-ink-900">
           {{ t(SECTION_META[key].title)
           }}<span
             v-if="sections[key].loaded"

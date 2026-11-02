@@ -1,5 +1,5 @@
 // REQ-DSH-02 (UI): the campaign panel under the brief composer on `brief-new` (`/`): placement and
-// visibility, the two initial requests, KPI cards, the Planlanan / Gönderilen sections and their
+// visibility, the two initial requests, no summary (KPI) cards, the Planlanan / Gönderilen sections and their
 // rows, "Daha fazla göster", per-section errors with retry, the single refresh timer and the
 // brief submission sequence the panel depends on. The page is mounted through the router
 // (`@/pages/BriefPage.vue`); requests go through the `ApiClientKey` client; time is
@@ -52,7 +52,6 @@ afterEach(() => {
 })
 
 const q = (id: string) => document.querySelector(sel(id)) as HTMLElement | null
-const fmt = (n: number) => new Intl.NumberFormat('tr-TR').format(n)
 const inSeconds = (s: number) => new Date(Date.parse(NOW) + s * 1000).toISOString()
 
 function scheduledRow(
@@ -219,7 +218,8 @@ describe('CampaignPanel initial requests (REQ-DSH-02 C2, C5, C12)', () => {
   })
 })
 
-describe('CampaignPanel KPI cards (REQ-DSH-02 C6)', () => {
+describe('CampaignPanel has no summary cards (REQ-DSH-02 C6)', () => {
+  // A filled overview in the responses: the panel must still render none of it.
   const OV = overview(
     {
       draft: 1200,
@@ -232,65 +232,35 @@ describe('CampaignPanel KPI cards (REQ-DSH-02 C6)', () => {
     },
     deliveries(0, 0, 25061, 1043),
   )
-  const KPIS = [
-    {
-      id: 'campaign-kpi-total',
-      label: 'briefPanel.kpi.total' as const,
-      value: OV.campaigns.total!,
-    },
-    { id: 'campaign-kpi-scheduled', label: 'briefPanel.kpi.scheduled' as const, value: 6 },
-    { id: 'campaign-kpi-sent', label: 'briefPanel.kpi.sent' as const, value: 7 + 1008 },
-    {
-      id: 'campaign-kpi-messages-sent',
-      label: 'briefPanel.kpi.messagesSent' as const,
-      value: 25061,
-    },
-    {
-      id: 'campaign-kpi-messages-failed',
-      label: 'briefPanel.kpi.messagesFailed' as const,
-      value: 1043,
-    },
-  ]
+  const KPI_IDS = [
+    'campaign-kpi-total',
+    'campaign-kpi-scheduled',
+    'campaign-kpi-sent',
+    'campaign-kpi-messages-sent',
+    'campaign-kpi-messages-failed',
+  ] as const
 
   // REQ-DSH-02 C6
-  it.each(KPIS)(
-    '$id: raw data-value from the overview, tr-TR text, label, no %',
-    async ({ id, label, value }) => {
-      await start({ scheduled: () => page([], 0, OV), sent: () => page([], 0, OV) })
-      const card = q(id)
-      expect(card?.closest('dl')).not.toBeNull()
-      expect(card?.getAttribute('data-value')).toBe(String(value))
-      const dlText = card?.closest('dl')?.textContent ?? ''
-      expect(dlText).toContain(t(label))
-      expect(card?.textContent).toContain(fmt(value))
-      expect(dlText).not.toContain('%')
-    },
-  )
-
-  // REQ-DSH-02 C6, C11
   it.each([
     {
       name: 'before any response',
-      scheduled: () => deferred().promise,
-      sent: () => deferred().promise,
+      scheduled: (() => deferred().promise) as Answer,
+      sent: (() => deferred().promise) as Answer,
     },
-    { name: 'when both requests fail', scheduled: fail(), sent: fail() },
-  ])('$name every card has no data-value and shows —', async ({ scheduled, sent }) => {
+    {
+      name: 'after both responses with a filled overview',
+      scheduled: (() => page([scheduledRow(1, 7200)], 1, OV)) as Answer,
+      sent: (() => page([summary(2, 'completed')], 1, OV)) as Answer,
+    },
+    {
+      name: 'after a failed request',
+      scheduled: fail(500, 'internal_error'),
+      sent: (() => page([summary(2, 'completed')], 1, OV)) as Answer,
+    },
+  ])('$name: no campaign-kpi-* element is in the DOM', async ({ scheduled, sent }) => {
     await start({ scheduled, sent })
-    for (const { id } of KPIS) {
-      expect(q(id)?.hasAttribute('data-value'), id).toBe(false)
-      expect(q(id)?.textContent, id).toContain('—')
-    }
-  })
-
-  // REQ-DSH-02 C6, C11
-  it.each([
-    { name: 'scheduled fails', scheduled: fail(), sent: () => page([], 0, OV) },
-    { name: 'sent fails', scheduled: () => page([], 0, OV), sent: fail() },
-  ])('$name: the cards come from the successful response', async ({ scheduled, sent }) => {
-    await start({ scheduled, sent })
-    expect(q('campaign-kpi-total')?.getAttribute('data-value')).toBe(String(OV.campaigns.total))
-    expect(q('campaign-kpi-messages-failed')?.getAttribute('data-value')).toBe('1043')
+    expect(q('brief-campaign-panel')).not.toBeNull()
+    for (const id of KPI_IDS) expect(q(id), id).toBeNull()
   })
 })
 
@@ -840,8 +810,8 @@ describe('CampaignPanel refresh timer (REQ-DSH-02 C12)', () => {
     )
   })
 
-  // REQ-DSH-02 C12, C6
-  it('a refresh replaces rows, totals and cards in place without loading; a started plan moves to Gönderilen', async () => {
+  // REQ-DSH-02 C12
+  it('a refresh replaces rows and totals in place without loading; a started plan moves to Gönderilen', async () => {
     const refreshScheduled = deferred()
     const OV2 = overview({ scheduled: 1, sending: 1 })
     const plan = scheduledRow(1, 120)
@@ -868,10 +838,6 @@ describe('CampaignPanel refresh timer (REQ-DSH-02 C12)', () => {
     const sentRow = rowsOf('brief-sent-summary')[0]
     expect(sentRow?.getAttribute('data-campaign-id')).toBe(sid(1))
     expect(sentRow?.getAttribute('data-state')).toBe('sending')
-    expect(q('campaign-kpi-scheduled')?.getAttribute('data-value')).toBe('1')
-    expect(q('campaign-kpi-sent')?.getAttribute('data-value')).toBe(
-      String(OV2.campaigns.sending! + OV2.campaigns.completed!),
-    )
   })
 
   // REQ-DSH-02 C12

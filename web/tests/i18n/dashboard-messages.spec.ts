@@ -6,11 +6,6 @@ import { messages } from '@/i18n/index'
 
 const PANEL_IDS = [
   'briefPanel.title',
-  'briefPanel.kpi.total',
-  'briefPanel.kpi.scheduled',
-  'briefPanel.kpi.sent',
-  'briefPanel.kpi.messagesSent',
-  'briefPanel.kpi.messagesFailed',
   'briefPanel.scheduledTitle',
   'briefPanel.sentTitle',
   'briefPanel.scheduledEmpty',

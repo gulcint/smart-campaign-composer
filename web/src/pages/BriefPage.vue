@@ -91,13 +91,10 @@ function newCampaign() {
 </script>
 
 <template>
-  <div
-    data-testid="page-brief"
-    :class="['mx-auto flex w-full flex-col gap-6', isNew ? 'max-w-5xl' : 'max-w-3xl']"
-  >
+  <div data-testid="page-brief" class="mx-auto flex w-full max-w-3xl flex-col gap-6">
     <template v-if="isNew">
-      <!-- The composer keeps its 768 px column; the panel below uses the wider 1024 px one. -->
-      <div class="mx-auto flex w-full max-w-3xl flex-col gap-6">
+      <!-- One 768 px column for hero, composer and panel: the panel is the lower part of the page. -->
+      <div class="flex w-full flex-col gap-6">
         <header class="flex flex-col gap-3 pt-4 md:pt-10">
           <span
             class="flex size-10 items-center justify-center rounded-bubble bg-gradient-brand text-primary-foreground"
@@ -139,7 +136,7 @@ function newCampaign() {
         </p>
       </div>
 
-      <CampaignPanel v-if="showPanel" class="pt-6" />
+      <CampaignPanel v-if="showPanel" class="mt-4 border-t border-border-default pt-10" />
     </template>
 
     <template v-else>
