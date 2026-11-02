@@ -107,6 +107,9 @@ func (a *api) listCampaignSummaries(w http.ResponseWriter, r *http.Request) {
 		a.writeServiceError(w, r, err)
 		return
 	}
+	if page.Items == nil {
+		page.Items = []campaign.Summary{} // items is always a JSON array, whatever the lister returns
+	}
 	writeJSON(w, http.StatusOK, page)
 }
 
