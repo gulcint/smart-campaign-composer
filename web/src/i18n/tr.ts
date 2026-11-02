@@ -322,11 +322,6 @@ export const tr = {
 
   // --- Brief campaign panel (P10, REQ-DSH-02) ---
   'briefPanel.title': 'Kampanyaların',
-  'briefPanel.kpi.total': 'Toplam kampanya',
-  'briefPanel.kpi.scheduled': 'Planlanan',
-  'briefPanel.kpi.sent': 'Gönderilen',
-  'briefPanel.kpi.messagesSent': 'Gönderilen mesaj',
-  'briefPanel.kpi.messagesFailed': 'Başarısız mesaj',
   'briefPanel.scheduledTitle': 'Planlanan',
   'briefPanel.sentTitle': 'Gönderilen',
   'briefPanel.scheduledEmpty': 'Planlanmış kampanya yok.',
