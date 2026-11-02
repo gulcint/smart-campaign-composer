@@ -27,7 +27,7 @@ type SummaryLister interface {
 // NewSummaryLister builds the lister on the same Deps as NewService (only Deps.Store and
 // Deps.Logger are used).
 func NewSummaryLister(d Deps) SummaryLister {
-	return NewService(d).(*service)
+	return &service{d: withDefaults(d)}
 }
 
 const (

@@ -240,13 +240,19 @@ const (
 
 // NewService returns the Service implementation.
 func NewService(d Deps) Service {
+	return &service{d: withDefaults(d)}
+}
+
+// withDefaults fills the optional Deps (real clock, default logger); shared by NewService and
+// NewSummaryLister.
+func withDefaults(d Deps) Deps {
 	if d.Clock == nil {
 		d.Clock = clock.Real()
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	return &service{d: d}
+	return d
 }
 
 type service struct {
