@@ -87,10 +87,17 @@ const (
 // fails when the copies drift from the contract.
 //
 //go:embed schemas/segment-rule.tool.json schemas/content.tool.json schemas/content-en.tool.json
+//go:embed schemas/content-ab.tool.json schemas/content-ab-en.tool.json
 var toolSchemas embed.FS
 
 // contentENToolSchemaFile is the bilingual emit_campaign_content schema (P8, D63; llm-tools.md §1.3).
 const contentENToolSchemaFile = "schemas/content-en.tool.json"
+
+// The A/B emit_campaign_content schemas (P9, D64; llm-tools.md §1.4).
+const (
+	contentABToolSchemaFile   = "schemas/content-ab.tool.json"
+	contentABENToolSchemaFile = "schemas/content-ab-en.tool.json"
+)
 
 var toolSchemaFiles = map[string]string{
 	ToolEmitSegmentRule:     "schemas/segment-rule.tool.json",
@@ -119,6 +126,20 @@ func ContentToolSchema(includeEnglish bool) json.RawMessage {
 	if includeEnglish {
 		file = contentENToolSchemaFile
 	}
+	return embeddedSchema(file)
+}
+
+// ContentToolSchemaAB returns the A/B content tool's strict input_schema (P9, D64): false =>
+// content-ab.tool.json (`b` and `angles` required), true => content-ab-en.tool.json (`en`, `b` with
+// `b.en`, and `angles` required). Both obey the strict rules of llm-tools.md §1.1.
+func ContentToolSchemaAB(includeEnglish bool) json.RawMessage {
+	if includeEnglish {
+		return embeddedSchema(contentABENToolSchemaFile)
+	}
+	return embeddedSchema(contentABToolSchemaFile)
+}
+
+func embeddedSchema(file string) json.RawMessage {
 	b, err := toolSchemas.ReadFile(file)
 	if err != nil {
 		panic(fmt.Sprintf("llm: embedded tool schema %s: %v", file, err)) // unreachable: go:embed
@@ -159,10 +180,17 @@ type ContentRequest struct {
 	// campaign service (internal/campaign/content.go) from segment.Audience.WantsEnglish(); composer
 	// only carries it and keeps the same value for the repair attempt.
 	IncludeEnglish bool
+	// IncludeVariantB (P9, D64): ask for the A/B tool (ContentToolSchemaAB(IncludeEnglish)). Set from
+	// campaign.ContentOptions.AB (request body {"ab": true}); the same value is used for the repair attempt.
+	IncludeVariantB bool
 }
 
 type ContentChunk struct {
-	Path string // "sms.body" | "email.subject" | "email.body" | (IncludeEnglish) "en.sms.body" | "en.email.subject" | "en.email.body"
+	// "sms.body" | "email.subject" | "email.body" | (IncludeEnglish) "en.sms.body" | "en.email.subject" |
+	// "en.email.body" | (IncludeVariantB, P9) "b.sms.body" | "b.email.subject" | "b.email.body" |
+	// (IncludeVariantB && IncludeEnglish) "b.en.sms.body" | "b.en.email.subject" | "b.en.email.body".
+	// Order: A Turkish, A English, B Turkish, B English. "angles.*" is never a chunk (only in Raw()).
+	Path string
 	Text string // non-empty
 }
 

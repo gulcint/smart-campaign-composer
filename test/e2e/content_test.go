@@ -80,13 +80,14 @@ type worstCaseDoc struct {
 }
 
 // deltaData is one delta event; Language is "en" for English fields and absent ("") for Turkish
-// (REQ-LNG-02 C7).
+// (REQ-LNG-02 C7); Variant is "b" for variant B fields and absent ("") for variant A (REQ-ABT-02 C7).
 type deltaData struct {
 	Attempt  int    `json:"attempt"`
 	Channel  string `json:"channel"`
 	Field    string `json:"field"`
 	Text     string `json:"text"`
 	Language string `json:"language"`
+	Variant  string `json:"variant"`
 }
 
 type invalidData struct {
@@ -191,11 +192,17 @@ func (g genResult) validatedEN(t *testing.T) *contentDoc {
 	return nil
 }
 
-// textLang groups the deltas of one attempt by (language, channel, field); "" is Turkish.
+// textLang groups the variant A deltas of one attempt by (language, channel, field); "" is Turkish.
 func (g genResult) textLang(attempt int, lang string) contentDoc {
+	return g.textVariant(attempt, "", lang)
+}
+
+// textVariant groups the deltas of one attempt by (variant, language, channel, field); variant "" is
+// A and "b" is B (REQ-ABT-02 C7), language "" is Turkish.
+func (g genResult) textVariant(attempt int, variant, lang string) contentDoc {
 	var sms, subj, body strings.Builder
 	for _, d := range g.deltas {
-		if d.Attempt != attempt || d.Language != lang {
+		if d.Attempt != attempt || d.Language != lang || d.Variant != variant {
 			continue
 		}
 		switch d.Channel + "." + d.Field {
@@ -317,7 +324,13 @@ func assertSSEResponse(t *testing.T, resp *http.Response) {
 // terminal event, nothing after it.
 func generate(t *testing.T, api, id, sc string) genResult {
 	t.Helper()
-	resp := postContent(t, t.Context(), api, id, nil, scenario(sc))
+	return generateWith(t, api, id, sc, nil)
+}
+
+// generateWith is generate with a request body (nil = no body; REQ-ABT-02 C1: {"ab": true}).
+func generateWith(t *testing.T, api, id, sc string, reqBody []byte) genResult {
+	t.Helper()
+	resp := postContent(t, t.Context(), api, id, reqBody, scenario(sc))
 	defer func() { _ = resp.Body.Close() }()
 	assertSSEResponse(t, resp)
 	s := newSSEScanner(resp)
@@ -743,9 +756,9 @@ func TestE2E_ContentLLMUnavailableIs502(t *testing.T) {
 	}
 }
 
-// REQ-CNT-04
+// REQ-CNT-04, REQ-ABT-02 C2
 // generateContent refusals before the stream: unknown campaign 404, draft (no segment) 409
-// invalid_state; nothing is stored.
+// invalid_state; a malformed {"ab"} body is 422 schema_violation even before those; nothing is stored.
 func TestE2E_ContentGenerateRequestChecks(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -763,6 +776,12 @@ func TestE2E_ContentGenerateRequestChecks(t *testing.T) {
 	}{
 		{name: "unknown campaign", id: unknownCampaignID, headers: scenario("ok"), status: 404, code: "campaign_not_found"},
 		{name: "draft campaign", id: draftID, headers: scenario("ok"), status: 409, code: "invalid_state"},
+		// REQ-ABT-02 C2: the body is checked before the campaign 404 and the 409s.
+		{name: "ab as a string", id: readyID, body: []byte(`{"ab":"yes"}`), headers: scenario("ok"), status: 422, code: "validation_failed", field: &fieldWant{"ab", "schema_violation"}},
+		{name: "ab null", id: readyID, body: []byte(`{"ab":null}`), headers: scenario("ok"), status: 422, code: "validation_failed", field: &fieldWant{"ab", "schema_violation"}},
+		{name: "unknown body key", id: readyID, body: []byte(`{"x":true}`), headers: scenario("ok"), status: 422, code: "validation_failed", field: &fieldWant{"x", "schema_violation"}},
+		{name: "bad ab on an unknown campaign is 422, not 404", id: unknownCampaignID, body: []byte(`{"ab":1}`), headers: scenario("ok"), status: 422, code: "validation_failed", field: &fieldWant{"ab", "schema_violation"}},
+		{name: "bad ab on a draft campaign is 422, not 409", id: draftID, body: []byte(`{"ab":"yes"}`), headers: scenario("ok"), status: 422, code: "validation_failed", field: &fieldWant{"ab", "schema_violation"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1189,8 +1208,9 @@ func TestE2E_Preview(t *testing.T) {
 	}
 }
 
-// REQ-APR-01
-// Preview of an unknown campaign is 404 (HTTP status table: "Bilinmeyen kampanya").
+// REQ-APR-01, REQ-ABT-03 C12
+// Preview of an unknown campaign is 404 (HTTP status table: "Bilinmeyen kampanya"); an invalid variant
+// value is 422 invalid_value at query.variant before that 404.
 func TestE2E_PreviewErrors(t *testing.T) {
 	t.Parallel()
 	api := baseURL(t, "E2E_API_URL")
@@ -1203,6 +1223,11 @@ func TestE2E_PreviewErrors(t *testing.T) {
 		field  *fieldWant
 	}{
 		{name: "unknown campaign", id: unknownCampaignID, status: 404, code: "campaign_not_found"},
+		// REQ-ABT-03 C12: an invalid variant is a query error, checked before the 404; variant=b is
+		// checked only after the version is resolved, so an unknown campaign stays 404.
+		{name: "variant c on an unknown campaign is 422", id: unknownCampaignID, query: "?variant=c", status: 422, code: "validation_failed", field: &fieldWant{"query.variant", "invalid_value"}},
+		{name: "upper-case variant A is 422", id: unknownCampaignID, query: "?variant=A", status: 422, code: "validation_failed", field: &fieldWant{"query.variant", "invalid_value"}},
+		{name: "variant b on an unknown campaign is 404", id: unknownCampaignID, query: "?variant=b", status: 404, code: "campaign_not_found"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

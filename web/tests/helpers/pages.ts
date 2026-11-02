@@ -1,5 +1,6 @@
 // Mount helper for page tests (docs/contracts/ui.md §0, §1). The route table mirrors ui.md §1 (names,
 // paths); only the page under test is real, every other route renders StubPage.
+// The audience route (REQ-ABT-04 C2) is `audience` at `/campaigns/:campaignId/audience`.
 // The tracking route (REQ-TRK-01) is `tracking` at `/campaigns/:campaignId/tracking`; its live stream
 // factory is provided with `EventSourceFactoryKey` from `@/api/client` (docs/requirements.md REQ-TRK-01).
 // With `withToaster`, `@/components/Toaster.vue` is rendered next to the RouterView (as the app shell
@@ -22,7 +23,7 @@ const RouterViewWithToaster = defineComponent({
 
 export async function mountPage(
   page: Component,
-  routeName: 'content' | 'approval' | 'tracking',
+  routeName: 'audience' | 'content' | 'approval' | 'tracking',
   deps: {
     api: unknown
     fetch?: unknown
@@ -39,7 +40,12 @@ export async function mountPage(
       { path: '/', name: 'brief-new', component: Stub },
       { path: '/campaigns/:campaignId', name: 'campaign', component: Stub },
       { path: '/campaigns/:campaignId/brief', name: 'brief', component: Stub, props: true },
-      { path: '/campaigns/:campaignId/audience', name: 'audience', component: Stub, props: true },
+      {
+        path: '/campaigns/:campaignId/audience',
+        name: 'audience',
+        component: pick('audience'),
+        props: true,
+      },
       {
         path: '/campaigns/:campaignId/content',
         name: 'content',

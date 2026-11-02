@@ -2,7 +2,7 @@
 // ui.md §3.14 (REQ-APR-01, -02, -03): edits the full Content (both channels); `channel` only
 // picks the visible fields. `dirty` belongs to the parent. On a 409 content_edit_conflict
 // (D40) the conflict panel offers reload / keep-mine and saving is blocked until resolved.
-import { Lock, RefreshCw, Save, TriangleAlert } from '@lucide/vue'
+import { FlaskConical, Lock, RefreshCw, Save, TriangleAlert } from '@lucide/vue'
 import { computed, nextTick, ref, useId, watch } from 'vue'
 
 import type { ChannelKey, Content, FieldError, FieldKey, WorstCase } from '@/api/types'
@@ -12,6 +12,7 @@ import { t } from '@/i18n'
 import { diffEdit, fitInsertion, runeCount } from '@/lib/text-cap'
 import { cn } from '@/lib/utils'
 import { ALLOWED_VARIABLES } from '@/lib/variables'
+import { ANGLE_MAX_RUNES, type ContentVariant, worstOf as worstOfCopy } from '@/lib/variant'
 
 import Button from './Button.vue'
 import CharCounter from './CharCounter.vue'
@@ -29,6 +30,8 @@ const props = withDefaults(
     channel: ChannelKey
     /** P8: which language's fields are shown and edited; `en` needs `modelValue.en`. */
     language?: 'tr' | 'en'
+    /** P9: which variant's fields are shown and edited; `b` needs `modelValue.b`. */
+    variant?: ContentVariant
     mode: 'readonly' | 'editable' | 'locked'
     dirty: boolean
     saving?: boolean
@@ -36,7 +39,14 @@ const props = withDefaults(
     worstCase?: WorstCase | null
     conflict?: EditConflict | null
   }>(),
-  { language: 'tr', saving: false, fieldErrors: () => [], worstCase: null, conflict: null },
+  {
+    language: 'tr',
+    variant: 'a',
+    saving: false,
+    fieldErrors: () => [],
+    worstCase: null,
+    conflict: null,
+  },
 )
 const emit = defineEmits<{
   'update:modelValue': [content: Content]
@@ -97,16 +107,23 @@ const chipsDisabled = computed(() => props.mode !== 'editable' || props.saving)
 const canSave = computed(
   () => props.mode === 'editable' && props.dirty && !props.saving && props.conflict === null,
 )
-const errorsOf = computed(() => routeFieldErrors(props.fieldErrors, props.language))
+const errorsOf = computed(() => routeFieldErrors(props.fieldErrors, props.language, props.variant))
 
 type Version = NonNullable<Content['en']>
+type VariantBlock = NonNullable<Content['b']>
 
-/** The shown language's copy (`en` falls back to an empty shape only if `en` is missing). */
+const EMPTY: Version = { sms: { body: '' }, email: { subject: '', body: '' } }
+
+/** The shown variant's block: Content itself for A, `b` for B (empty shape only if missing). */
+function variantOf(c: Content): Content | VariantBlock {
+  return props.variant === 'b' ? (c.b ?? { ...EMPTY }) : c
+}
+
+/** The shown variant × language copy (`en` falls back to an empty shape only if missing). */
 function versionOf(c: Content): Version {
-  if (props.language === 'en') {
-    return c.en ?? { sms: { body: '' }, email: { subject: '', body: '' } }
-  }
-  return c
+  const v = variantOf(c)
+  if (props.language === 'en') return v.en ?? EMPTY
+  return { sms: v.sms, email: v.email }
 }
 
 function valueOf(c: Content, f: FieldKey): string {
@@ -121,11 +138,16 @@ function withValue(c: Content, f: FieldKey, v: string): Content {
   if (f === 'sms-body') next = { ...cur, sms: { ...cur.sms, body: v } }
   else if (f === 'email-subject') next = { ...cur, email: { ...cur.email, subject: v } }
   else next = { ...cur, email: { ...cur.email, body: v } }
+  if (props.variant === 'b') {
+    const b = variantOf(c) as VariantBlock
+    return { ...c, b: props.language === 'en' ? { ...b, en: next } : { ...b, ...next } }
+  }
   return props.language === 'en' ? { ...c, en: next } : { ...c, ...next }
 }
 
-/** API path of a field in the shown language (`en.` prefix for English). */
-const pathOf = (d: FieldDef) => (props.language === 'en' ? `en.${d.path}` : d.path)
+/** API path of a field in the shown variant × language (`b.` and `en.` prefixes). */
+const pathOf = (d: FieldDef) =>
+  `${props.variant === 'b' ? 'b.' : ''}${props.language === 'en' ? 'en.' : ''}${d.path}`
 
 function overLimit(d: FieldDef): boolean {
   return d.limit !== null && runeCount(valueOf(props.modelValue, d.key)) > d.limit
@@ -148,9 +170,75 @@ function describedBy(d: FieldDef): string | undefined {
   return ids.length ? ids.join(' ') : undefined
 }
 
+/** Worst case of the shown variant × language copy (P8/P9: `en`, `b`, `b.en`). */
 function worstOf(d: FieldDef): number | null {
-  if (!props.worstCase) return null
-  return d.key === 'sms-body' ? props.worstCase.sms_runes : props.worstCase.subject_runes
+  const w = worstOfCopy(props.worstCase, props.variant, props.language)
+  if (!w) return null
+  return d.key === 'sms-body' ? w.sms_runes : w.subject_runes
+}
+
+// ---- P9: angle label and variant-level errors (ui.md §3.14 P9) ----
+const hasB = computed(() => props.modelValue.b != null)
+const angleValue = computed(() => props.modelValue.angles?.[props.variant] ?? '')
+/** `angles.<variant>` errors (a bare `angles` schema error belongs to both variants). */
+const angleError = computed(() =>
+  props.fieldErrors.find((e) => e.path === `angles.${props.variant}` || e.path === 'angles'),
+)
+/** Path `b` (variants_identical) is variant B's. */
+const variantError = computed(() =>
+  props.variant === 'b' ? props.fieldErrors.find((e) => e.path === 'b') : undefined,
+)
+const angleId = `${uid}-angle`
+const angleHintId = `${uid}-angle-hint`
+
+function withAngle(c: Content, v: string): Content {
+  const cur = c.angles ?? { a: '', b: '' }
+  return { ...c, angles: { ...cur, [props.variant]: v } }
+}
+
+function emitAngle(el: HTMLInputElement, v: string, caret?: number) {
+  if (caret !== undefined) {
+    el.value = v
+    el.setSelectionRange(caret, caret)
+  }
+  if (v !== angleValue.value) emit('update:modelValue', withAngle(props.modelValue, v))
+}
+
+/** Same rune cap as d2, at AngleMaxRunes (60); line breaks never enter the one-line label. */
+function capAngle(e: Event, data: string) {
+  if (readonly.value) return
+  const el = e.target as HTMLInputElement
+  const v = el.value
+  const start = el.selectionStart ?? v.length
+  const end = el.selectionEnd ?? start
+  const text = data.replace(/[\r\n]/g, '')
+  const fit = fitInsertion(v.slice(0, start), text, v.slice(end), ANGLE_MAX_RUNES, runeCount(v))
+  if (fit === text) return
+  e.preventDefault()
+  if (fit !== '') emitAngle(el, v.slice(0, start) + fit + v.slice(end), start + fit.length)
+}
+
+function onAngleBeforeInput(e: InputEvent) {
+  if (e.isComposing || e.inputType === 'insertFromDrop') return
+  if (!e.inputType.startsWith('insert')) return
+  capAngle(e, e.data ?? e.dataTransfer?.getData('text/plain') ?? '')
+}
+
+function onAngleInput(e: Event) {
+  if ((e as InputEvent).isComposing) return
+  const el = e.target as HTMLInputElement
+  const v = el.value
+  const prev = angleValue.value
+  const n = runeCount(v)
+  if (readonly.value || n <= ANGLE_MAX_RUNES || n <= runeCount(prev)) {
+    emitAngle(el, v)
+    return
+  }
+  const { start, prevEnd, nextEnd } = diffEdit(prev, v)
+  const before = prev.slice(0, start)
+  const after = prev.slice(prevEnd)
+  const fit = fitInsertion(before, v.slice(start, nextEnd), after, ANGLE_MAX_RUNES, runeCount(prev))
+  emitAngle(el, before + fit + after, start + fit.length)
 }
 
 const els: Partial<Record<FieldKey, HTMLInputElement | HTMLTextAreaElement>> = {}
@@ -316,6 +404,56 @@ watch(
       <Lock class="size-4" aria-hidden="true" />
       {{ t('editor.lockedNote') }}
     </p>
+
+    <InlineError
+      v-if="variantError"
+      path="variant"
+      :code="variantError.code"
+      class="rounded-sm bg-error-bg px-3 py-2"
+    />
+
+    <div v-if="hasB" class="flex flex-col gap-1.5">
+      <label :for="angleId" class="flex items-center gap-1.5 text-h4 text-accent-heading">
+        <FlaskConical class="size-4 text-ink-500" aria-hidden="true" />
+        {{ t('editor.angle') }}
+      </label>
+      <input
+        :id="angleId"
+        type="text"
+        data-testid="editor-angle"
+        :value="angleValue"
+        :readonly="readonly"
+        :aria-invalid="angleError ? 'true' : undefined"
+        :aria-describedby="angleError ? 'inline-error-angle' : angleHintId"
+        :class="
+          cn(
+            'block h-11 w-full rounded-input border bg-surface-card px-4 text-body text-ink-900 outline-none',
+            'focus-visible:border-primary focus-visible:shadow-focus read-only:bg-surface-sunken read-only:text-ink-600',
+            angleError ? 'border-[1.5px] border-error' : 'border-border-default',
+          )
+        "
+        @paste="capAngle($event, $event.clipboardData?.getData('text/plain') ?? '')"
+        @beforeinput="onAngleBeforeInput($event as InputEvent)"
+        @input="onAngleInput"
+        @compositionend="onAngleInput"
+        @keydown="onKeydown"
+      />
+      <div class="flex items-start justify-between gap-3">
+        <InlineError
+          v-if="angleError"
+          path="angle"
+          :code="angleError.code"
+          :limit="angleError.limit ?? null"
+          :actual="angleError.actual ?? null"
+        />
+        <p v-else :id="angleHintId" class="text-caption text-ink-500">
+          {{ t('editor.angleHint') }}
+        </p>
+        <span class="ml-auto shrink-0 font-mono text-caption text-ink-500 tabular-nums"
+          >{{ runeCount(angleValue) }}/{{ ANGLE_MAX_RUNES }}</span
+        >
+      </div>
+    </div>
 
     <div v-for="d in visible" :key="d.key" class="flex flex-col gap-1.5">
       <label :for="inputId(d.key)" class="text-h4 text-accent-heading">{{ t(d.label) }}</label>

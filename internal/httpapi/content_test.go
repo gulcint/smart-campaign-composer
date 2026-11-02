@@ -931,3 +931,173 @@ func TestContentVersions_ListAndGet(t *testing.T) {
 		})
 	}
 }
+
+// ---- A/B variants (P9) ----
+
+// REQ-ABT-02 C3
+// campaign.WithContentOptions / ContentOptionsFromContext carry the request option in ctx: without it
+// the result is (zero, false); a wrapped ctx returns the options; an inner wrap overrides.
+func TestContentOptions_RoundTripThroughContext(t *testing.T) {
+	t.Parallel()
+	if o, ok := campaign.ContentOptionsFromContext(context.Background()); ok || o.AB {
+		t.Fatalf("ContentOptionsFromContext(background) = %+v, %v; want zero, false", o, ok)
+	}
+	ctx := campaign.WithContentOptions(context.Background(), campaign.ContentOptions{AB: true})
+	if o, ok := campaign.ContentOptionsFromContext(ctx); !ok || !o.AB {
+		t.Fatalf("ContentOptionsFromContext(AB) = %+v, %v; want AB true, true", o, ok)
+	}
+	inner := campaign.WithContentOptions(ctx, campaign.ContentOptions{AB: false})
+	if o, _ := campaign.ContentOptionsFromContext(inner); o.AB {
+		t.Fatalf("inner WithContentOptions did not override: AB = true")
+	}
+}
+
+// REQ-ABT-02 C1, C3
+// POST /content with {"ab": true} reaches StartContentGeneration with ContentOptions{AB: true} in ctx;
+// no body, {} and {"ab": false} leave AB false (the option may be absent).
+func TestGenerateContent_ABOptionReachesTheService(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		body   []byte
+		wantAB bool
+	}{
+		{name: "no body", body: nil},
+		{name: "empty object", body: []byte(`{}`)},
+		{name: "ab false", body: []byte(`{"ab":false}`)},
+		{name: "ab true", body: []byte(`{"ab":true}`), wantAB: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := newContentService()
+			svc.run = &replayRun{before: []composer.Event{composer.ValidatedEvent{Attempt: 1, ContentVersionID: versionID, VersionNumber: 1, Content: sampleContent(), WorstCase: content.WorstCase{SMSRunes: 160, SubjectRunes: 42}}}}
+			h := newContentRouter(t, svc, llm.ProviderMock, clock.NewFake(refTime))
+			rec := send(t, h, http.MethodPost, "/api/campaigns/"+campID+"/content", tc.body, nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+			}
+			svc.mu.Lock()
+			ctx := svc.startCtxs[0]
+			svc.mu.Unlock()
+			o, _ := campaign.ContentOptionsFromContext(ctx)
+			if o.AB != tc.wantAB {
+				t.Fatalf("ContentOptionsFromContext(ctx).AB = %v, want %v", o.AB, tc.wantAB)
+			}
+		})
+	}
+}
+
+// REQ-ABT-02 C2
+// Body errors of POST /content: {"ab": "yes"}, {"ab": null}, {"ab": 1} => 422 validation_failed with
+// schema_violation at path ab; an unknown key => schema_violation at that key. They come after the 404
+// of a malformed path UUID and before the campaign 404, the 409s and the 502: the service is never
+// called, whatever it would answer.
+func TestGenerateContent_ABBodyErrors(t *testing.T) {
+	t.Parallel()
+	serviceErrs := []struct {
+		name string
+		err  error
+	}{
+		{name: "ok service"},
+		{name: "unknown campaign", err: campaign.ErrCampaignNotFound},
+		{name: "wrong state", err: campaign.ErrInvalidState},
+		{name: "generation running", err: campaign.ErrGenerationInProgress},
+		{name: "LLM unreachable", err: llm.ErrUnavailable},
+	}
+	bodies := []struct {
+		body string
+		path string
+	}{
+		{body: `{"ab":"yes"}`, path: "ab"},
+		{body: `{"ab":null}`, path: "ab"},
+		{body: `{"ab":1}`, path: "ab"},
+		{body: `{"x":true}`, path: "x"},
+	}
+	for _, se := range serviceErrs {
+		for _, b := range bodies {
+			t.Run(se.name+" "+b.body, func(t *testing.T) {
+				t.Parallel()
+				svc := newContentService()
+				svc.run = &replayRun{}
+				svc.startErr = se.err
+				h := newContentRouter(t, svc, llm.ProviderMock, clock.NewFake(refTime))
+				rec := send(t, h, http.MethodPost, "/api/campaigns/"+campID+"/content", []byte(b.body), nil)
+				e := assertErrorBody(t, rec, http.StatusUnprocessableEntity, "validation_failed", true)
+				if !hasField(e, b.path, "schema_violation") {
+					t.Fatalf("error.fields = %v, want %s schema_violation", e["fields"], b.path)
+				}
+				if n := svc.startCount(); n != 0 {
+					t.Fatalf("StartContentGeneration calls = %d, want 0", n)
+				}
+			})
+		}
+	}
+	t.Run("a malformed path UUID is 404 before the body", func(t *testing.T) {
+		t.Parallel()
+		svc := newContentService()
+		h := newContentRouter(t, svc, llm.ProviderMock, clock.NewFake(refTime))
+		rec := send(t, h, http.MethodPost, "/api/campaigns/not-a-uuid/content", []byte(`{"ab":"yes"}`), nil)
+		assertErrorBody(t, rec, http.StatusNotFound, "campaign_not_found", false)
+		if n := svc.startCount(); n != 0 {
+			t.Fatalf("StartContentGeneration calls = %d, want 0", n)
+		}
+	})
+}
+
+// REQ-ABT-03 C10, C12
+// GET /preview takes an optional variant: a and b reach the service as PreviewQuery.Variant; any other
+// value (c, A) is 422 validation_failed, invalid_value at query.variant, before the service (so even an
+// unknown campaign gets the 422). The preview body always carries variant and customer.variant.
+func TestPreviewContent_Variant(t *testing.T) {
+	t.Parallel()
+	base := "/api/campaigns/" + campID + "/preview"
+	for _, v := range []string{"a", "b"} {
+		t.Run("variant="+v+" is passed through", func(t *testing.T) {
+			t.Parallel()
+			svc := newContentService()
+			h := newContentRouter(t, svc, llm.ProviderMock, clock.NewFake(refTime))
+			rec := send(t, h, http.MethodGet, base+"?variant="+v, nil, nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+			}
+			calls := svc.previewCalls()
+			if len(calls) != 1 || calls[0].Variant != v {
+				t.Fatalf("PreviewQuery calls = %+v, want one with Variant %q", calls, v)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("body: %v", err)
+			}
+			if _, ok := got["variant"]; !ok {
+				t.Fatalf("preview body lacks variant: %s", rec.Body.String())
+			}
+			cust, _ := got["customer"].(map[string]any)
+			if _, ok := cust["variant"]; !ok {
+				t.Fatalf("preview body lacks customer.variant: %s", rec.Body.String())
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, query string
+		err         error
+	}{
+		{name: "c", query: "?variant=c"},
+		{name: "upper-case A", query: "?variant=A"},
+		{name: "c on an unknown campaign is still 422", query: "?variant=c", err: campaign.ErrCampaignNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := newContentService()
+			svc.previewErr = tc.err
+			h := newContentRouter(t, svc, llm.ProviderMock, clock.NewFake(refTime))
+			e := assertErrorBody(t, send(t, h, http.MethodGet, base+tc.query, nil, nil), http.StatusUnprocessableEntity, "validation_failed", true)
+			if !hasField(e, "query.variant", "invalid_value") {
+				t.Fatalf("error.fields = %v, want query.variant invalid_value", e["fields"])
+			}
+			if n := len(svc.previewCalls()); n != 0 {
+				t.Fatalf("Preview calls = %d, want 0", n)
+			}
+		})
+	}
+}

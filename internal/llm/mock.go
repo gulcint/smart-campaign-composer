@@ -182,6 +182,8 @@ type mockContent struct {
 	smsBody, subject, emailBody string
 	extraKey, extraValue        string       // optional extra root property (raw JSON only)
 	en                          *mockContent // optional English version (P8, CNT_OK_EN)
+	b                           *mockContent // optional variant B, with its own en (P9, CNT_OK_AB*)
+	angleA, angleB              string       // angles; written iff b != nil
 }
 
 var (
@@ -204,11 +206,33 @@ var (
 		emailBody: "Hi {{first_name}},\n\nThe items you added to your cart are still waiting for you. We have set up a special 30% discount for {{city}} today.\n\n" +
 			"Complete your order at example.com/cart.\n\nHappy shopping!",
 	}}
+	// cntB / cntBEN are variant B of CNT_OK_AB / CNT_OK_AB_EN (llm-tools.md §3.3; P9, D64).
+	cntB = mockContent{
+		smsBody: "{{first_name}}, %30 indirim bugün gece yarısı bitiyor! Sepetindeki ürünleri kaçırma: example.com/sepet",
+		subject: "Son gün: sepetindeki ürünlerde %30 indirim",
+		emailBody: "Merhaba {{first_name}},\n\nSepetindeki ürünler için tanımladığımız %30 indirim bugün gece yarısı sona eriyor. {{city}} için bu fırsat yalnız bugün geçerli.\n\n" +
+			"Kaçırmadan example.com/sepet adresinden siparişini tamamla.\n\nSevgiler,\nSmart Campaign Composer",
+	}
+	cntBEN = mockContent{smsBody: cntB.smsBody, subject: cntB.subject, emailBody: cntB.emailBody, en: &mockContent{
+		smsBody: "{{first_name}}, your 30% discount ends at midnight! Don't miss the items in your cart: example.com/cart",
+		subject: "Last day: 30% off the items in your cart",
+		emailBody: "Hi {{first_name}},\n\nThe special 30% discount for {{city}} ends at midnight today, and the items in your cart are still waiting.\n\n" +
+			"Complete your order at example.com/cart before it ends.\n\nHappy shopping!",
+	}}
+	cntOKAB        = withVariantB(cntOK, cntB)
+	cntOKABEN      = withVariantB(cntOKEN, cntBEN)
 	cntBadJSONRaw  = `{"sms":{"body":"Merhaba {{first_name}}"},"email":{"subject":}`
 	cntBadJSONBody = "Merhaba {{first_name}}"
 )
 
-// raw renders the fixture as the tool input JSON (keys: sms, email, en, then the extra key).
+// withVariantB returns a with variant B and the CNT_OK_AB angles (P9).
+func withVariantB(a, b mockContent) mockContent {
+	a.b = &b
+	a.angleA, a.angleB = "İndirim oranı öne çıkar", "Aciliyet: indirim bugün bitiyor"
+	return a
+}
+
+// raw renders the fixture as the tool input JSON (keys: sms, email, en, b, angles, then the extra key).
 func (c mockContent) raw() json.RawMessage {
 	var b bytes.Buffer
 	b.WriteString(`{`)
@@ -216,6 +240,20 @@ func (c mockContent) raw() json.RawMessage {
 	if c.en != nil {
 		b.WriteString(`,"en":{`)
 		c.en.writeCopy(&b)
+		b.WriteString(`}`)
+	}
+	if c.b != nil {
+		b.WriteString(`,"b":{`)
+		c.b.writeCopy(&b)
+		if c.b.en != nil {
+			b.WriteString(`,"en":{`)
+			c.b.en.writeCopy(&b)
+			b.WriteString(`}`)
+		}
+		b.WriteString(`},"angles":{"a":`)
+		b.Write(jsonString(c.angleA))
+		b.WriteString(`,"b":`)
+		b.Write(jsonString(c.angleB))
 		b.WriteString(`}`)
 	}
 	if c.extraKey != "" {
@@ -248,18 +286,28 @@ func jsonString(s string) []byte {
 }
 
 // fields lists the fixture's string fields in stream order: the Turkish ones, then (P8) the
-// English ones with the "en." prefix (llm-tools.md §3.4).
+// English ones with the "en." prefix, then (P9) variant B's with "b." and "b.en." (llm-tools.md
+// §3.4). Angles are never streamed.
 func (c mockContent) fields() []ContentChunk {
+	out := c.copyFields("")
+	if c.b != nil {
+		out = append(out, c.b.copyFields("b.")...)
+	}
+	return out
+}
+
+// copyFields lists one variant's fields under prefix: Turkish, then its English version.
+func (c mockContent) copyFields(prefix string) []ContentChunk {
 	out := []ContentChunk{
-		{Path: "sms.body", Text: c.smsBody},
-		{Path: "email.subject", Text: c.subject},
-		{Path: "email.body", Text: c.emailBody},
+		{Path: prefix + "sms.body", Text: c.smsBody},
+		{Path: prefix + "email.subject", Text: c.subject},
+		{Path: prefix + "email.body", Text: c.emailBody},
 	}
 	if c.en != nil {
 		out = append(out,
-			ContentChunk{Path: "en.sms.body", Text: c.en.smsBody},
-			ContentChunk{Path: "en.email.subject", Text: c.en.subject},
-			ContentChunk{Path: "en.email.body", Text: c.en.emailBody},
+			ContentChunk{Path: prefix + "en.sms.body", Text: c.en.smsBody},
+			ContentChunk{Path: prefix + "en.email.subject", Text: c.en.subject},
+			ContentChunk{Path: prefix + "en.email.body", Text: c.en.emailBody},
 		)
 	}
 	return out
@@ -267,7 +315,8 @@ func (c mockContent) fields() []ContentChunk {
 
 // StreamContent returns a stream replaying the scenario's fixture in chunks of at most
 // ChunkSize runes, field order sms.body, email.subject, email.body (then en.* when the bilingual
-// fixture is used). With req.IncludeEnglish every CNT_OK becomes CNT_OK_EN (llm-tools.md §3.3).
+// fixture is used). With req.IncludeEnglish every CNT_OK becomes CNT_OK_EN (llm-tools.md §3.3);
+// with req.IncludeVariantB it becomes CNT_OK_AB / CNT_OK_AB_EN (P9, D64).
 func (m *Mock) StreamContent(ctx context.Context, req ContentRequest) (ContentStream, error) {
 	sc, attempt := m.record(ctx, "content", req.Attempt)
 	if err := ctx.Err(); err != nil {
@@ -277,6 +326,12 @@ func (m *Mock) StreamContent(ctx context.Context, req ContentRequest) (ContentSt
 	ok := cntOK
 	if req.IncludeEnglish {
 		ok = cntOKEN
+	}
+	if req.IncludeVariantB {
+		ok = cntOKAB
+		if req.IncludeEnglish {
+			ok = cntOKABEN
+		}
 	}
 	pick := func(c mockContent) {
 		s.chunks = splitChunks(c.fields(), m.opts.ChunkSize)

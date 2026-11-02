@@ -2,7 +2,17 @@
 // Step 4 (ui.md §3.24, §3.17, §3.18; DECISIONS D45; DESIGN.md §8.4): a read-only send summary
 // with one decision panel. Always approves and sends the campaign's latest content version;
 // `stale` appears only after a 409. No editor UI and no sample navigation here: that is step 3.
-import { CircleAlert, CircleCheck, FileText, Info, PencilLine, RotateCw, Users } from '@lucide/vue'
+import {
+  CircleAlert,
+  CircleCheck,
+  FileText,
+  FlaskConical,
+  Info,
+  PencilLine,
+  RotateCw,
+  Split,
+  Users,
+} from '@lucide/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -17,6 +27,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import LanguageTabs from '@/components/LanguageTabs.vue'
 import Skeleton from '@/components/Skeleton.vue'
 import StepHeader from '@/components/StepHeader.vue'
+import VariantTabs from '@/components/VariantTabs.vue'
 import { useNotify } from '@/composables/useNotify'
 import { formatNumber, t } from '@/i18n'
 import { languageFromQuery } from '@/lib/language'
@@ -24,6 +35,7 @@ import { formatTsi } from '@/lib/schedule'
 import { isLockedForEditing } from '@/lib/steps'
 import { runeCount } from '@/lib/text-cap'
 import { cn } from '@/lib/utils'
+import { type ContentVariant, copyOf, variantFromQuery, worstOf } from '@/lib/variant'
 import { campaignIdOf } from '@/router'
 import { injectApiClient, reportError } from '@/stores/api'
 import { useCampaignStore } from '@/stores/campaign'
@@ -65,18 +77,43 @@ function onLanguage(l: 'tr' | 'en') {
   void router.replace({ query: { ...route.query, lang: l } })
 }
 
+// P9 (ui.md §3.24): variant tabs above the language tabs when the version has variant B; the
+// `variant` query picks the first tab. Approval is one decision for both variants.
+const variantBAvailable = computed(() => latest.value?.content.b != null)
+const variant = ref<ContentVariant>(variantFromQuery(route.query.variant))
+const activeVariant = computed<ContentVariant>(() =>
+  variantBAvailable.value ? variant.value : 'a',
+)
+const previewVariantParam = () => (variantBAvailable.value ? activeVariant.value : undefined)
+let requestedVariant: ContentVariant | undefined
+const variantPhases = { a: 'validated', b: 'validated' } as const
+const variantErrors = { a: false, b: false }
+const shownAngle = computed(() => latest.value?.content.angles?.[activeVariant.value] ?? null)
+
+function onVariant(v: ContentVariant) {
+  variant.value = v
+  void router.replace({ query: { ...route.query, variant: v } })
+}
+
 const limitCheck = computed(() => {
   const v = latest.value
   if (!v) return null
-  const sms = v.worst_case?.sms_runes ?? runeCount(v.content.sms.body)
-  const subject = v.worst_case?.subject_runes ?? runeCount(v.content.email.subject)
+  const wc = v.worst_case
   const fits = (s: number, j: number) => s <= SMS_LIMIT && j <= SUBJECT_LIMIT
-  const en = v.worst_case?.en
-  const pass = fits(sms, subject) && (!en || fits(en.sms_runes, en.subject_runes))
-  if (activeLanguage.value === 'en' && en) {
-    return { sms: en.sms_runes, subject: en.subject_runes, pass }
+  // Each variant × language copy the version has (A, A-en, B, B-en): its worst case, or its
+  // template length when worst_case is null.
+  const measure = (vr: ContentVariant, l: 'tr' | 'en') => {
+    if (wc) return worstOf(wc, vr, l)
+    const c = copyOf(v.content, vr, l)
+    return c && { sms_runes: runeCount(c.sms.body), subject_runes: runeCount(c.email.subject) }
   }
-  return { sms, subject, pass }
+  const copies = (['a', 'b'] as const).flatMap((vr) =>
+    (['tr', 'en'] as const).map((l) => measure(vr, l)),
+  )
+  const pass = copies.every((c) => !c || fits(c.sms_runes, c.subject_runes))
+  // The detail line shows the selected copy (A Turkish when the version lacks it).
+  const shown = measure(activeVariant.value, activeLanguage.value) ?? measure('a', 'tr')
+  return { sms: shown?.sms_runes ?? 0, subject: shown?.subject_runes ?? 0, pass }
 })
 
 // ---- preview of one sample recipient (ui.md §1.1, REQ-APR-01) ----
@@ -99,9 +136,10 @@ async function loadPreview() {
   if (!id) return
   const seq = ++previewSeq
   requestedLanguage = previewLanguageParam()
+  requestedVariant = previewVariantParam()
   previewLoading.value = true
   try {
-    const p = await api.previewContent(client, id, 0, requestedLanguage)
+    const p = await api.previewContent(client, id, 0, requestedLanguage, requestedVariant)
     if (seq !== previewSeq) return
     preview.value = p
     previewError.value = null
@@ -115,8 +153,13 @@ async function loadPreview() {
   }
 }
 
-watch(activeLanguage, () => {
-  if (preview.value && previewLanguageParam() !== requestedLanguage) void loadPreview()
+watch([activeLanguage, activeVariant], () => {
+  if (
+    preview.value &&
+    (previewLanguageParam() !== requestedLanguage || previewVariantParam() !== requestedVariant)
+  ) {
+    void loadPreview()
+  }
 })
 
 // ---- approve / send (ui.md §3.24) ----
@@ -266,10 +309,14 @@ const nextText = computed<string | null>(() =>
 function goToContent() {
   const id = campaignId.value
   if (!id) return
+  // Carries the selected language and variant (only while their tabs are shown).
+  const query: Record<string, string> = {}
+  if (englishAvailable.value) query.lang = activeLanguage.value
+  if (variantBAvailable.value) query.variant = activeVariant.value
   void router.push({
     name: 'content',
     params: { campaignId: id },
-    ...(englishAvailable.value ? { query: { lang: activeLanguage.value } } : {}),
+    ...(Object.keys(query).length ? { query } : {}),
   })
 }
 
@@ -316,8 +363,32 @@ onMounted(async () => {
         </div>
 
         <div
+          v-if="latest && variantBAvailable"
+          class="flex flex-col gap-2 border-t border-border-subtle px-4 pt-3 md:px-8"
+        >
+          <VariantTabs
+            :model-value="activeVariant"
+            :phases="variantPhases"
+            :errors="variantErrors"
+            @update:model-value="onVariant"
+          />
+          <p
+            v-if="shownAngle"
+            class="flex items-start gap-2 text-body-sm text-ink-700"
+            :aria-label="t('variant.angle')"
+          >
+            <FlaskConical class="mt-0.5 size-4 shrink-0 text-ink-500" aria-hidden="true" />
+            <span
+              data-testid="approval-variant-angle"
+              class="min-w-0 break-words"
+              v-text="shownAngle"
+            />
+          </p>
+        </div>
+
+        <div
           v-if="latest && englishAvailable"
-          class="border-t border-border-subtle px-4 pt-3 md:px-8"
+          :class="cn('px-4 pt-3 md:px-8', !variantBAvailable && 'border-t border-border-subtle')"
         >
           <LanguageTabs
             :model-value="activeLanguage"
@@ -376,6 +447,13 @@ onMounted(async () => {
               </dl>
               <Skeleton v-else class="h-7 w-48" />
               <p class="text-caption text-ink-500">{{ t('approval.recipientsNote') }}</p>
+              <p
+                v-if="variantBAvailable"
+                class="flex items-start gap-2 rounded-sm bg-info-bg px-3 py-2 text-body-sm text-ink-700"
+              >
+                <Split class="mt-0.5 size-4 shrink-0 text-info" aria-hidden="true" />
+                <span data-testid="approval-ab-note" v-text="t('approval.abSplitNote')" />
+              </p>
             </div>
           </li>
 
@@ -391,6 +469,7 @@ onMounted(async () => {
               data-testid="approval-preview"
               :data-state="previewState"
               :data-language="preview?.language"
+              :data-variant="preview?.variant"
               :aria-busy="previewState === 'loading' ? 'true' : undefined"
               class="flex min-w-0 flex-col gap-4"
             >

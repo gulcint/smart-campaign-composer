@@ -1,7 +1,15 @@
 <script setup lang="ts">
 // Step 3 (ui.md §1.1, §3.23; DECISIONS D40, D45; DESIGN.md §8.3): content generation stream,
 // editing with optimistic concurrency (X-Expected-Version) and the preview.
-import { ArrowUpRight, CircleCheck, Info, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
+import {
+  ArrowUpRight,
+  CircleCheck,
+  FlaskConical,
+  Info,
+  PencilLine,
+  RotateCcw,
+  Sparkles,
+} from '@lucide/vue'
 import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -19,6 +27,7 @@ import type {
   VersionStatus,
   WorstCase,
 } from '@/api/types'
+import AbToggle from '@/components/AbToggle.vue'
 import Button from '@/components/Button.vue'
 import ChannelTabs from '@/components/ChannelTabs.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -26,14 +35,17 @@ import ContentEditor, { type EditConflict } from '@/components/ContentEditor.vue
 import EmailPreview from '@/components/EmailPreview.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ErrorCard from '@/components/ErrorCard.vue'
+import InlineError from '@/components/InlineError.vue'
 import LanguageTabs from '@/components/LanguageTabs.vue'
 import SmsPreview from '@/components/SmsPreview.vue'
 import StepHeader from '@/components/StepHeader.vue'
 import StreamingText from '@/components/StreamingText.vue'
 import VariableChip from '@/components/VariableChip.vue'
+import VariantTabs from '@/components/VariantTabs.vue'
 import { useNotify } from '@/composables/useNotify'
 import {
   FIELD_KEYS,
+  type FieldState,
   routeFieldErrors,
   useContentGeneration,
 } from '@/composables/useContentGeneration'
@@ -43,6 +55,14 @@ import { walkedSamples } from '@/lib/preview'
 import { isLockedForEditing } from '@/lib/steps'
 import { invalidVariables } from '@/lib/variables'
 import { languageFromQuery } from '@/lib/language'
+import {
+  type ContentCopy,
+  type ContentVariant,
+  copyOf,
+  isVariantBPath,
+  isVariantLevelPath,
+  variantFromQuery,
+} from '@/lib/variant'
 import { campaignIdOf } from '@/router'
 import { injectApiClient, reportError } from '@/stores/api'
 import { useCampaignStore } from '@/stores/campaign'
@@ -85,17 +105,20 @@ const versionStatus = computed<VersionStatus>(
   () => sessionStatus.value ?? (base.value ? 'validated' : 'none'),
 )
 
-type LangContent = NonNullable<Content['en']>
-
-/** Field-by-field strict equality of two versions' texts (P8: the English block too). */
+/** Field-by-field strict equality of two versions' texts (P8: English; P9: variant B, angles). */
 function sameContent(a: Content, b: Content) {
-  const same = (x: LangContent, y: LangContent) =>
-    x.sms.body === y.sms.body &&
-    x.email.subject === y.email.subject &&
-    x.email.body === y.email.body
-  if (!same(a, b)) return false
-  if (!a.en || !b.en) return !a.en && !b.en
-  return same(a.en, b.en)
+  const same = (x: ContentCopy | null, y: ContentCopy | null) =>
+    x === null || y === null
+      ? x === y
+      : x.sms.body === y.sms.body &&
+        x.email.subject === y.email.subject &&
+        x.email.body === y.email.body
+  for (const v of ['a', 'b'] as const) {
+    for (const l of ['tr', 'en'] as const) {
+      if (!same(copyOf(a, v, l), copyOf(b, v, l))) return false
+    }
+  }
+  return a.angles?.a === b.angles?.a && a.angles?.b === b.angles?.b
 }
 
 const dirty = computed(() => {
@@ -133,9 +156,31 @@ function onLanguage(l: Language) {
   void router.replace({ query: { ...route.query, lang: l } })
 }
 
-const phasesOf = (l: Language): Record<FieldKey, ContentPhase> => {
+// P9 (ui.md §3.23): variant tabs exist if the shown stream or the base version has variant B.
+// Hierarchy: variant → language → channel. The `variant` query picks the first tab.
+const variant = ref<ContentVariant>(variantFromQuery(route.query.variant))
+const variantId = useId()
+const variantBAvailable = computed(() =>
+  showStream.value ? gen.hasVariantB.value : draft.value?.b != null,
+)
+const activeVariant = computed<ContentVariant>(() =>
+  variantBAvailable.value ? variant.value : 'a',
+)
+
+function onVariant(v: ContentVariant) {
+  variant.value = v
+  void router.replace({ query: { ...route.query, variant: v } })
+}
+
+/** The stream's field set of one variant × language copy. */
+function streamSet(v: ContentVariant, l: Language): Record<FieldKey, FieldState> {
+  if (v === 'b') return l === 'en' ? gen.bEnFields : gen.bFields
+  return l === 'en' ? gen.enFields : gen.fields
+}
+
+const phasesOf = (v: ContentVariant, l: Language): Record<FieldKey, ContentPhase> => {
   if (showStream.value || editingDraft.value) {
-    const src = l === 'en' ? gen.enFields : gen.fields
+    const src = streamSet(v, l)
     return {
       'sms-body': src['sms-body'].phase,
       'email-subject': src['email-subject'].phase,
@@ -143,7 +188,7 @@ const phasesOf = (l: Language): Record<FieldKey, ContentPhase> => {
     }
   }
   // Saved-version view: a 422 on a field marks it (and so its channel tab) invalid.
-  const routed = routeFieldErrors(fieldErrors.value, l)
+  const routed = routeFieldErrors(fieldErrors.value, l, v)
   const of = (k: FieldKey): ContentPhase => (routed[k].length ? 'invalid' : 'validated')
   return {
     'sms-body': of('sms-body'),
@@ -151,25 +196,72 @@ const phasesOf = (l: Language): Record<FieldKey, ContentPhase> => {
     'email-body': of('email-body'),
   }
 }
-const phases = computed(() => phasesOf(activeLanguage.value))
+const phases = computed(() => phasesOf(activeVariant.value, activeLanguage.value))
 
-/** Language summary phase (ui.md §3.27): invalid if any field is, else the first field's phase. */
-const languagePhases = computed<Record<Language, ContentPhase>>(() => {
-  const of = (l: Language): ContentPhase => {
-    const p = phasesOf(l)
-    return FIELD_KEYS.some((k) => p[k] === 'invalid') ? 'invalid' : p['sms-body']
+/** Summary phase (ui.md §3.27/§3.28): invalid if any field is, else the first field's phase. */
+const summaryPhase = (p: Record<FieldKey, ContentPhase>): ContentPhase =>
+  FIELD_KEYS.some((k) => p[k] === 'invalid') ? 'invalid' : p['sms-body']
+
+/** Does one variant × language copy have a field error (stream or last save)? */
+function copyHasErrors(v: ContentVariant, l: Language): boolean {
+  if (showStream.value) return FIELD_KEYS.some((k) => streamSet(v, l)[k].errors.length > 0)
+  const routed = routeFieldErrors(fieldErrors.value, l, v)
+  return FIELD_KEYS.some((k) => routed[k].length > 0)
+}
+
+const languagePhases = computed<Record<Language, ContentPhase>>(() => ({
+  tr: summaryPhase(phasesOf(activeVariant.value, 'tr')),
+  en: summaryPhase(phasesOf(activeVariant.value, 'en')),
+}))
+const languageErrors = computed<Record<Language, boolean>>(() => ({
+  tr: copyHasErrors(activeVariant.value, 'tr'),
+  en: copyHasErrors(activeVariant.value, 'en'),
+}))
+
+/**
+ * Variant-level errors (path `b`, `angles.*`): from the final `invalid` event while its fields
+ * are shown, otherwise from the editor's errors (draft editing, 422 on save).
+ */
+const levelErrors = computed<FieldError[]>(() =>
+  showStream.value
+    ? gen.variantErrors.value
+    : fieldErrors.value.filter((e) => isVariantLevelPath(e.path)),
+)
+const variantPhases = computed<Record<ContentVariant, ContentPhase>>(() => {
+  const of = (v: ContentVariant): ContentPhase => {
+    const langs: Language[] = englishAvailable.value ? ['tr', 'en'] : ['tr']
+    const ps = langs.map((l) => summaryPhase(phasesOf(v, l)))
+    return ps.includes('invalid') ? 'invalid' : (ps[0] as ContentPhase)
   }
-  return { tr: of('tr'), en: of('en') }
+  return { a: of('a'), b: of('b') }
 })
-const languageErrors = computed<Record<Language, boolean>>(() => {
-  const has = (l: Language) => {
-    const src = l === 'en' ? gen.enFields : gen.fields
-    if (showStream.value) return FIELD_KEYS.some((k) => src[k].errors.length > 0)
-    const routed = routeFieldErrors(fieldErrors.value, l)
-    return FIELD_KEYS.some((k) => routed[k].length > 0)
-  }
-  return { tr: has('tr'), en: has('en') }
+const variantHasErrors = computed<Record<ContentVariant, boolean>>(() => {
+  const has = (v: ContentVariant) =>
+    copyHasErrors(v, 'tr') ||
+    (englishAvailable.value && copyHasErrors(v, 'en')) ||
+    levelErrors.value.some((e) => e.path === 'angles' || isVariantBPath(e.path) === (v === 'b'))
+  return { a: has('a'), b: has('b') }
 })
+
+/** Angles shown under the tabs: the run's (validated only) or the edited version's. */
+const shownAngles = computed(() =>
+  showStream.value ? gen.angles.value : (draft.value?.angles ?? null),
+)
+const shownAngle = computed(() => shownAngles.value?.[activeVariant.value] || null)
+
+/** Page-level A/B errors while the invalid draft is shown as StreamingText (ui.md §3.23). */
+const pageVariantError = computed(() =>
+  showStream.value && activeVariant.value === 'b'
+    ? gen.variantErrors.value.find((e) => e.path === 'b')
+    : undefined,
+)
+const pageAngleError = computed(() =>
+  showStream.value
+    ? gen.variantErrors.value.find(
+        (e) => e.path === `angles.${activeVariant.value}` || e.path === 'angles',
+      )
+    : undefined,
+)
 
 const stateAllowsGeneration = computed(() => {
   const s = campaign.value?.state
@@ -178,6 +270,14 @@ const stateAllowsGeneration = computed(() => {
 const canRegenerate = computed(
   () => versionStatus.value !== 'streaming' && stateAllowsGeneration.value && !locked.value,
 )
+// P9 (ui.md §3.23, §3.29): the A/B switch shapes the next generation. Starts on with `ab=1`
+// (from the audience step) or when the latest version has variant B; a user choice wins.
+const abChoice = ref<boolean | null>(route.query.ab === '1' ? true : null)
+const ab = computed(() => abChoice.value ?? latest.value?.content.b != null)
+function onAb(v: boolean) {
+  if (canRegenerate.value) abChoice.value = v
+}
+
 const canApprove = computed(() => {
   const s = campaign.value?.state
   return (
@@ -223,7 +323,7 @@ const generationError = computed<ApiError | null>(() =>
 const invalidChips = computed(() => {
   const d = draft.value
   if (!d) return []
-  const v = activeLanguage.value === 'en' && d.en ? d.en : d
+  const v = copyOf(d, activeVariant.value, activeLanguage.value) ?? d
   return channel.value === 'sms'
     ? invalidVariables(v.sms.body)
     : invalidVariables(v.email.subject, v.email.body)
@@ -239,15 +339,19 @@ let previewSeq = 0
 /** P8: `language` query of the last preview request; tabs visible => the selected tab's language. */
 let requestedLanguage: Language | undefined
 const previewLanguageParam = () => (englishAvailable.value ? activeLanguage.value : undefined)
+/** P9: `variant` query, likewise only while the variant tabs are visible. */
+let requestedVariant: ContentVariant | undefined
+const previewVariantParam = () => (variantBAvailable.value ? activeVariant.value : undefined)
 
 async function loadPreview(index: number) {
   const id = campaignId.value
   if (!id) return
   const seq = ++previewSeq
   requestedLanguage = previewLanguageParam()
+  requestedVariant = previewVariantParam()
   previewLoading.value = true
   try {
-    const p = await api.previewContent(client, id, index, requestedLanguage)
+    const p = await api.previewContent(client, id, index, requestedLanguage, requestedVariant)
     if (seq !== previewSeq) return
     preview.value = p
     previewError.value = null
@@ -261,9 +365,13 @@ async function loadPreview(index: number) {
   }
 }
 
-// The preview follows the selected language tab (REQ-LNG-04); sample_index is kept.
-watch([englishAvailable, activeLanguage], () => {
-  if (preview.value && previewLanguageParam() !== requestedLanguage) {
+// The preview follows the selected variant and language tabs (REQ-LNG-04, REQ-ABT-04);
+// sample_index is kept.
+watch([englishAvailable, activeLanguage, variantBAvailable, activeVariant], () => {
+  if (
+    preview.value &&
+    (previewLanguageParam() !== requestedLanguage || previewVariantParam() !== requestedVariant)
+  ) {
     void loadPreview(preview.value.sample_index)
   }
 })
@@ -318,7 +426,7 @@ function startGeneration() {
   conflict.value = null
   fieldErrors.value = []
   sessionStatus.value = 'streaming'
-  void gen.start(id)
+  void gen.start(id, { ab: ab.value })
 }
 
 function onRegenerate() {
@@ -333,19 +441,22 @@ function onConfirmRegenerate() {
   startGeneration()
 }
 
-/** The generated texts as a Content (the English block only when the run had one). */
-function generatedContent(): Content {
-  const f = gen.fields
-  const c: Content = {
-    sms: { body: f['sms-body'].text },
-    email: { subject: f['email-subject'].text, body: f['email-body'].text },
-  }
-  if (gen.hasEnglish.value) {
-    const e = gen.enFields
-    c.en = {
-      sms: { body: e['sms-body'].text },
-      email: { subject: e['email-subject'].text, body: e['email-body'].text },
-    }
+const copyFrom = (f: Record<FieldKey, FieldState>): ContentCopy => ({
+  sms: { body: f['sms-body'].text },
+  email: { subject: f['email-subject'].text, body: f['email-body'].text },
+})
+
+/**
+ * The generated texts as a Content: the English block and variant B (with its angles) only
+ * when the run had them. Angles are not streamed: `angles` is the validated event's, else empty.
+ */
+function generatedContent(angles: { a: string; b: string } | null = gen.angles.value): Content {
+  const c: Content = copyFrom(gen.fields)
+  if (gen.hasEnglish.value) c.en = copyFrom(gen.enFields)
+  if (gen.hasVariantB.value) {
+    c.b = copyFrom(gen.bFields)
+    if (gen.hasEnglish.value) c.b.en = copyFrom(gen.bEnFields)
+    c.angles = { ...(angles ?? { a: '', b: '' }) }
   }
   return c
 }
@@ -359,7 +470,9 @@ watch(gen.versionStatus, (s, prev) => {
   }
   sessionStatus.value = s
   if (s === 'validated') {
-    const c = generatedContent()
+    // The validated event's content is the truth (a repair attempt may drop `en`/`b`).
+    const v = gen.content.value
+    const c: Content = v ? JSON.parse(JSON.stringify(v)) : generatedContent()
     base.value = c
     draft.value = c
     worstCase.value = gen.worstCase.value
@@ -379,18 +492,41 @@ watch(gen.error, (err) => {
 
 function onEditDraft() {
   if (versionStatus.value !== 'invalid' || locked.value) return
-  const c = generatedContent()
+  const c = generatedContent({ a: '', b: '' })
   // Errors with path "" sit in every field; keep each error object once.
   const seen = new Set<FieldError>()
-  for (const k of FIELD_KEYS) {
-    for (const e of gen.fields[k].errors) seen.add(e)
-    for (const e of gen.enFields[k].errors) seen.add(e)
+  for (const set of [gen.fields, gen.enFields, gen.bFields, gen.bEnFields]) {
+    for (const k of FIELD_KEYS) for (const e of set[k].errors) seen.add(e)
   }
+  for (const e of gen.variantErrors.value) seen.add(e)
   base.value = c
   draft.value = c
   fieldErrors.value = [...seen]
   worstCase.value = null
   editingDraft.value = true
+  if (c.b) void loadDraftAngles(gen.versionId.value)
+}
+
+/**
+ * P9 (ui.md §3.23): the stored draft's angles (they never stream). No draft id, no `angles` in
+ * the version or a failed read leaves them empty; saving then reports `required`.
+ */
+async function loadDraftAngles(versionId: string | null) {
+  const id = campaignId.value
+  if (!id || !versionId) return
+  let angles: { a: string; b: string } | undefined
+  try {
+    angles = (await api.getContentVersion(client, id, versionId)).content.angles
+  } catch (e) {
+    reportError(toApiError(e), 'content')
+    return
+  }
+  // Only while that draft is still being edited and its angles are untouched.
+  const d = draft.value
+  if (!angles || !editingDraft.value || !d?.b || d.angles?.a || d.angles?.b) return
+  const next = { ...d, angles: { a: angles.a, b: angles.b } }
+  draft.value = next
+  if (base.value?.b) base.value = { ...base.value, angles: next.angles }
 }
 
 // ---- saving (ui.md §3.23, D40) ----
@@ -496,17 +632,31 @@ function onDraftUpdate(c: Content) {
 function goToApproval() {
   const id = campaignId.value
   if (!id || !canApprove.value) return
+  // Carries the selected language and variant (only while their tabs are shown).
+  const query: Record<string, string> = {}
+  if (englishAvailable.value) query.lang = activeLanguage.value
+  if (variantBAvailable.value) query.variant = activeVariant.value
   void router.push({
     name: 'approval',
     params: { campaignId: id },
-    ...(englishAvailable.value ? { query: { lang: activeLanguage.value } } : {}),
+    ...(Object.keys(query).length ? { query } : {}),
   })
 }
 
 const CHANNELS: readonly ChannelKey[] = ['sms', 'email']
-const streamLanguages = computed<readonly Language[]>(() =>
-  englishAvailable.value ? ['tr', 'en'] : ['tr'],
-)
+/**
+ * Every variant × language copy of the stream, the shown one first: the others stay in the DOM
+ * (hidden) so streaming keeps filling them, and the first match of a field's testid is the
+ * visible one.
+ */
+const streamCopies = computed(() => {
+  const vs: ContentVariant[] = variantBAvailable.value ? ['a', 'b'] : ['a']
+  const ls: Language[] = englishAvailable.value ? ['tr', 'en'] : ['tr']
+  const all = vs.flatMap((v) => ls.map((l) => ({ v, l, key: `${v}-${l}` })))
+  const shown = (x: { v: ContentVariant; l: Language }) =>
+    x.v === activeVariant.value && x.l === activeLanguage.value
+  return [...all.filter(shown), ...all.filter((x) => !shown(x))]
+})
 const streamFields: Record<ChannelKey, readonly FieldKey[]> = {
   sms: ['sms-body'],
   email: ['email-subject', 'email-body'],
@@ -516,12 +666,15 @@ onMounted(() => {
   const id = campaignId.value
   if (!id) return
   void store.ensure(id)
-  if (route.query.generate === '1') {
+  const generate = route.query.generate === '1'
+  // `generate` and `ab` are one-shot: abChoice already read `ab` (ui.md §3.23).
+  if (generate || route.query.ab !== undefined) {
     const rest = { ...route.query }
     delete rest.generate
+    delete rest.ab
     void router.replace({ query: rest })
-    startGeneration()
   }
+  if (generate) startGeneration()
 })
 </script>
 
@@ -562,122 +715,177 @@ onMounted(() => {
       >
         <Sparkles class="size-12 text-brand-icon" aria-hidden="true" />
         <p class="text-body text-ink-700">{{ t('content.empty') }}</p>
-        <Button
-          data-testid="content-regenerate"
-          size="lg"
-          :disabled="!canRegenerate"
-          @click="onRegenerate"
-        >
-          {{ t('content.generate') }}
-          <ArrowUpRight aria-hidden="true" />
-        </Button>
+        <div class="flex flex-col items-center gap-4 sm:flex-row">
+          <div class="text-left sm:max-w-64">
+            <AbToggle
+              data-testid="content-ab-toggle"
+              :model-value="ab"
+              :disabled="!canRegenerate"
+              @update:model-value="onAb"
+            />
+          </div>
+          <Button
+            data-testid="content-regenerate"
+            size="lg"
+            :disabled="!canRegenerate"
+            @click="onRegenerate"
+          >
+            {{ t('content.generate') }}
+            <ArrowUpRight aria-hidden="true" />
+          </Button>
+        </div>
       </section>
 
       <template v-else>
-        <LanguageTabs
-          v-if="englishAvailable"
-          :model-value="activeLanguage"
-          :phases="languagePhases"
-          :errors="languageErrors"
-          :id-base="langId"
-          @update:model-value="onLanguage"
-        />
+        <!-- P9: variant → language → channel. The angle names what the selected variant tries. -->
+        <div v-if="variantBAvailable" class="flex flex-col gap-2">
+          <VariantTabs
+            :model-value="activeVariant"
+            :phases="variantPhases"
+            :errors="variantHasErrors"
+            :id-base="variantId"
+            @update:model-value="onVariant"
+          />
+          <p
+            v-if="shownAngle"
+            class="flex items-start gap-2 text-body-sm text-ink-700"
+            :aria-label="t('variant.angle')"
+          >
+            <FlaskConical class="mt-0.5 size-4 shrink-0 text-ink-500" aria-hidden="true" />
+            <span
+              data-testid="content-variant-angle"
+              class="min-w-0 break-words"
+              v-text="shownAngle"
+            />
+          </p>
+          <InlineError
+            v-if="pageVariantError"
+            path="variant"
+            :code="pageVariantError.code"
+            class="rounded-sm bg-error-bg px-3 py-2"
+          />
+          <InlineError
+            v-if="pageAngleError"
+            path="angle"
+            :code="pageAngleError.code"
+            :limit="pageAngleError.limit ?? null"
+            :actual="pageAngleError.actual ?? null"
+            class="rounded-sm bg-error-bg px-3 py-2"
+          />
+        </div>
         <div
-          :id="englishAvailable ? `${langId}-panel` : undefined"
-          :role="englishAvailable ? 'tabpanel' : undefined"
-          :aria-labelledby="englishAvailable ? `${langId}-tab-${activeLanguage}` : undefined"
+          :id="variantBAvailable ? `${variantId}-panel` : undefined"
+          :role="variantBAvailable ? 'tabpanel' : undefined"
+          :aria-labelledby="variantBAvailable ? `${variantId}-tab-${activeVariant}` : undefined"
+          class="flex flex-col gap-6"
         >
-          <ChannelTabs v-model="channel" :phases="phases">
-            <template v-for="c in CHANNELS" #[c]>
-              <div v-if="showStream" :key="`stream-${c}`" class="flex flex-col gap-4">
-                <div
-                  v-for="l in streamLanguages"
-                  :key="l"
-                  :data-language="l"
-                  :hidden="l !== activeLanguage"
-                  class="flex flex-col gap-4"
-                >
-                  <StreamingText
-                    v-for="f in streamFields[c]"
-                    :key="f"
-                    :field="f"
-                    :text="(l === 'en' ? gen.enFields : gen.fields)[f].text"
-                    :phase="(l === 'en' ? gen.enFields : gen.fields)[f].phase"
-                    :errors="(l === 'en' ? gen.enFields : gen.fields)[f].errors"
-                    :provider="config.provider"
-                    @regenerate="onRegenerate"
-                  />
-                </div>
-              </div>
-              <div
-                v-else-if="showEditor && draft && channel === c"
-                :key="`editor-${c}`"
-                class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
-              >
-                <div
-                  class="rounded-card border border-border-default bg-surface-card p-4 shadow-card md:p-6"
-                >
-                  <ContentEditor
-                    :model-value="draft"
-                    :channel="c"
-                    :language="activeLanguage"
-                    :mode="editorMode"
-                    :dirty="dirty"
-                    :saving="saving"
-                    :field-errors="fieldErrors"
-                    :worst-case="dirty ? null : worstCase"
-                    :conflict="conflict"
-                    @update:model-value="onDraftUpdate"
-                    @save="onSave"
-                    @reload-latest="onReloadLatest"
-                    @keep-mine="onKeepMine"
-                  />
-                </div>
-                <aside
-                  class="flex flex-col gap-3 rounded-card border border-dashed border-border-default bg-surface-sunken/60 p-4 md:p-6"
-                  :aria-label="t('content.previewTitle')"
-                >
-                  <div class="flex flex-col gap-0.5">
-                    <h2 class="text-h4 text-accent-heading">{{ t('content.previewTitle') }}</h2>
-                    <p class="text-caption text-ink-500">{{ t('content.previewHint') }}</p>
-                  </div>
-                  <p
-                    v-if="preview?.fallback"
-                    data-testid="preview-fallback-note"
-                    role="note"
-                    class="flex items-start gap-2 rounded-sm bg-info-bg px-3 py-2 text-body-sm text-ink-700"
+          <LanguageTabs
+            v-if="englishAvailable"
+            :model-value="activeLanguage"
+            :phases="languagePhases"
+            :errors="languageErrors"
+            :id-base="langId"
+            @update:model-value="onLanguage"
+          />
+          <div
+            :id="englishAvailable ? `${langId}-panel` : undefined"
+            :role="englishAvailable ? 'tabpanel' : undefined"
+            :aria-labelledby="englishAvailable ? `${langId}-tab-${activeLanguage}` : undefined"
+          >
+            <ChannelTabs v-model="channel" :phases="phases">
+              <template v-for="c in CHANNELS" #[c]>
+                <div v-if="showStream" :key="`stream-${c}`" class="flex flex-col gap-4">
+                  <div
+                    v-for="x in streamCopies"
+                    :key="x.key"
+                    :data-variant="x.v"
+                    :data-language="x.l"
+                    :hidden="x.v !== activeVariant || x.l !== activeLanguage"
+                    class="flex flex-col gap-4"
                   >
-                    <Info class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                    {{ t('preview.fallbackNote') }}
-                  </p>
-                  <SmsPreview
-                    v-if="c === 'sms'"
-                    :preview="preview"
-                    :loading="previewLoading"
-                    :error="previewError"
-                    @next-sample="onNextSample"
-                  />
-                  <EmailPreview
-                    v-else
-                    :preview="preview"
-                    :loading="previewLoading"
-                    :error="previewError"
-                  />
-                  <div v-if="invalidChips.length" class="flex flex-col gap-1.5">
-                    <p class="text-caption text-ink-500">{{ t('editor.invalidVariables') }}</p>
-                    <div class="flex flex-wrap gap-2">
-                      <VariableChip
-                        v-for="v in invalidChips"
-                        :key="v"
-                        :name="v"
-                        variant="invalid"
-                      />
-                    </div>
+                    <StreamingText
+                      v-for="f in streamFields[c]"
+                      :key="f"
+                      :field="f"
+                      :text="streamSet(x.v, x.l)[f].text"
+                      :phase="streamSet(x.v, x.l)[f].phase"
+                      :errors="streamSet(x.v, x.l)[f].errors"
+                      :provider="config.provider"
+                      @regenerate="onRegenerate"
+                    />
                   </div>
-                </aside>
-              </div>
-            </template>
-          </ChannelTabs>
+                </div>
+                <div
+                  v-else-if="showEditor && draft && channel === c"
+                  :key="`editor-${c}`"
+                  class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+                >
+                  <div
+                    class="rounded-card border border-border-default bg-surface-card p-4 shadow-card md:p-6"
+                  >
+                    <ContentEditor
+                      :model-value="draft"
+                      :channel="c"
+                      :language="activeLanguage"
+                      :variant="activeVariant"
+                      :mode="editorMode"
+                      :dirty="dirty"
+                      :saving="saving"
+                      :field-errors="fieldErrors"
+                      :worst-case="dirty ? null : worstCase"
+                      :conflict="conflict"
+                      @update:model-value="onDraftUpdate"
+                      @save="onSave"
+                      @reload-latest="onReloadLatest"
+                      @keep-mine="onKeepMine"
+                    />
+                  </div>
+                  <aside
+                    class="flex flex-col gap-3 rounded-card border border-dashed border-border-default bg-surface-sunken/60 p-4 md:p-6"
+                    :aria-label="t('content.previewTitle')"
+                  >
+                    <div class="flex flex-col gap-0.5">
+                      <h2 class="text-h4 text-accent-heading">{{ t('content.previewTitle') }}</h2>
+                      <p class="text-caption text-ink-500">{{ t('content.previewHint') }}</p>
+                    </div>
+                    <p
+                      v-if="preview?.fallback"
+                      data-testid="preview-fallback-note"
+                      role="note"
+                      class="flex items-start gap-2 rounded-sm bg-info-bg px-3 py-2 text-body-sm text-ink-700"
+                    >
+                      <Info class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                      {{ t('preview.fallbackNote') }}
+                    </p>
+                    <SmsPreview
+                      v-if="c === 'sms'"
+                      :preview="preview"
+                      :loading="previewLoading"
+                      :error="previewError"
+                      @next-sample="onNextSample"
+                    />
+                    <EmailPreview
+                      v-else
+                      :preview="preview"
+                      :loading="previewLoading"
+                      :error="previewError"
+                    />
+                    <div v-if="invalidChips.length" class="flex flex-col gap-1.5">
+                      <p class="text-caption text-ink-500">{{ t('editor.invalidVariables') }}</p>
+                      <div class="flex flex-wrap gap-2">
+                        <VariableChip
+                          v-for="v in invalidChips"
+                          :key="v"
+                          :name="v"
+                          variant="invalid"
+                        />
+                      </div>
+                    </div>
+                  </aside>
+                </div>
+              </template>
+            </ChannelTabs>
+          </div>
         </div>
 
         <p
@@ -692,7 +900,15 @@ onMounted(() => {
           :aria-label="t('content.actions')"
           class="flex flex-col gap-3 rounded-card border border-border-default bg-surface-card p-4 shadow-card md:flex-row md:items-center md:justify-between"
         >
-          <div class="flex flex-wrap gap-3">
+          <div class="flex flex-wrap items-center gap-3">
+            <div class="w-full sm:w-auto sm:max-w-64">
+              <AbToggle
+                data-testid="content-ab-toggle"
+                :model-value="ab"
+                :disabled="!canRegenerate"
+                @update:model-value="onAb"
+              />
+            </div>
             <Button
               data-testid="content-regenerate"
               :variant="
