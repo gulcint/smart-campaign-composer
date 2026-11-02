@@ -4,7 +4,7 @@
 // decision 2026-11-02, D65 item 13). Each section loads, fails and retries on its own; the
 // composer never waits for the panel. One setTimeout refreshes both sections quietly: every 10 s while a shown row is
 // sending, and once 10 s after the earliest plan within the hour starts. No per-campaign stream.
-import { CalendarClock, ChevronDown, CircleAlert, RotateCcw } from '@lucide/vue'
+import { CalendarClock, ChevronDown, CircleAlert, LayoutList, RotateCcw } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
@@ -312,7 +312,17 @@ onBeforeUnmount(() => {
     aria-labelledby="brief-panel-title"
     class="flex flex-col gap-4"
   >
-    <h2 id="brief-panel-title" class="text-h2 text-accent-heading">{{ t('briefPanel.title') }}</h2>
+    <!-- Ink heading with the hero's icon chip: the only orange heading text on this page is the
+         hero's accent line (DESIGN.md §8.1), so the panel reads as the same page. -->
+    <h2 id="brief-panel-title" class="flex items-center gap-3 text-h2 text-ink-900">
+      <span
+        class="flex size-8 shrink-0 items-center justify-center rounded-bubble bg-gradient-brand text-primary-foreground"
+        aria-hidden="true"
+      >
+        <LayoutList class="size-4" />
+      </span>
+      {{ t('briefPanel.title') }}
+    </h2>
 
     <div class="grid gap-4 lg:grid-cols-12 lg:items-start">
       <section
@@ -323,11 +333,11 @@ onBeforeUnmount(() => {
         :aria-labelledby="`brief-${key}-title`"
         :aria-busy="sectionState(sections[key]) === 'loading' ? 'true' : undefined"
         :class="[
-          'flex min-w-0 flex-col gap-2 rounded-card border border-border-default bg-surface-card p-3 md:p-4',
+          'flex min-w-0 flex-col gap-2 rounded-card border border-border-default bg-surface-card p-3 shadow-card md:p-4',
           key === 'scheduled' ? 'lg:col-span-5' : 'lg:col-span-7',
         ]"
       >
-        <h3 :id="`brief-${key}-title`" class="px-3 pt-1 text-h4 text-accent-heading">
+        <h3 :id="`brief-${key}-title`" class="px-3 pt-1 text-h4 text-ink-900">
           {{ t(SECTION_META[key].title)
           }}<span
             v-if="sections[key].loaded"

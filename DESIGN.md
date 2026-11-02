@@ -159,7 +159,7 @@ Buton üstü beyaz metin: referans gradient üstü `#FA5B23` **3.19 ✗**, alt `
 | Metin rolü | Renk | Not |
 |---|---|---|
 | Ekran başlığının vurgu kısmı (display, h1'de anahtar ifade) | `--text-accent-display` | Örn. "Kampanyanı **kendi sözlerinle** anlat" |
-| h2–h4 başlıklar | `--text-accent-heading` | Kart başlıkları dahil |
+| h2–h4 başlıklar | `--text-accent-heading` | Kart başlıkları dahil. İstisna: Brief ekranının kampanya paneli başlıkları `--ink-900` (aynı ekranda iki ton turuncu başlık iki ayrı sayfa gibi okunuyordu; §8.1, D65 madde 14) |
 | Vurgulu kelime (`<strong>` rolündeki) | `--text-accent` | Gövde içinde, cümle başına en fazla bir |
 | Anahtar sayılar: kitle sayısı, karakter sayacı (normal), teslimat sayaçları | `--text-accent-numeral` | Durum renkli sayaçlar istisna: başarısız sayısı `--error` |
 | Link, aktif stepper etiketi, aktif sekme etiketi | `--text-accent` | Altı çizili link; hover `--orange-800` |
@@ -406,7 +406,8 @@ Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu 
 **Kampanya paneli (P10, D65; composer ve seed notunun altında, yalnız `brief-new`):**
 
 ```
-│  Kampanyaların                                         ← h2           │
+│  ──────────────────────────────────────────────  ← 1 px ayırıcı       │
+│  [▤] Kampanyaların          ← h2 --ink-900 + gradient ikon çipi      │
 │  ┌ Planlanan · 2 ───────────────┐ ┌ Gönderilen · 5 ─────────────────┐ │
 │  │ Hafta sonu kahve kampanyası… │ │ Son 30 günde sepetine… [Tamam.] │ │
 │  │ 3 Kasım 2026 10:00 TSİ ·     │ │ ███████████░ gönd. 689 · baş. 14 │ │
@@ -416,8 +417,9 @@ Adım erişimi **`docs/contracts/ui.md` §1'deki tabloya göre** belirlenir (bu 
 │  │   26 gün sonra               │ │ [ Daha fazla göster ]           │ │
 │  └──────────────────────────────┘ └─────────────────────────────────┘ │
 ```
-- **Onaylı eskiz (sahip, 2026-11-02):** panel kabı `max-w-5xl` (1024 px), composer'ın 768 px kabının altında ve ortalı; Planlanan ve Gönderilen ≥ 1024 px'te yan yana **5:7** (12 sütunlu ızgarada 5 + 7), altında alt alta. Bölüm başlıkları `h3` öğesi, görsel `text-h4`. Satır çubuğu `ProgressBar size="sm"` (6 px). Saatler eksiz (`formatTsiPlain`: "3 Kasım 2026 10:00"); saat dilimi panelde bir kez, altta `caption --ink-500` notuyla ("Saatler Türkiye saati (UTC+3)."). Hata metni bölümü adlandırır ("Planlanan kampanyalar yüklenemedi." + "Tekrar dene"); boş metinler "Planlanmış kampanya yok." / "Henüz gönderilen kampanya yok.". Eskizler: designer çıktısı (1280/375, dolu/boş/hata durumları).
+- **Onaylı eskiz (sahip, 2026-11-02):** ~~panel kabı `max-w-5xl` (1024 px)~~ → **tek kompozisyon (sahip, 2026-11-02, D65 madde 14):** panel composer ile aynı 768 px (`max-w-3xl`) sütunda, aynı sol kenarda; Planlanan ve Gönderilen ≥ 1024 px'te yan yana **5:7** (12 sütunlu ızgarada 5 + 7), altında alt alta. Bölüm başlıkları `h3` öğesi, görsel `text-h4`. Satır çubuğu `ProgressBar size="sm"` (6 px). Saatler eksiz (`formatTsiPlain`: "3 Kasım 2026 10:00"); saat dilimi panelde bir kez, altta `caption --ink-500` notuyla ("Saatler Türkiye saati (UTC+3)."). Hata metni bölümü adlandırır ("Planlanan kampanyalar yüklenemedi." + "Tekrar dene"); boş metinler "Planlanmış kampanya yok." / "Henüz gönderilen kampanya yok.". Eskizler: designer çıktısı (1280/375, dolu/boş/hata durumları).
 - Özet (KPI) kartı yok (sahip kararı 2026-11-02, D65 madde 13): panel yalnız iki bölümdür; panel ikincil bilgidir, ekranın birincil işi brief yazmaktır.
+- **Tek sayfa okunur (D65 madde 14):** panel seed notunun altında 1 px `--border-default` ayırıcı + `pt-10` ile başlar (yeni sayfa değil, sayfanın alt kısmı). Brief ekranında turuncu başlık metni yalnız hero'nun vurgu satırıdır (`--text-accent-display`); panel `h2` (`text-h2`) ve bölüm `h3`'leri (`text-h4`) `--ink-900`'dür, `h2`'nin solunda hero'daki çipin küçüğü (32 px, `bg-gradient-brand`, `LayoutList`, dekoratif) durur. Bölüm kartları composer kartıyla aynı dili taşır: `--radius-card`, 1 px `--border-default`, `--shadow-card`. Hiyerarşi: hero `h1` (display) > panel `h2` > bölüm `h3`.
 - Bölüm başlıkları `h3` + toplam ("Planlanan · 2"); satır tek link, brief ilk satırı `--ink-900` `body` (kullanıcı metni, turuncu değil), ikinci satır `caption --ink-600`. Boş bölüm tek satır metin ("Planlanmış kampanya yok."), kart çerçevesi kalır.
 - Taslak ve onaylı ama gönderilmemiş kampanyalar satır olarak yoktur (panelde hiç görünmezler). Gönderimi süren satır varken 10 sn'de bir, 1 saat içinde planlı satır varken planın başlamasından 10 sn sonra sessizce tazelenir (yükleniyor gösterilmez).
 - Brief gönderilirken panel gizlenir (dikkat tek göstergede: Kitle yükleniyor kartı).
