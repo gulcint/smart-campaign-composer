@@ -46,16 +46,27 @@ Case dokümanındaki tüm maddeler ve dört bonusun tamamı karşılanmıştır.
 - [x] **`DECISIONS.md`:** önemli kararlar ve nedenleri
 - [x] **`ai-sessions/`:** temizlenmiş Claude session export'ları ([dizin](ai-sessions/INDEX.md))
 
-### 5. Bonuslar
+### 5. Bonuslar (isteğe bağlı)
 
-| Bonus | Nasıl karşılandı |
-|---|---|
-| ⏰ **Zamanlanmış gönderim** | Kampanya ileri bir tarih ve saate planlanabilir; saatler UTC+3'tür (`D62`) |
-| 🧪 **A/B varyantları** | İki mesaj varyantı üretilir; kitle gönderimde belirlenimci olarak ikiye bölünür (`D64`) |
-| 🌍 **Kullanıcının diline göre içerik** | Kitlede İngilizce konuşan kullanıcı varsa İngilizce metin de üretilir (`D63`) |
-| ⚙️ **CI pipeline** | GitHub Actions; lint, testler, API sözleşmesi ve güvenlik kontrolleri her PR'da çalışır |
+- [x] ⏰ **Zamanlanmış gönderim:** kampanya ileri bir tarih ve saate planlanabilir; saatler UTC+3'tür (`D62`)
+- [x] 🧪 **A/B varyantları:** iki mesaj varyantı üretilir; kitle gönderimde belirlenimci olarak ikiye bölünür (`D64`)
+- [x] 🌍 **Kullanıcının diline göre içerik:** kitlede İngilizce konuşan kullanıcı varsa İngilizce metin de üretilir (`D63`)
+- [x] ⚙️ **CI pipeline:** GitHub Actions; lint, testler, API sözleşmesi ve güvenlik kontrolleri her PR'da çalışır
 
 > **Ek olarak:** brief ekranının altında planlanan ve gönderilen kampanyaların listesi yer alır; takip ekranı yeniden tasarlanmıştır (`D65`).
+
+## Teknoloji
+
+Case, ön yüz için Vue.js, arka yüz için Go veya PHP istiyor; veritabanı, kuyruk ve kütüphaneler serbest. Bu projede:
+
+| Katman | Kullanılanlar |
+|---|---|
+| **Ön yüz** | Vue 3, TypeScript, Vite, Pinia, Vue Router; arayüz bileşenleri shadcn-vue ve Reka UI, stil Tailwind CSS v4, ikonlar Lucide; testler Vitest |
+| **Arka yüz** | Go; `pgx` (PostgreSQL erişimi), `golang-migrate` (migration), Prometheus istemcisi (`/metrics`) |
+| **Yapay zekâ** | Claude API (Anthropic Go SDK, araç kullanımıyla yapılandırılmış JSON); API anahtarı yoksa sahte Claude |
+| **Veritabanı ve kuyruk** | PostgreSQL 16: hem veri deposu hem gönderim kuyruğu (`deliveries` tablosu, `FOR UPDATE SKIP LOCKED`) |
+| **Sahte servisler** | Ayrı bir Go servisi olarak SMS/e-posta mock provider; rastgele hata, gecikme ve `429` üretir |
+| **Çalıştırma ve CI** | Docker Compose (tek komutla kurulum), GitHub Actions |
 
 ## Çalıştırma
 
