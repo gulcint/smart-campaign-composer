@@ -87,6 +87,32 @@ func (a *api) listCampaigns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
+// ---- GET /api/campaign-summaries ----
+
+// listCampaignSummaries: query (422 invalid_value, path query.<name>, rules in
+// campaign.ParseSummaryFilter) -> Deps.Summaries. A nil lister answers 500 internal_error.
+func (a *api) listCampaignSummaries(w http.ResponseWriter, r *http.Request) {
+	f, err := campaign.ParseSummaryFilter(r.URL.Query())
+	if err != nil {
+		a.writeServiceError(w, r, err)
+		return
+	}
+	if a.deps.Summaries == nil {
+		a.deps.Logger.Error("campaign summaries not configured", slog.String("request_id", r.Header.Get("X-Request-ID")))
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "internal error")
+		return
+	}
+	page, err := a.deps.Summaries.ListSummaries(r.Context(), f)
+	if err != nil {
+		a.writeServiceError(w, r, err)
+		return
+	}
+	if page.Items == nil {
+		page.Items = []campaign.Summary{} // items is always a JSON array, whatever the lister returns
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
 // ---- GET /api/campaigns/{campaign_id} ----
 
 func (a *api) getCampaign(w http.ResponseWriter, r *http.Request) {

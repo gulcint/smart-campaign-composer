@@ -31,8 +31,11 @@ import (
 )
 
 type Deps struct {
-	Service     campaign.Service // fakeable
-	LLMProvider llm.Provider     // effective provider for GET /api/config and header gating
+	Service campaign.Service // fakeable
+	// Summaries serves GET /api/campaign-summaries (P10, D65; fakeable). Nil => that route answers
+	// 500 internal_error (the route is still registered, so Routes() is unchanged by Deps).
+	Summaries   campaign.SummaryLister
+	LLMProvider llm.Provider // effective provider for GET /api/config and header gating
 	DB          health.Pinger
 	Metrics     http.Handler
 	Clock       clock.Clock // all stream timing (poll, heartbeat) runs on this clock
@@ -116,6 +119,9 @@ var routeTable = []struct {
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/status"}, handlerOf((*api).getCampaignStatus)},
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/deliveries"}, handlerOf((*api).listDeliveries)},
 	{Route{http.MethodGet, "/api/campaigns/{campaign_id}/events"}, handlerOf((*api).streamCampaignEvents)},
+
+	// Brief-screen campaign panel (P10, D65; campaigns.go).
+	{Route{http.MethodGet, "/api/campaign-summaries"}, handlerOf((*api).listCampaignSummaries)},
 }
 
 func handlerOf(m func(*api, http.ResponseWriter, *http.Request)) func(*api) http.Handler {

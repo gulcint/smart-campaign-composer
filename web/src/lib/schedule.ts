@@ -83,12 +83,22 @@ export function toTsiInput(iso: string): string {
   return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`
 }
 
-/** UTC ISO -> '<day> <month name> <year> <HH>:<MM> TSİ' (separators are ours, not ICU's). */
-export function formatTsi(iso: string): string {
+/**
+ * UTC ISO -> '<day> <month name> <year> <HH>:<MM>' in TSİ, without the zone suffix (P10). Used where
+ * a block shows several times and states the zone once (`t('schedule.tzNote')`).
+ */
+export function formatTsiPlain(iso: string): string {
   const ms = Date.parse(iso)
   if (Number.isNaN(ms)) return iso
   const p = partsOf(displayFormat, ms)
-  return `${p.day} ${p.month} ${p.year} ${p.hour}:${p.minute} ${t('schedule.tz')}`
+  return `${p.day} ${p.month} ${p.year} ${p.hour}:${p.minute}`
+}
+
+/** UTC ISO -> formatTsiPlain(iso) + ' ' + t('schedule.tz') (separators are ours, not ICU's). */
+export function formatTsi(iso: string): string {
+  const ms = Date.parse(iso)
+  if (Number.isNaN(ms)) return iso
+  return `${formatTsiPlain(iso)} ${t('schedule.tz')}`
 }
 
 /** max(0, ceil((Date.parse(iso) - nowMs) / 1000)) */

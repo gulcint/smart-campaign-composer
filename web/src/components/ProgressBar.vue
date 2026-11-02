@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// ui.md §3.19 / DESIGN.md §7: 8 px pill bar; testid comes from the parent.
+// ui.md §3.19 / DESIGN.md §7: pill bar; testid comes from the parent. P10 `size`: sm 6 px (panel
+// rows), md 8 px (default, channel cards), lg 12 px (Tracking overall card); ARIA is size-independent.
 import { computed } from 'vue'
 
 import { cn } from '@/lib/utils'
@@ -13,9 +14,12 @@ const props = withDefaults(
     label?: string
     /** Fill class for `single` (e.g. a channel colour); defaults to the brand gradient. */
     fillClass?: string
+    size?: 'sm' | 'md' | 'lg'
   }>(),
-  { variant: 'single', segments: null, label: '', fillClass: 'bg-gradient-brand' },
+  { variant: 'single', segments: null, label: '', fillClass: 'bg-gradient-brand', size: 'md' },
 )
+
+const HEIGHT = { sm: 'h-1.5', md: 'h-2', lg: 'h-3' } as const
 
 const pct = (v: number) => (props.max > 0 ? Math.min(100, Math.max(0, (v / props.max) * 100)) : 0)
 
@@ -37,7 +41,7 @@ const parts = computed(() => {
     aria-valuemin="0"
     :aria-valuemax="max"
     :aria-label="label || undefined"
-    class="flex h-2 w-full overflow-hidden rounded-pill bg-track"
+    :class="cn('flex w-full overflow-hidden rounded-pill bg-track', HEIGHT[size])"
   >
     <template v-if="variant === 'segmented'">
       <span

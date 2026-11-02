@@ -18,8 +18,5 @@ package contract
 // getContentVersion, approveContent and previewContent (test/e2e/content_test.go calls each one).
 // Phase P5 (send + tracking slice) implements sendCampaign, getCampaignStatus and listDeliveries
 // (test/e2e/send_api_test.go calls each one) and streamCampaignEvents (test/e2e/tracking_test.go).
-// Phase P10 adds listCampaignSummaries to the contract first (DECISIONS D65); its P10 backend step
-// registers the route and deletes the line below.
-var NotImplemented = map[string]string{
-	"listCampaignSummaries": "P10",
-}
+// Phase P10 (DECISIONS D65) implements listCampaignSummaries.
+var NotImplemented = map[string]string{}
