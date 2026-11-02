@@ -13,6 +13,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/v2"
 	"github.com/anthropics/anthropic-sdk-go/v2/option"
 	"github.com/anthropics/anthropic-sdk-go/v2/packages/ssestream"
+
+	"github.com/gulcint/smart-campaign-composer/internal/content"
 )
 
 // Tool descriptions sent to the model (llm-tools.md §1).
@@ -64,9 +66,10 @@ const (
 		"Length limits, in Unicode characters, apply after every variable is replaced by the longest recipient " +
 		"value given in the prompt (a variable counts as that value's length, not as the length of its placeholder): " +
 		"SMS body at most 160, email subject at most 80, email body at most 5000. " +
-		"The SMS is one or two short sentences. Any allowed variable may be used; remember each counts as its " +
-		"longest realistic value (first_name up to about 50 characters), so keep the plain text of the SMS short " +
-		"enough (about 100 characters) that the total stays at most 160. Aim for an email subject of at most 60 characters. " +
+		"The SMS is one or two short sentences. Any allowed variable may be used. The prompt gives a budget table: " +
+		"the number of plain-text characters you may write outside the variables for each combination of variables " +
+		"(limit minus the longest value of each variable you use). A variable used twice subtracts its length twice. " +
+		"Stay within the budget of the combination you actually use. Aim for an email subject of at most 60 characters. " +
 		"Keep the email body to a few short paragraphs. No emojis. " +
 		"Count the characters of each field before calling the tool and shorten any field that is over its limit."
 	// contentENSystemSuffix extends contentSystemPrompt for the bilingual tool (llm-tools.md §1.3).
@@ -74,7 +77,7 @@ const (
 		"customers: same intent and tone (friendly and short), not a word-for-word translation. The limits apply " +
 		"separately to each language version: Turkish SMS body at most 160, Turkish email subject at most 80, Turkish " +
 		"email body at most 5000; English SMS body at most 160, English email subject at most 80, English email body " +
-		"at most 5000. Keep the plain text of the English SMS about 100 characters as well."
+		"at most 5000. The English SMS and subject use the same budget table."
 
 	repairToolUseID = "toolu_scc_previous_attempt"
 )
@@ -247,6 +250,35 @@ func (c *claudeClient) GenerateSegment(ctx context.Context, req SegmentRequest) 
 	return nil, ErrNoToolCall
 }
 
+// budgetTable lists, for every combination of the three variables, how many plain-text characters
+// fit under limit once each used variable is counted as its longest value. It is computed here so
+// the model does not have to do the arithmetic; content.Validate remains the authority.
+func budgetTable(limit int, l content.Longest) string {
+	vars := []struct {
+		name string
+		n    int
+	}{{"{{first_name}}", l.FirstName}, {"{{last_name}}", l.LastName}, {"{{city}}", l.City}}
+	var b strings.Builder
+	for mask := 0; mask < 1<<len(vars); mask++ {
+		sum, label := 0, ""
+		for i, v := range vars {
+			if mask&(1<<i) == 0 {
+				continue
+			}
+			sum += v.n
+			if label != "" {
+				label += " + "
+			}
+			label += v.name
+		}
+		if label == "" {
+			label = "no variables"
+		}
+		fmt.Fprintf(&b, "- %s: %d\n", label, max(limit-sum, 0))
+	}
+	return b.String()
+}
+
 func (c *claudeClient) StreamContent(ctx context.Context, req ContentRequest) (ContentStream, error) {
 	rule := string(req.Rule)
 	if rule == "" {
@@ -255,10 +287,13 @@ func (c *claudeClient) StreamContent(ctx context.Context, req ContentRequest) (C
 	user := fmt.Sprintf("<brief>\n%s\n</brief>\n\nAudience segment rule (context only): %s\n\n"+
 		"Longest recipient values in this audience, in characters: first_name=%d, last_name=%d, city=%d. "+
 		"Count every {{first_name}} as %d characters, {{last_name}} as %d and {{city}} as %d when checking "+
-		"the 160-character SMS and 80-character subject limits.",
+		"the 160-character SMS and 80-character subject limits.\n\n"+
+		"Plain-text budget (characters you may write outside the variables), by the variables you use; "+
+		"a variable used twice subtracts its length twice.\nSMS body (limit 160):\n%sEmail subject (limit 80):\n%s",
 		req.Brief, rule,
 		req.Longest.FirstName, req.Longest.LastName, req.Longest.City,
-		req.Longest.FirstName, req.Longest.LastName, req.Longest.City)
+		req.Longest.FirstName, req.Longest.LastName, req.Longest.City,
+		budgetTable(content.SMSMaxRunes, req.Longest), budgetTable(content.SubjectMaxRunes, req.Longest))
 	// P8 (D63): the bilingual tool when the audience has English-speaking customers; the same choice
 	// for the repair attempt (the caller keeps IncludeEnglish).
 	description, system, paths := contentToolDescription, contentSystemPrompt, []string{"sms.body", "email.subject", "email.body"}
