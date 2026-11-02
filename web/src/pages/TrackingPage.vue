@@ -5,7 +5,7 @@
 // The ActivityFeed is out of scope by owner decision (counters only).
 // P7a (ui.md §3.25): while the campaign is `scheduled` the SchedulePanel (planned time, countdown,
 // cancel, send now) sits above the counters; the stream stays open and flips the view live.
-import { CalendarClock, X } from '@lucide/vue'
+import { X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -25,8 +25,8 @@ import StepHeader from '@/components/StepHeader.vue'
 import { useCampaignStatusStream } from '@/composables/useCampaignStatusStream'
 import { useNotify } from '@/composables/useNotify'
 import type { MessageId } from '@/i18n'
-import { formatNumber, hasMessage, t } from '@/i18n'
-import { formatTsi } from '@/lib/schedule'
+import { formatNumber, hasMessage, messageParts, t } from '@/i18n'
+import { formatTsi, formatTsiPlain } from '@/lib/schedule'
 import { campaignIdOf } from '@/router'
 import { injectApiClient, reportError } from '@/stores/api'
 import { useCampaignStore } from '@/stores/campaign'
@@ -73,6 +73,26 @@ const startedNote = computed(() =>
   (campaignState.value === 'sending' || campaignState.value === 'completed') && scheduledAt.value
     ? scheduledAt.value
     : null,
+)
+
+// ---- header identity block (ui.md §3.20b, REQ-DSH-03) ----
+// Times come from the last stream event (snapshot/status/completed), else from the campaign.
+const startedAt = computed<string | null>(() =>
+  status.value ? status.value.sending_started_at : (campaign.value?.sending_started_at ?? null),
+)
+const completedAt = computed<string | null>(() =>
+  status.value ? status.value.completed_at : (campaign.value?.completed_at ?? null),
+)
+const audience = computed(() => campaign.value?.segment?.audience ?? null)
+const AUDIENCE_PARTS = messageParts('tracking.audience')
+/** Meta row order: audience · planned for · started · finished; absent values leave no pair. */
+const metaItems = computed(() =>
+  [
+    { key: 'audience', on: audience.value !== null },
+    { key: 'planned', on: startedNote.value !== null },
+    { key: 'started', on: startedAt.value !== null },
+    { key: 'completed', on: completedAt.value !== null },
+  ].filter((i) => i.on),
 )
 
 watch(
@@ -310,11 +330,83 @@ onBeforeUnmount(() => {
         step="tracking"
         :role="t('tracking.role')"
         :title="t('tracking.title')"
-        :subtitle="t('tracking.subtitle')"
+        :subtitle="campaign ? undefined : t('tracking.subtitle')"
         status-kind="campaign"
         :status="campaignState"
         :next="null"
-      />
+      >
+        <!-- Which campaign is being watched (ui.md §3.20b): the brief and one meta row. -->
+        <div v-if="campaign" class="-mt-2 flex w-full min-w-0 flex-col gap-2">
+          <p
+            data-testid="tracking-campaign-brief"
+            class="line-clamp-2 max-w-3xl text-body break-words whitespace-pre-line text-ink-700"
+            v-text="campaign.brief"
+          />
+          <dl
+            data-testid="tracking-meta"
+            class="flex flex-col gap-1 text-body-sm sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2"
+          >
+            <template v-for="(item, i) in metaItems" :key="item.key">
+              <span v-if="i > 0" class="hidden text-ink-300 sm:inline" aria-hidden="true">·</span>
+              <div class="flex min-w-0 flex-wrap gap-x-1.5">
+                <template v-if="item.key === 'audience' && audience">
+                  <dt class="text-ink-500">{{ t('tracking.audienceLabel') }}</dt>
+                  <dd class="text-ink-700">
+                    <template v-for="(part, j) in AUDIENCE_PARTS" :key="j"
+                      ><span
+                        v-if="part.key === 'sms'"
+                        data-testid="tracking-audience-sms"
+                        :data-value="audience.sms"
+                        class="tabular-nums"
+                        >{{ formatNumber(audience.sms) }}</span
+                      ><span
+                        v-else-if="part.key === 'email'"
+                        data-testid="tracking-audience-email"
+                        :data-value="audience.email"
+                        class="tabular-nums"
+                        >{{ formatNumber(audience.email) }}</span
+                      ><template v-else>{{ part.text }}</template></template
+                    >
+                  </dd>
+                </template>
+                <template v-else-if="item.key === 'planned' && startedNote">
+                  <dt class="sr-only">{{ t('schedule.timeLabel') }}</dt>
+                  <dd
+                    data-testid="schedule-started-note"
+                    :data-value="startedNote"
+                    class="text-ink-700 tabular-nums"
+                  >
+                    {{ t('schedule.startedNote', { time: formatTsi(startedNote) }) }}
+                  </dd>
+                </template>
+                <template v-else-if="item.key === 'started' && startedAt">
+                  <dt class="text-ink-500">{{ t('tracking.startedAt') }}</dt>
+                  <dd
+                    data-testid="tracking-started-at"
+                    :data-value="startedAt"
+                    class="text-ink-700 tabular-nums"
+                  >
+                    {{ formatTsiPlain(startedAt) }}
+                  </dd>
+                </template>
+                <template v-else-if="item.key === 'completed' && completedAt">
+                  <dt class="text-ink-500">{{ t('tracking.completedAt') }}</dt>
+                  <dd
+                    data-testid="tracking-completed-at"
+                    :data-value="completedAt"
+                    class="text-ink-700 tabular-nums"
+                  >
+                    {{ formatTsiPlain(completedAt) }}
+                  </dd>
+                </template>
+              </div>
+            </template>
+          </dl>
+          <p v-if="startedAt" data-testid="tracking-tz-note" class="text-caption text-ink-500">
+            {{ t('schedule.tzNote') }}
+          </p>
+        </div>
+      </StepHeader>
 
       <SchedulePanel
         v-if="isScheduled && scheduledAt"
@@ -324,16 +416,6 @@ onBeforeUnmount(() => {
         @cancel="onCancelPlan"
         @send-now="openSendNow"
       />
-
-      <p
-        v-if="startedNote"
-        data-testid="schedule-started-note"
-        :data-value="startedNote"
-        class="flex items-center gap-2 text-body-sm text-ink-700"
-      >
-        <CalendarClock class="size-4 shrink-0 text-info" aria-hidden="true" />
-        {{ t('schedule.startedNote', { time: formatTsi(startedNote) }) }}
-      </p>
 
       <DeliveryCounters
         :status="status"
@@ -359,7 +441,7 @@ onBeforeUnmount(() => {
         v-if="showFailed"
         data-testid="delivery-failed-list"
         aria-labelledby="delivery-failed-title"
-        class="flex flex-col gap-3 rounded-card border border-border-default bg-surface-card p-4 md:p-6"
+        class="flex flex-col gap-3 rounded-card border border-border-default bg-surface-card p-4 shadow-card md:p-6"
       >
         <div class="flex items-center justify-between gap-3">
           <h2

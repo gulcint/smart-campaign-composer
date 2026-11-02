@@ -24,3 +24,20 @@ const numberFormat = new Intl.NumberFormat('tr-TR')
 export function formatNumber(n: number): string {
   return numberFormat.format(n)
 }
+
+/**
+ * The message for `id` split at its `{name}` placeholders, so a template can wrap each value in its
+ * own element (a testid, a numeral style) while the joined text still equals `t(id, params)`.
+ */
+export function messageParts(id: MessageId): { text: string; key: string | null }[] {
+  const out: { text: string; key: string | null }[] = []
+  const template = messages[id] ?? id
+  let last = 0
+  for (const m of template.matchAll(/\{(\w+)\}/g)) {
+    if (m.index > last) out.push({ text: template.slice(last, m.index), key: null })
+    out.push({ text: '', key: m[1] ?? '' })
+    last = m.index + m[0].length
+  }
+  if (last < template.length) out.push({ text: template.slice(last), key: null })
+  return out
+}

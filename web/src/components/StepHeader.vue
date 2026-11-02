@@ -15,7 +15,8 @@ const props = defineProps<{
   step: StepId
   role: string
   title: string
-  subtitle: string
+  /** Omitted when the page puts its own identity block in the default slot (Tracking, P10). */
+  subtitle?: string
   statusKind: 'content' | 'campaign'
   status: string | null
   next: string | null
@@ -37,7 +38,7 @@ const n = computed(() => STEPS.indexOf(props.step) + 1)
         <h1 data-testid="page-title" tabindex="-1" class="text-h1 text-ink-900 outline-none">
           {{ title }}
         </h1>
-        <p class="max-w-2xl text-body text-ink-600">{{ subtitle }}</p>
+        <p v-if="subtitle" class="max-w-2xl text-body text-ink-600">{{ subtitle }}</p>
       </div>
       <StatusBadge
         v-if="status"

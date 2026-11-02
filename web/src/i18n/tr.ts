@@ -308,6 +308,16 @@ export const tr = {
   'tracking.sent': 'Gönderildi',
   'tracking.failed': 'Başarısız',
   'tracking.queued': 'Kuyrukta',
+  // P10 (REQ-DSH-03): campaign identity in the header and the overall card.
+  'tracking.overallTitle': 'Genel durum',
+  'tracking.processed': '{done} / {total} mesaj işlendi',
+  'tracking.results': 'Sonuç',
+  'tracking.remaining': 'Kalan iş',
+  'tracking.startedAt': 'Başladı',
+  'tracking.completedAt': 'Bitti',
+  'tracking.audienceLabel': 'Kitle',
+  'tracking.audience': 'SMS {sms} · Email {email} alıcı',
+  'tracking.channelProcessed': '{total} alıcı · {done} işlendi',
 
   // --- Connection / toasts ---
   'connection.lost': 'Bağlantı koptu, yeniden bağlanılıyor…',
@@ -321,6 +331,7 @@ export const tr = {
   'schedule.cancel': 'Planı iptal et',
   'schedule.sendNow': 'Şimdi gönder',
   'schedule.startedNote': 'Planlanan: {time}',
+  'schedule.tzNote': 'Saatler Türkiye saati (UTC+3).',
 
   'toast.close': 'Kapat',
   'toast.region': 'Bildirimler',
