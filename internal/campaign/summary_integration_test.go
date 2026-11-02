@@ -10,14 +10,22 @@ package campaign_test
 // filter, total = the overview count of the filtered states, overview.campaigns.total = the sum of
 // the seven states). The service clock starts at dshRef, far after every other test clock, so plans
 // made here are never due for another test's scheduler; every plan is canceled in t.Cleanup.
+//
+// Not asserted here: C9's "overview is identical for different States/Order/Limit/Offset". That needs
+// a database of its own; on the shared database parallel tests change the overview between two
+// ListSummaries calls, so two responses cannot be compared exactly. Only the single-read rules above
+// (C4, C5) are checked on every response.
 
 import (
 	"io"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/gulcint/smart-campaign-composer/internal/campaign"
 	"github.com/gulcint/smart-campaign-composer/internal/llm"
@@ -177,6 +185,43 @@ func collectSummaries(t *testing.T, l campaign.SummaryLister, f campaign.Summary
 	}
 }
 
+// statusCounts reads campaign.StatusCounts as {total, queued, sending, sent, failed} (REQ-DSH-01 C3
+// names the type and the five keys, not the Go field names): field names lower-cased, every field an
+// integer.
+func statusCounts(t *testing.T, c campaign.StatusCounts) map[string]int {
+	t.Helper()
+	v := reflect.ValueOf(c)
+	out := map[string]int{}
+	for i := range v.NumField() {
+		f := v.Field(i)
+		if !f.CanInt() {
+			t.Fatalf("campaign.StatusCounts field %s is %s, want an integer count", v.Type().Field(i).Name, f.Kind())
+		}
+		out[strings.ToLower(v.Type().Field(i).Name)] = int(f.Int())
+	}
+	return out
+}
+
+// dbDeliveryCounts counts the campaign's delivery rows (both channels, both variants) the way the
+// /status counts do: total and one count per status (REQ-SND: queued, sending, sent, failed); a and b
+// are the rows of variant a and b (REQ-ABT-03 deliveries.variant).
+func (h *harness) dbDeliveryCounts(t *testing.T, id string) (counts map[string]int, a, b int) {
+	t.Helper()
+	var total, queued, sending, sent, failed int
+	err := h.pool.QueryRow(t.Context(), `SELECT count(*),
+			count(*) FILTER (WHERE status::text = 'queued'),
+			count(*) FILTER (WHERE status::text = 'sending'),
+			count(*) FILTER (WHERE status::text = 'sent'),
+			count(*) FILTER (WHERE status::text = 'failed'),
+			count(*) FILTER (WHERE variant = 'a'),
+			count(*) FILTER (WHERE variant = 'b')
+		FROM deliveries WHERE campaign_id = $1`, id).Scan(&total, &queued, &sending, &sent, &failed, &a, &b)
+	if err != nil {
+		t.Fatalf("count deliveries of %s: %v", id, err)
+	}
+	return map[string]int{"total": total, "queued": queued, "sending": sending, "sent": sent, "failed": failed}, a, b
+}
+
 func sameTime(a, b *time.Time) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -187,8 +232,9 @@ func sameTime(a, b *time.Time) bool {
 // REQ-DSH-01 C2, C3, C6, C9
 // Each own campaign appears under the filter of its state with the values of campaign.Service.Get:
 // brief in full (multi-line), state, scheduled_at, sending_started_at; audience = the segment's
-// {matched, sms, email} (null for draft); deliveries null before sending, an object once sending,
-// all zero for a send whose both channel audiences are empty. A state filter never returns an own
+// {matched, sms, email} (null for draft); deliveries null before sending, an object once sending
+// equal field by field to the /status counts of an A/B send (variants a and b together), all zero
+// for a send whose both channel audiences are empty. A state filter never returns an own
 // campaign of another state; nil and zero-length States both mean "no filter".
 func TestSummaryLister_ItemsMatchTheCampaigns(t *testing.T) {
 	t.Parallel()
@@ -204,7 +250,12 @@ func TestSummaryLister_ItemsMatchTheCampaigns(t *testing.T) {
 	schedID, schedV := h.schApproved(t)
 	at := dshRef.Add(3 * time.Hour)
 	h.schSchedule(t, schedID, schedV, at)
-	sendingID, sendingV := h.schApproved(t)
+	// The sending campaign sends an A/B version, so its deliveries carry both variants (C3).
+	sendingID := h.audienceReady(t)
+	sendingV := h.edit(t, sendingID, campaign.ExpectedVersionNone, abVersionContent(false)).ID
+	if _, err := h.svc.Approve(bg, sendingID, sendingV); err != nil {
+		t.Fatalf("Approve(A/B version) error = %v", err)
+	}
 	if _, err := h.svc.Send(bg, sendingID, sendingV); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
@@ -255,6 +306,42 @@ func TestSummaryLister_ItemsMatchTheCampaigns(t *testing.T) {
 	}
 	if got := byState["sending"][sendingID]; got.Deliveries == nil || got.SendingStartedAt == nil {
 		t.Fatalf("sending summary deliveries/sending_started_at = %+v/%v, want both set", got.Deliveries, got.SendingStartedAt)
+	}
+
+	// REQ-DSH-01 C3, C9: the sending campaign's deliveries equal its /status counts field by field,
+	// variant A and B rows counted together. docs/requirements.md names no Go call for /status (only
+	// GET …/status), so the counts are read from the campaign's delivery rows, which are what /status
+	// counts: total and one count per status. This harness runs no dispatcher (only campaign.Service;
+	// the checks above already rely on the campaign staying sending), so the rows stay queued and the
+	// counts are settled. To stay exact even if a worker of another package touched the rows, the rows
+	// are counted right before and right after one ListSummaries: only an equal pair brackets the
+	// summary's snapshot, and that pair is compared field by field. total never changes after the send
+	// (one row per channel audience member), so it is checked on every attempt.
+	wantTotal := h.audienceTotal(t, sendingID)
+	settled := false
+	for attempt := 0; attempt < 20 && !settled; attempt++ {
+		before, a, b := h.dbDeliveryCounts(t, sendingID)
+		got := collectSummaries(t, l, campaign.SummaryFilter{States: dshStates("sending", "completed"), Order: campaign.SummaryOrderRecent})[sendingID]
+		after, _, _ := h.dbDeliveryCounts(t, sendingID)
+		if a == 0 || b == 0 || a+b != wantTotal || before["total"] != wantTotal {
+			t.Fatalf("setup: deliveries of the A/B send = %+v with %d of variant a and %d of b, want %d rows of both variants", before, a, b, wantTotal)
+		}
+		if got.ID != sendingID || got.Deliveries == nil {
+			t.Fatalf("sending campaign %s missing under state=sending,completed or without deliveries: %+v", sendingID, got)
+		}
+		gotCounts := statusCounts(t, *got.Deliveries)
+		if gotCounts["total"] != wantTotal {
+			t.Fatalf("sending summary deliveries = %v, want total %d (variants a and b together)", gotCounts, wantTotal)
+		}
+		if cmp.Equal(before, after) {
+			if diff := cmp.Diff(before, gotCounts); diff != "" {
+				t.Fatalf("sending summary deliveries differ from the /status counts of its delivery rows (-status +summary):\n%s", diff)
+			}
+			settled = true
+		}
+	}
+	if !settled {
+		t.Fatalf("delivery rows of %s changed around each of 20 ListSummaries calls; no settled read to compare", sendingID)
 	}
 	if got := byState["completed"][doneID]; got.Deliveries == nil || *got.Deliveries != (campaign.StatusCounts{}) || got.CompletedAt == nil {
 		t.Fatalf("empty-audience completed summary deliveries/completed_at = %+v/%v, want all zero and set", got.Deliveries, got.CompletedAt)

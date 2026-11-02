@@ -115,7 +115,8 @@ export function deferred<T = unknown>() {
   return { promise, resolve, reject }
 }
 
-type Answer = (q: SummaryQuery) => unknown
+/** A summaries answer; a handler that ignores the query (`() => …`) is one too. */
+export type Answer = (q: SummaryQuery) => unknown
 
 /** Answers in turn; the last answer repeats. An answer may return a value, a promise, or throw. */
 export function seq(...answers: Answer[]): Answer {
@@ -127,9 +128,13 @@ export function seq(...answers: Answer[]): Answer {
   }
 }
 
+/**
+ * A failing answer. It takes no argument, so it fits both an `Answer` and a `routes` handler
+ * (`(r: RecordedRequest) => unknown`).
+ */
 export const fail =
-  (status = 500, code = 'internal_error'): Answer =>
-  () => {
+  (status = 500, code = 'internal_error') =>
+  (): never => {
     throw apiError(status, code)
   }
 

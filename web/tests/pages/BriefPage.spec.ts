@@ -25,6 +25,7 @@ import {
   seq,
   sid,
   summary,
+  type Answer,
   type PanelApi,
   type Summary,
 } from '../helpers/p10'
@@ -232,11 +233,23 @@ describe('CampaignPanel KPI cards (REQ-DSH-02 C6)', () => {
     deliveries(0, 0, 25061, 1043),
   )
   const KPIS = [
-    { id: 'campaign-kpi-total', label: 'briefPanel.kpi.total', value: OV.campaigns.total! },
-    { id: 'campaign-kpi-scheduled', label: 'briefPanel.kpi.scheduled', value: 6 },
-    { id: 'campaign-kpi-sent', label: 'briefPanel.kpi.sent', value: 7 + 1008 },
-    { id: 'campaign-kpi-messages-sent', label: 'briefPanel.kpi.messagesSent', value: 25061 },
-    { id: 'campaign-kpi-messages-failed', label: 'briefPanel.kpi.messagesFailed', value: 1043 },
+    {
+      id: 'campaign-kpi-total',
+      label: 'briefPanel.kpi.total' as const,
+      value: OV.campaigns.total!,
+    },
+    { id: 'campaign-kpi-scheduled', label: 'briefPanel.kpi.scheduled' as const, value: 6 },
+    { id: 'campaign-kpi-sent', label: 'briefPanel.kpi.sent' as const, value: 7 + 1008 },
+    {
+      id: 'campaign-kpi-messages-sent',
+      label: 'briefPanel.kpi.messagesSent' as const,
+      value: 25061,
+    },
+    {
+      id: 'campaign-kpi-messages-failed',
+      label: 'briefPanel.kpi.messagesFailed' as const,
+      value: 1043,
+    },
   ]
 
   // REQ-DSH-02 C6
@@ -290,8 +303,8 @@ describe('CampaignPanel sections (REQ-DSH-02 C7, C9)', () => {
       list: 'brief-scheduled-list',
       empty: 'brief-scheduled-empty',
       more: 'brief-scheduled-more',
-      title: 'briefPanel.scheduledTitle',
-      emptyText: 'briefPanel.scheduledEmpty',
+      title: 'briefPanel.scheduledTitle' as const,
+      emptyText: 'briefPanel.scheduledEmpty' as const,
       key: 'scheduled' as const,
       rows: [scheduledRow(1, 7200), scheduledRow(2, 9000), scheduledRow(3, 86400)],
     },
@@ -302,14 +315,14 @@ describe('CampaignPanel sections (REQ-DSH-02 C7, C9)', () => {
       list: 'brief-sent-list',
       empty: 'brief-sent-empty',
       more: 'brief-sent-more',
-      title: 'briefPanel.sentTitle',
-      emptyText: 'briefPanel.sentEmpty',
+      title: 'briefPanel.sentTitle' as const,
+      emptyText: 'briefPanel.sentEmpty' as const,
       key: 'sent' as const,
       rows: [summary(4, 'completed'), summary(5, 'completed'), summary(6, 'completed')],
     },
   ]
 
-  function answers(key: 'scheduled' | 'sent', mine: () => unknown) {
+  function answers(key: 'scheduled' | 'sent', mine: Answer) {
     return key === 'scheduled'
       ? { scheduled: mine, sent: () => page([]) }
       : { scheduled: () => page([]), sent: mine }
@@ -611,7 +624,7 @@ describe('CampaignPanel error isolation (REQ-DSH-02 C11)', () => {
       root: 'brief-scheduled-summary',
       error: 'brief-scheduled-error',
       retry: 'brief-scheduled-retry',
-      errorText: 'briefPanel.scheduledError',
+      errorText: 'briefPanel.scheduledError' as const,
       other: 'brief-sent-summary',
       query: SCHEDULED_QUERY,
       okRows: [scheduledRow(1, 7200)],
@@ -622,14 +635,14 @@ describe('CampaignPanel error isolation (REQ-DSH-02 C11)', () => {
       root: 'brief-sent-summary',
       error: 'brief-sent-error',
       retry: 'brief-sent-retry',
-      errorText: 'briefPanel.sentError',
+      errorText: 'briefPanel.sentError' as const,
       other: 'brief-scheduled-summary',
       query: SENT_QUERY,
       okRows: [summary(2, 'completed')],
     },
   ]
 
-  function answersFor(s: (typeof SIDES)[number], failing: () => unknown) {
+  function answersFor(s: (typeof SIDES)[number], failing: Answer) {
     const other = s.failing === 'scheduled' ? [summary(9, 'completed')] : [scheduledRow(9, 7200)]
     return s.failing === 'scheduled'
       ? { scheduled: failing, sent: () => page(other) }
