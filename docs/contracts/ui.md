@@ -315,7 +315,7 @@ Sayfa; `useContentGeneration`, kampanya (`GET /api/campaigns/{id}`) ve önizleme
 Props: `scheduledAt: string` (UTC ISO, `CampaignStatus.scheduled_at` / `Campaign.scheduled_at`), `cancelling: boolean` (false), `sendingNow: boolean` (false). Emits: `cancel()`, `send-now()`.
 Testid'ler:
 - `schedule-panel` (`<section>`, `aria-labelledby` = başlığı; başlık `h2` metni `t('schedule.title')`; `data-state`: `waiting` (kalan > 0) | `starting` (kalan = 0)).
-- `schedule-time` — `data-value` = `scheduledAt` (aynen), metin `formatTsi(scheduledAt)` (§3.26; ör. `15 Ocak 2026 15:30 TSİ`), etiketi `t('schedule.timeLabel')`.
+- `schedule-time` — `data-value` = `scheduledAt` (aynen), metin `formatTsi(scheduledAt)` (§3.26; ör. `15 Ocak 2026 15:30 UTC+3`), etiketi `t('schedule.timeLabel')`.
 - `schedule-countdown` — `data-value` = `remainingSeconds(scheduledAt, Date.now())` (tamsayı saniye), mount'ta ve ardından `setInterval` ile **1000 ms**'de bir yeniden hesaplanır (testler `vi.useFakeTimers()` + `vi.advanceTimersByTime`); metin kalan ≥ 86400 iken `t('schedule.countdownDays', { d, hms })`, aksi halde `t('schedule.countdown', { hms })` (`formatCountdown`, §3.26); kalan 0 iken metin `t('schedule.starting')` ("Başlatılıyor…"), `aria-live` yok (her saniye duyurulmaz); sıfıra inişte bir kez `schedule-live-status` (görsel olarak gizli, `role="status"`) metni `t('schedule.starting')` olur. Rakamlar `tabular-nums`, `--text-accent-numeral`.
 - `schedule-cancel` (Button secondary, metin `t('schedule.cancel')`; `cancelling` veya `sendingNow` iken `aria-disabled` + `cancel` emit etmez; `cancelling` iken `data-loading`).
 - `schedule-send-now` (Button primary, metin `t('schedule.sendNow')`; `cancelling` veya `sendingNow` iken `aria-disabled` + `send-now` emit etmez; `sendingNow` iken `data-loading`).
@@ -350,7 +350,7 @@ export function remainingSeconds(iso: string, nowMs: number): number
 export function formatCountdown(seconds: number): { days: number; hms: string }
 ```
 
-Kurallar (test edilebilir, süreç `TZ`'sinden bağımsız; dönüşüm IANA bölgesiyle yapılır, sabit `+03:00` yazılmaz): `toUtcIso('2026-01-15T15:30')` = `'2026-01-15T12:30:00Z'`; `toUtcIso('2026-01-15 15:30')`, `''`, `'2026-02-30T10:00'` = `null`; `toTsiInput('2026-01-15T12:30:45Z')` = `'2026-01-15T15:30'`; `formatTsi('2026-01-15T12:30:00Z')` = `'15 Ocak 2026 15:30 TSİ'` (`t('schedule.tz')` = `TSİ` iken); `formatTsi('2026-01-15T21:05:00Z')` = `'16 Ocak 2026 00:05 TSİ'`; `formatTsiPlain('2026-01-15T12:30:00Z')` = `'15 Ocak 2026 15:30'`, `formatTsiPlain('2026-01-15T21:05:00Z')` = `'16 Ocak 2026 00:05'` (P10); `remainingSeconds('2026-01-15T12:00:01.500Z', Date.parse('2026-01-15T12:00:00Z'))` = 2; geçmiş an → 0; `formatCountdown(90061)` = `{ days: 1, hms: '01:01:01' }`, `formatCountdown(59)` = `{ days: 0, hms: '00:00:59' }`.
+Kurallar (test edilebilir, süreç `TZ`'sinden bağımsız; dönüşüm IANA bölgesiyle yapılır, sabit `+03:00` yazılmaz): `toUtcIso('2026-01-15T15:30')` = `'2026-01-15T12:30:00Z'`; `toUtcIso('2026-01-15 15:30')`, `''`, `'2026-02-30T10:00'` = `null`; `toTsiInput('2026-01-15T12:30:45Z')` = `'2026-01-15T15:30'`; `formatTsi('2026-01-15T12:30:00Z')` = `'15 Ocak 2026 15:30 UTC+3'` (`t('schedule.tz')` = `UTC+3`); `formatTsi('2026-01-15T21:05:00Z')` = `'16 Ocak 2026 00:05 TSİ'`; `formatTsiPlain('2026-01-15T12:30:00Z')` = `'15 Ocak 2026 15:30'`, `formatTsiPlain('2026-01-15T21:05:00Z')` = `'16 Ocak 2026 00:05'` (P10); `remainingSeconds('2026-01-15T12:00:01.500Z', Date.parse('2026-01-15T12:00:00Z'))` = 2; geçmiş an → 0; `formatCountdown(90061)` = `{ days: 1, hms: '01:01:01' }`, `formatCountdown(59)` = `{ days: 0, hms: '00:00:59' }`.
 
 ### 3.27 `LanguageTabs` (REQ-LNG-04, P8)
 Props: `modelValue: 'tr'|'en'`, `phases: Record<'tr'|'en', ContentPhase>`, `errors: Record<'tr'|'en', boolean>`. Emits: `update:modelValue(l)`. Reka Tabs, `ChannelTabs` ile aynı kalıp: kök `data-testid="language-tabs"`, `role="tablist"`, `aria-label` = `t('tabs.languages')`; sekmeler `language-tab-tr`, `language-tab-en` (`role="tab"`, `aria-selected`, `data-status` = dilin özet fazı (herhangi bir alanı `invalid` ise `invalid`, aksi halde ilk alanın fazı), `data-has-error` = `errors[l]`); seçili sekme `tabindex="0"`, diğeri `-1`; `←`/`→` komşu sekmeye geçirir ve seçer. Sekme etiketleri `t('language.tr')` ("Türkçe") ve `t('language.en')` ("İngilizce"). Görsel: DESIGN.md `LanguageTabs`. Varsayılan seçili dil `tr`. İçerik metinleri her zaman metin düğümü/`value` olarak basılır (`v-html` yok, §6).
@@ -437,7 +437,7 @@ P7a metin önerileri (Türkçe; `web/src/i18n/tr.ts`'e arayüz dilimi yazar, bu 
 | `confirm.sendMode.later` | İleri bir tarihte gönder |
 | `confirm.scheduledAt.label` | Gönderim zamanı |
 | `confirm.scheduledAt.hint` | En erken {min} dakika sonra, en geç 30 gün içinde. |
-| `schedule.tz` | (Türkiye saati, UTC+3) |
+| `schedule.tz` | UTC+3 |
 | `schedule.title` | Gönderim planlandı |
 | `schedule.timeLabel` | Planlanan zaman |
 | `schedule.countdown` | {hms} |
@@ -484,7 +484,7 @@ P10 metin önerileri (aynı kural):
 | `briefPanel.moreLoaded` | {n} kampanya daha gösteriliyor. |
 | `briefPanel.scheduledError` | Planlanan kampanyalar yüklenemedi. |
 | `briefPanel.sentError` | Gönderilen kampanyalar yüklenemedi. |
-| `schedule.tzNote` | Saatler Türkiye saati (UTC+3). |
+| `schedule.tzNote` | Saatler UTC+3. |
 | `briefPanel.retry` | Tekrar dene |
 | `briefPanel.sentCounts` | gönderildi {sent} · başarısız {failed} |
 | `tracking.overallTitle` | Genel durum |
