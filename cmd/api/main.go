@@ -80,7 +80,7 @@ func run() error {
 	}
 	defer pool.Close()
 
-	service := campaign.NewService(campaign.Deps{
+	campaignDeps := campaign.Deps{
 		Store:                postgres.NewCampaignStore(pool),
 		Audience:             postgres.NewAudience(pool),
 		LLM:                  client,
@@ -88,13 +88,15 @@ func run() error {
 		SegmentReferenceTime: cfg.SegmentReferenceTime,
 		ScheduleMinLead:      cfg.ScheduleMinLead,
 		Logger:               logger,
-	})
+	}
+	service := campaign.NewService(campaignDeps)
 	// Closed when Shutdown starts: open SSE streams end at once instead of holding the
 	// shutdown for shutdownTimeout; ordinary requests still finish gracefully.
 	streamsDone := make(chan struct{})
 	handler := httpapi.New(httpapi.Deps{
 		Shutdown:    streamsDone,
 		Service:     service,
+		Summaries:   campaign.NewSummaryLister(campaignDeps),
 		LLMProvider: provider,
 		DB:          pool,
 		Metrics:     metrics.NewAPIHandler(postgres.NewMetricsSource(pool)),

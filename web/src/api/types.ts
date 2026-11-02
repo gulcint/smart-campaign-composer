@@ -45,6 +45,10 @@ export type CampaignStatus = Schemas['CampaignStatus']
 export type VariantStatusCounts = Schemas['VariantStatusCounts']
 export type Delivery = Schemas['Delivery']
 export type DeliveryPage = Schemas['DeliveryPage']
+export type CampaignSummary = Schemas['CampaignSummary']
+export type CampaignSummaryPage = Schemas['CampaignSummaryPage']
+export type CampaignOverview = Schemas['CampaignOverview']
+export type CampaignStateCounts = Schemas['CampaignStateCounts']
 export type Preview = Schemas['Preview']
 
 // Content stream event payloads (sse-events.md §1.1; openapi components of the same name).

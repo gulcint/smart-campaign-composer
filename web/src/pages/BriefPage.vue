@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AudienceLoadingPreview from '@/components/AudienceLoadingPreview.vue'
 import BrandMark from '@/components/BrandMark.vue'
 import BriefComposer from '@/components/BriefComposer.vue'
+import CampaignPanel from '@/components/CampaignPanel.vue'
 import Button from '@/components/Button.vue'
 import ChatBubble from '@/components/ChatBubble.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -44,13 +45,23 @@ watch(draft, () => {
 
 const submitting = computed(() => store.creating || store.segmentGenerating)
 
+// P10 (ui.md §3.31): the campaign panel is unmounted for the whole submit, including the
+// microtask between the create answer and the segment request (no flash, no extra requests).
+const sending = ref(false)
+const showPanel = computed(() => isNew.value && !sending.value && !submitting.value)
+
 async function onSubmit(brief: string) {
   submittedText.value = brief
-  const created = await store.create(brief)
-  if (!created) return
-  const ok = await store.generateSegment(created.id)
-  const name = ok ? 'audience' : 'brief'
-  await router.push({ name, params: { campaignId: created.id } })
+  sending.value = true
+  try {
+    const created = await store.create(brief)
+    if (!created) return
+    const ok = await store.generateSegment(created.id)
+    const name = ok ? 'audience' : 'brief'
+    await router.push({ name, params: { campaignId: created.id } })
+  } finally {
+    sending.value = false
+  }
 }
 
 // --- brief (read-only) ---
@@ -80,47 +91,55 @@ function newCampaign() {
 </script>
 
 <template>
-  <div data-testid="page-brief" class="mx-auto flex w-full max-w-3xl flex-col gap-6">
+  <div
+    data-testid="page-brief"
+    :class="['mx-auto flex w-full flex-col gap-6', isNew ? 'max-w-5xl' : 'max-w-3xl']"
+  >
     <template v-if="isNew">
-      <header class="flex flex-col gap-3 pt-4 md:pt-10">
-        <span
-          class="flex size-10 items-center justify-center rounded-bubble bg-gradient-brand text-primary-foreground"
-          aria-hidden="true"
-        >
-          <Sparkles class="size-5" />
-        </span>
-        <h1 data-testid="page-title" tabindex="-1" class="text-display text-ink-900 outline-none">
-          {{ t('brief.titleLead') }}
-          <span class="block text-accent-display">{{ t('brief.titleAccent') }}</span>
-        </h1>
-        <p class="text-body-lg text-ink-600">{{ t('brief.subtitle') }}</p>
-      </header>
+      <!-- The composer keeps its 768 px column; the panel below uses the wider 1024 px one. -->
+      <div class="mx-auto flex w-full max-w-3xl flex-col gap-6">
+        <header class="flex flex-col gap-3 pt-4 md:pt-10">
+          <span
+            class="flex size-10 items-center justify-center rounded-bubble bg-gradient-brand text-primary-foreground"
+            aria-hidden="true"
+          >
+            <Sparkles class="size-5" />
+          </span>
+          <h1 data-testid="page-title" tabindex="-1" class="text-display text-ink-900 outline-none">
+            {{ t('brief.titleLead') }}
+            <span class="block text-accent-display">{{ t('brief.titleAccent') }}</span>
+          </h1>
+          <p class="text-body-lg text-ink-600">{{ t('brief.subtitle') }}</p>
+        </header>
 
-      <template v-if="submitting && submittedText">
-        <ChatBubble role="user" :text="submittedText" />
-        <!-- One loading indicator: the Audience step's own skeleton, shown where the wait is. -->
-        <AudienceLoadingPreview :provider="config.provider" />
-      </template>
+        <template v-if="submitting && submittedText">
+          <ChatBubble role="user" :text="submittedText" />
+          <!-- One loading indicator: the Audience step's own skeleton, shown where the wait is. -->
+          <AudienceLoadingPreview :provider="config.provider" />
+        </template>
 
-      <BriefComposer
-        v-model="draft"
-        :submitting="submitting"
-        :field-errors="store.createFieldErrors"
-        @submit="onSubmit"
-        @use-example="draft = t('brief.exampleText')"
-      />
+        <BriefComposer
+          v-model="draft"
+          :submitting="submitting"
+          :field-errors="store.createFieldErrors"
+          @submit="onSubmit"
+          @use-example="draft = t('brief.exampleText')"
+        />
 
-      <ErrorCard
-        v-if="store.createError"
-        :error="store.createError"
-        :action="null"
-        context="brief"
-      />
+        <ErrorCard
+          v-if="store.createError"
+          :error="store.createError"
+          :action="null"
+          context="brief"
+        />
 
-      <p class="flex items-start gap-2 text-body-sm text-ink-500">
-        <Info class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-        {{ t('app.seedNote') }}
-      </p>
+        <p data-testid="brief-seed-note" class="flex items-start gap-2 text-body-sm text-ink-500">
+          <Info class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          {{ t('app.seedNote') }}
+        </p>
+      </div>
+
+      <CampaignPanel v-if="showPanel" class="pt-6" />
     </template>
 
     <template v-else>

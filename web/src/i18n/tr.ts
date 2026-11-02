@@ -53,10 +53,10 @@ export const tr = {
   'brief.readonlyTitle': 'Kampanya brief’i',
   'brief.inputLabel': 'Kampanya brief’i',
   'brief.placeholder':
-    'Örn. Son 30 günde sepetine ürün ekleyip alışveriş yapmayan Ankara’daki gold ve platinum üyelere %20 indirim hatırlatması gönder.',
+    'Örn. Son 60 günde alışveriş yapmayan müşterilere %15 indirimle geri dönmeleri için mesaj gönder.',
   'brief.example': 'Örnek brief’i kullan',
   'brief.exampleText':
-    'Son 30 günde sepetine ürün ekleyip alışveriş yapmayan Ankara’daki gold ve platinum üyelere %20 indirim hatırlatması gönder. Samimi ama kısa olsun.',
+    'Son 60 günde alışveriş yapmayan müşterilere %15 indirimle geri dönmeleri için mesaj gönder. Sıcak bir dil kullan.',
   'brief.submit': 'Kitleyi çıkar',
   'brief.shortcut': 'Göndermek için Ctrl/⌘ + Enter',
   'brief.counterLabel': '{n} / {max} karakter',
@@ -84,6 +84,7 @@ export const tr = {
   'audience.languages': 'Dile göre dağılım',
   'audience.generateContent': 'İçeriği üret',
   'audience.ruleTitle': 'Segment kuralı',
+  'audience.messageOptions': 'Mesaj seçenekleri',
   'audience.noRule': 'Henüz bir segment kuralı yok.',
 
   // --- Segment rule view ---
@@ -135,8 +136,8 @@ export const tr = {
   'content.editDraft': 'Taslağı düzenle',
   // P9 (REQ-ABT-04): A/B test switch, shown next to generate / regenerate.
   'content.abToggle': 'A/B testi',
-  'content.abToggleHint':
-    'İki varyant üretilir; kitle gönderimde ≈ yarı yarıya bölünür, üretim ~2× sürer.',
+  'content.abToggleHint': 'İki farklı mesaj üretilir; kitle gönderimde yarı yarıya bölünür.',
+  'content.abToggleInfo': 'A/B testi hakkında',
   'content.empty': 'Bu kampanya için henüz içerik üretilmedi.',
   'content.toApproval': 'Onaya geç',
   'content.previewTitle': 'Örnek alıcıyla önizleme',
@@ -308,6 +309,35 @@ export const tr = {
   'tracking.sent': 'Gönderildi',
   'tracking.failed': 'Başarısız',
   'tracking.queued': 'Kuyrukta',
+  // P10 (REQ-DSH-03): campaign identity in the header and the overall card.
+  'tracking.overallTitle': 'Genel durum',
+  'tracking.processed': '{done} / {total} mesaj işlendi',
+  'tracking.results': 'Sonuç',
+  'tracking.remaining': 'Kalan iş',
+  'tracking.startedAt': 'Başladı',
+  'tracking.completedAt': 'Bitti',
+  'tracking.audienceLabel': 'Kitle',
+  'tracking.audience': 'SMS {sms} · Email {email} alıcı',
+  'tracking.channelProcessed': '{total} alıcı · {done} işlendi',
+
+  // --- Brief campaign panel (P10, REQ-DSH-02) ---
+  'briefPanel.title': 'Kampanyaların',
+  'briefPanel.kpi.total': 'Toplam kampanya',
+  'briefPanel.kpi.scheduled': 'Planlanan',
+  'briefPanel.kpi.sent': 'Gönderilen',
+  'briefPanel.kpi.messagesSent': 'Gönderilen mesaj',
+  'briefPanel.kpi.messagesFailed': 'Başarısız mesaj',
+  'briefPanel.scheduledTitle': 'Planlanan',
+  'briefPanel.sentTitle': 'Gönderilen',
+  'briefPanel.scheduledEmpty': 'Planlanmış kampanya yok.',
+  'briefPanel.sentEmpty': 'Henüz gönderilen kampanya yok.',
+  'briefPanel.more': 'Daha fazla göster',
+  'briefPanel.moreLoaded': '{n} kampanya daha gösteriliyor.',
+  'briefPanel.scheduledError': 'Planlanan kampanyalar yüklenemedi.',
+  'briefPanel.sentError': 'Gönderilen kampanyalar yüklenemedi.',
+  'briefPanel.retry': 'Tekrar dene',
+  'briefPanel.sentCounts': '{sent} gönderildi · {failed} başarısız',
+  'briefPanel.loading': 'Kampanyalar yükleniyor…',
 
   // --- Connection / toasts ---
   'connection.lost': 'Bağlantı koptu, yeniden bağlanılıyor…',
@@ -321,6 +351,7 @@ export const tr = {
   'schedule.cancel': 'Planı iptal et',
   'schedule.sendNow': 'Şimdi gönder',
   'schedule.startedNote': 'Planlanan: {time}',
+  'schedule.tzNote': 'Saatler Türkiye saati (UTC+3).',
 
   'toast.close': 'Kapat',
   'toast.region': 'Bildirimler',
